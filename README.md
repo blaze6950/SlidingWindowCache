@@ -77,7 +77,7 @@ The cache supports two materialization strategies, configured at creation time v
 **Rebalance behavior**: Uses `List<T>` operations (Clear + AddRange)
 
 **Advantages:**
-- ✅ **Cheaper rebalancing** – `List<T>` can grow/shrink without always allocating large arrays
+- ✅ **Cheaper rebalancing** – `List<T>` can grow without always allocating large arrays
 - ✅ **Reduced LOH pressure** – avoids large contiguous allocations in most cases
 - ✅ Ideal for **memory-sensitive scenarios** or when rebalancing is frequent
 
