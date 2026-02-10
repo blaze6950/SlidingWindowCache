@@ -1,8 +1,5 @@
-using Intervals.NET;
 using Intervals.NET.Domain.Default.Numeric;
-using Intervals.NET.Domain.Extensions.Fixed;
 using Moq;
-using SlidingWindowCache.DTO;
 using SlidingWindowCache.Invariants.Tests.TestInfrastructure;
 
 #if DEBUG
@@ -40,10 +37,8 @@ public class WindowCacheInvariantTests : IDisposable
     /// Creates a mock IDataSource that generates sequential integer data for any requested range.
     /// Properly handles range inclusivity using Intervals.NET domain calculations.
     /// </summary>
-    private Mock<IDataSource<int, int>> CreateMockDataSource(TimeSpan? fetchDelay = null)
-    {
-        return TestHelpers.CreateMockDataSource(_domain, fetchDelay);
-    }
+    private Mock<IDataSource<int, int>> CreateMockDataSource(TimeSpan? fetchDelay = null) =>
+        TestHelpers.CreateMockDataSource(_domain, fetchDelay);
 
     #region A. User Path & Fast User Access Invariants
 
@@ -232,7 +227,7 @@ public class WindowCacheInvariantTests : IDisposable
         // CacheExpanded and CacheReplaced counters should remain at 0
         Assert.Equal(0, CacheInstrumentationCounters.CacheExpanded);
         Assert.Equal(0, CacheInstrumentationCounters.CacheReplaced);
-        
+
         // Intent should be published for rebalance
         Assert.Equal(1, CacheInstrumentationCounters.RebalanceIntentPublished);
 #endif
@@ -284,7 +279,7 @@ public class WindowCacheInvariantTests : IDisposable
 #if DEBUG
         // User Path should NOT have expanded cache
         Assert.Equal(0, CacheInstrumentationCounters.CacheExpanded);
-        
+
         // Intent should be published for rebalance
         Assert.True(CacheInstrumentationCounters.RebalanceIntentPublished > 0,
             "Intent should be published for every request");
@@ -328,7 +323,7 @@ public class WindowCacheInvariantTests : IDisposable
 #if DEBUG
         // User Path should NOT have replaced cache
         Assert.Equal(0, CacheInstrumentationCounters.CacheReplaced);
-        
+
         // Intent should be published for rebalance
         Assert.True(CacheInstrumentationCounters.RebalanceIntentPublished > 0,
             "Intent should be published for every request");
@@ -607,7 +602,7 @@ public class WindowCacheInvariantTests : IDisposable
         await Task.WhenAll(tasks);
 
         // Wait for stabilization
-        await TestHelpers.WaitForRebalanceAsync(500);
+        await TestHelpers.WaitForRebalanceAsync();
 
         // Assert: System is stable and can serve new requests correctly
         var finalData = await cache.GetDataAsync(TestHelpers.CreateRange(105, 115), CancellationToken.None);
@@ -702,7 +697,7 @@ public class WindowCacheInvariantTests : IDisposable
         // Act: First request establishes cache at desired range
         var firstRange = TestHelpers.CreateRange(100, 110);
         await cache.GetDataAsync(firstRange, CancellationToken.None);
-        
+
         // Wait for first rebalance to complete and normalize cache
         await TestHelpers.WaitForRebalanceAsync(300);
 
@@ -713,7 +708,7 @@ public class WindowCacheInvariantTests : IDisposable
         // Second request: same range that should already be cached and normalized
         // This should trigger intent but skip execution due to same-range optimization
         await cache.GetDataAsync(firstRange, CancellationToken.None);
-        
+
         // Wait for potential rebalance
         await TestHelpers.WaitForRebalanceAsync(300);
 
@@ -727,16 +722,15 @@ public class WindowCacheInvariantTests : IDisposable
         var started = CacheInstrumentationCounters.RebalanceExecutionStarted;
         var completed = CacheInstrumentationCounters.RebalanceExecutionCompleted;
 
-        // If execution started and detected same range, skip counter should increment
-        if (started > 0 && skippedSameRange > 0)
+        switch (started)
         {
-            // Execution started but was optimized away (no I/O performed)
-            Assert.Equal(0, completed);
-        }
-        else if (started == 0)
-        {
+            // If execution started and detected same range, skip counter should increment
+            case > 0 when skippedSameRange > 0:
             // Execution didn't start at all (policy-based skip)
-            Assert.Equal(0, completed);
+            case 0:
+                // Execution started but was optimized away (no I/O performed)
+                Assert.Equal(0, completed);
+                break;
         }
 #endif
     }
@@ -837,7 +831,7 @@ public class WindowCacheInvariantTests : IDisposable
         await cache.GetDataAsync(TestHelpers.CreateRange(200, 210), CancellationToken.None);
 
         // Wait for operations to complete
-        await TestHelpers.WaitForRebalanceAsync(500);
+        await TestHelpers.WaitForRebalanceAsync();
 
 #if DEBUG
         // Cancellation should have occurred
@@ -894,14 +888,10 @@ public class WindowCacheInvariantTests : IDisposable
         Assert.True(started > 0, "Rebalance execution should have started");
         Assert.True(completed > 0, "Rebalance execution should have completed");
         Assert.Equal(started, completed + cancelled);
-
         // If rebalance completed, cache should be normalized
-        if (completed > 0)
-        {
-            // Make request in expected expanded range to verify normalization occurred
-            var extendedData = await cache.GetDataAsync(TestHelpers.CreateRange(95, 115), CancellationToken.None);
-            TestHelpers.VerifyDataMatchesRange(extendedData, TestHelpers.CreateRange(95, 115));
-        }
+        // Make request in expected expanded range to verify normalization occurred
+        var extendedData = await cache.GetDataAsync(TestHelpers.CreateRange(95, 115), CancellationToken.None);
+        TestHelpers.VerifyDataMatchesRange(extendedData, TestHelpers.CreateRange(95, 115));
 #endif
     }
 
@@ -979,9 +969,9 @@ public class WindowCacheInvariantTests : IDisposable
         await cache.GetDataAsync(TestHelpers.CreateRange(100, 110), CancellationToken.None);
         await cache.GetDataAsync(TestHelpers.CreateRange(105, 115), CancellationToken.None);
         await cache.GetDataAsync(TestHelpers.CreateRange(110, 120), CancellationToken.None);
-        
+
         // Wait for all background operations
-        await TestHelpers.WaitForRebalanceAsync(500);
+        await TestHelpers.WaitForRebalanceAsync();
 
 #if DEBUG
         var started = CacheInstrumentationCounters.RebalanceExecutionStarted;
@@ -1075,10 +1065,10 @@ public class WindowCacheInvariantTests : IDisposable
 
         // Assert: Request with already-cancelled token should throw OperationCanceledException or derived type
         // Note: TaskCanceledException derives from OperationCanceledException
-        var exception = await Assert.ThrowsAnyAsync<OperationCanceledException>(async () => 
+        var exception = await Record.ExceptionAsync(async () =>
             await cache.GetDataAsync(TestHelpers.CreateRange(100, 110), cts.Token));
-        
-        Assert.True(exception is OperationCanceledException, 
+
+        Assert.True(exception is OperationCanceledException,
             "Should throw OperationCanceledException or derived type");
 
 #if DEBUG
@@ -1086,16 +1076,16 @@ public class WindowCacheInvariantTests : IDisposable
         // (this is more aligned with what G.46 actually tests)
         CacheInstrumentationCounters.Reset();
         var cts2 = new CancellationTokenSource();
-        
+
         // Trigger a user request that will start background rebalance
         await cache.GetDataAsync(TestHelpers.CreateRange(200, 210), CancellationToken.None);
-        
+
         // Immediately make another request to cancel the pending rebalance
         await cache.GetDataAsync(TestHelpers.CreateRange(300, 310), CancellationToken.None);
-        
+
         // Wait for background operations
-        await TestHelpers.WaitForRebalanceAsync(500);
-        
+        await TestHelpers.WaitForRebalanceAsync();
+
         // Verify that rebalance cancellation occurred (proving G.46)
         Assert.True(CacheInstrumentationCounters.RebalanceIntentCancelled > 0,
             "Rebalance execution should support cancellation (G.46)");
