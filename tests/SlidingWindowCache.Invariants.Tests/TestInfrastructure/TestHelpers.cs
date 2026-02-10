@@ -2,6 +2,8 @@
 using Intervals.NET.Domain.Default.Numeric;
 using Intervals.NET.Domain.Extensions.Fixed;
 using SlidingWindowCache.Configuration;
+using SlidingWindowCache.DTO;
+using Moq;
 
 namespace SlidingWindowCache.Invariants.Tests.TestInfrastructure;
 
@@ -112,5 +114,65 @@ public static class TestHelpers
     public static async Task WaitForRebalanceAsync(int timeoutMs = 500)
     {
         await Task.Delay(timeoutMs);
+    }
+
+    /// <summary>
+    /// Creates a mock IDataSource that generates sequential integer data for any requested range.
+    /// Properly handles range inclusivity using Intervals.NET domain calculations.
+    /// </summary>
+    public static Mock<IDataSource<int, int>> CreateMockDataSource(IntegerFixedStepDomain domain, TimeSpan? fetchDelay = null)
+    {
+        var mock = new Mock<IDataSource<int, int>>();
+
+        mock.Setup(ds => ds.FetchAsync(It.IsAny<Range<int>>(), It.IsAny<CancellationToken>()))
+            .Returns<Range<int>, CancellationToken>(async (range, ct) =>
+            {
+                if (fetchDelay.HasValue)
+                {
+                    await Task.Delay(fetchDelay.Value, ct);
+                }
+
+                // Use Intervals.NET domain to properly calculate range span
+                var span = range.Span(domain);
+                var data = new List<int>((int)span);
+
+                // Generate data respecting range inclusivity
+                var start = (int)range.Start;
+                var end = (int)range.End;
+
+                switch (range)
+                {
+                    case { IsStartInclusive: true, IsEndInclusive: true }:
+                        for (var i = start; i <= end; i++) data.Add(i);
+                        break;
+                    case { IsStartInclusive: true, IsEndInclusive: false }:
+                        for (var i = start; i < end; i++) data.Add(i);
+                        break;
+                    case { IsStartInclusive: false, IsEndInclusive: true }:
+                        for (var i = start + 1; i <= end; i++) data.Add(i);
+                        break;
+                    default:
+                        for (var i = start + 1; i < end; i++) data.Add(i);
+                        break;
+                }
+
+                return data;
+            });
+
+        mock.Setup(ds => ds.FetchAsync(It.IsAny<IEnumerable<Range<int>>>(), It.IsAny<CancellationToken>()))
+            .Returns<IEnumerable<Range<int>>, CancellationToken>(async (ranges, ct) =>
+            {
+                var chunks = new List<RangeChunk<int, int>>();
+
+                foreach (var range in ranges)
+                {
+                    var data = await mock.Object.FetchAsync(range, ct);
+                    chunks.Add(new RangeChunk<int, int>(range, data));
+                }
+
+                return chunks;
+            });
+
+        return mock;
     }
 }
