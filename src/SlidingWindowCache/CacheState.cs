@@ -30,13 +30,21 @@ internal sealed class CacheState<TRange, TData, TDomain>
     /// <summary>
     /// The last requested range that triggered a cache access.
     /// </summary>
-    public Range<TRange>? LastRequested { get; set; }
+    /// <remarks>
+    /// SINGLE-WRITER: Only Rebalance Execution Path may write to this field.
+    /// User Path is read-only with respect to cache state.
+    /// </remarks>
+    public Range<TRange>? LastRequested { get; internal set; }
 
     /// <summary>
     /// The range within which no rebalancing should occur.
     /// It is based on configured threshold policies.
     /// </summary>
-    public Range<TRange>? NoRebalanceRange { get; set; }
+    /// <remarks>
+    /// SINGLE-WRITER: Only Rebalance Execution Path may write to this field.
+    /// This field is recomputed after each successful rebalance execution.
+    /// </remarks>
+    public Range<TRange>? NoRebalanceRange { get; internal set; }
 
     /// <summary>
     /// Gets the domain defining the range characteristics for this cache instance.

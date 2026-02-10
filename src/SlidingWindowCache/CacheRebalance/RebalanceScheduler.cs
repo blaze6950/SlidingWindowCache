@@ -1,4 +1,4 @@
-﻿using Intervals.NET;
+﻿using Intervals.NET.Data;
 using Intervals.NET.Domain.Abstractions;
 using SlidingWindowCache.CacheRebalance.Executor;
 
@@ -65,7 +65,7 @@ internal sealed class RebalanceScheduler<TRange, TData, TDomain>
     /// Schedules a rebalance operation to execute after the debounce delay.
     /// Checks intent validity before starting execution.
     /// </summary>
-    /// <param name="requestedRange">The range that triggered this intent.</param>
+    /// <param name="deliveredData">The data that was actually delivered to the user for the requested range.</param>
     /// <param name="intentToken">Cancellation token for this specific intent (owned by IntentManager).</param>
     /// <remarks>
     /// <para>
@@ -77,8 +77,12 @@ internal sealed class RebalanceScheduler<TRange, TData, TDomain>
     /// When a new intent arrives, the Intent Controller cancels the previous token, causing
     /// any pending or executing rebalance to be cancelled.
     /// </para>
+    /// <para>
+    /// The delivered data is passed through to Rebalance Execution, allowing it to use
+    /// the data already fetched and delivered to the user as an authoritative source.
+    /// </para>
     /// </remarks>
-    public void ScheduleRebalance(Range<TRange> requestedRange, CancellationToken intentToken)
+    public void ScheduleRebalance(RangeData<TRange, TData, TDomain> deliveredData, CancellationToken intentToken)
     {
         // Fire-and-forget: schedule execution in background thread pool
         Task.Run(async () =>
@@ -97,7 +101,7 @@ internal sealed class RebalanceScheduler<TRange, TData, TDomain>
                 }
 
                 // Execute the rebalance pipeline
-                await ExecutePipelineAsync(requestedRange, intentToken);
+                await ExecutePipelineAsync(deliveredData, intentToken);
             }
             catch (OperationCanceledException)
             {
@@ -110,17 +114,17 @@ internal sealed class RebalanceScheduler<TRange, TData, TDomain>
     /// <summary>
     /// Executes the decision-execution pipeline in the background.
     /// </summary>
-    /// <param name="requestedRange">The range that triggered this intent.</param>
+    /// <param name="deliveredData">The data that was actually delivered to the user for the requested range.</param>
     /// <param name="cancellationToken">Cancellation token to support cancellation.</param>
     /// <remarks>
     /// <para><strong>Pipeline Flow:</strong></para>
     /// <list type="number">
     /// <item><description>Check if intent is still valid (cancellation check)</description></item>
     /// <item><description>Invoke DecisionEngine to determine if rebalance is needed</description></item>
-    /// <item><description>If needed, invoke Executor to perform rebalance</description></item>
+    /// <item><description>If needed, invoke Executor to perform rebalance using delivered data</description></item>
     /// </list>
     /// </remarks>
-    private async Task ExecutePipelineAsync(Range<TRange> requestedRange, CancellationToken cancellationToken)
+    private async Task ExecutePipelineAsync(RangeData<TRange, TData, TDomain> deliveredData, CancellationToken cancellationToken)
     {
         // Final cancellation check before decision logic
         // Ensures we don't do work for an obsolete intent
@@ -132,7 +136,7 @@ internal sealed class RebalanceScheduler<TRange, TData, TDomain>
         // Step 1: Invoke DecisionEngine (pure decision logic)
         // This checks NoRebalanceRange and computes DesiredCacheRange
         var decision = _decisionEngine.ShouldExecuteRebalance(
-            requestedRange,
+            deliveredData.Range,
             _state.NoRebalanceRange);
 
         // Step 2: If decision says skip, return early (no-op)
@@ -148,11 +152,12 @@ internal sealed class RebalanceScheduler<TRange, TData, TDomain>
         Instrumentation.CacheInstrumentationCounters.OnRebalanceExecutionStarted();
 #endif
 
-        // Step 3: If execution is allowed, invoke Executor
-        // The executor will perform I/O, merge data, trim to desired range, and update cache
+        // Step 3: If execution is allowed, invoke Executor with delivered data
+        // The executor will use delivered data as authoritative source, merge with existing cache,
+        // expand to desired range, trim excess, and update cache state
         try
         {
-            await _executor.ExecuteAsync(decision.DesiredRange!.Value, cancellationToken);
+            await _executor.ExecuteAsync(deliveredData, decision.DesiredRange!.Value, cancellationToken);
 #if DEBUG
             Instrumentation.CacheInstrumentationCounters.OnRebalanceExecutionCompleted();
 #endif

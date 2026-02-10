@@ -58,17 +58,18 @@ Attempting to test architectural or conceptual invariants would require:
 
 ### A.1 Concurrency & Priority
 
-**A.-1** 🔵 **[Architectural]** The User Path **MUST NOT execute concurrently** with Rebalance Execution.
-- *Enforced by*: Single-consumer model, coordination via `CancellationToken`, no locks/semaphores
-- *Architecture*: `UserRequestHandler` cancels `IntentController` before mutations
+**A.-1** 🔵 **[Architectural]** The User Path and Rebalance Execution **never write to cache concurrently**.
+- *Enforced by*: Single-writer architecture - User Path is read-only, only Rebalance Execution writes
+- *Architecture*: User Path never mutates cache state; Rebalance Execution is sole writer
 
 **A.0** 🔵 **[Architectural]** The User Path **always has higher priority** than Rebalance Execution.
 - *Enforced by*: Component ownership, cancellation protocol
 - *Architecture*: User Path cancels rebalance; rebalance checks cancellation
 
-**A.0a** 🟢 **[Behavioral — Test: `Invariant_A1_0a_UserRequestCancelsRebalanceBeforeMutations`]** Every User Request **MUST cancel** any ongoing or pending Rebalance Execution before performing cache mutations.
+**A.0a** 🟢 **[Behavioral — Test: `Invariant_A1_0a_UserRequestCancelsRebalanceBeforeMutations`]** Every User Request **MUST cancel** any ongoing or pending Rebalance Execution to ensure rebalance doesn't interfere with User Path data assembly.
 - *Observable via*: DEBUG instrumentation counters tracking cancellation
 - *Test verifies*: Cancellation counter increments when new request arrives
+- *Note*: Cancellation ensures User Path priority, not mutation safety (User Path is read-only)
 
 ### A.2 User-Facing Guarantees
 
@@ -102,28 +103,26 @@ Attempting to test architectural or conceptual invariants would require:
 
 ### A.3 Cache Mutation Rules (User Path)
 
-**A.7** 🔵 **[Architectural]** The User Path may read from cache and `IDataSource` but **does not normalize the cache**.
-- *Enforced by*: Component responsibilities, no trimming logic in `UserRequestHandler`
-- *Architecture*: Only `RebalanceExecutor` has trimming capability
+**A.7** 🔵 **[Architectural]** The User Path may read from cache and `IDataSource` but **does not mutate cache state**.
+- *Enforced by*: Component responsibilities, read-only architecture
+- *Architecture*: User Path has no write access to cache, LastRequested, or NoRebalanceRange
 
-**A.8** 🟢 **[Behavioral — Tests: `Invariant_A3_8_ColdStart`, `_CacheExpansion`, `_FullCacheReplacement`]** The User Path may mutate cache **ONLY** in the following controlled ways:
-   - **Initial cache population** (cold start: `CurrentCacheRange == null`)
-   - **Cache expansion** when `RequestedRange` intersects `CurrentCacheRange`
-   - **Full cache replacement** when `RequestedRange` does NOT intersect `CurrentCacheRange`
-- *Observable via*: DEBUG instrumentation counters (`CacheExpanded`, `CacheReplaced`)
-- *Test verifies*: Each scenario triggers appropriate mutation type
+**A.8** 🔵 **[Architectural — Tests: `Invariant_A3_8_ColdStart`, `_CacheExpansion`, `_FullCacheReplacement`]** The User Path **MUST NOT mutate cache under any circumstance**.
+   - User Path is **read-only** with respect to cache state
+   - User Path **NEVER** calls `Cache.Rematerialize()`
+   - User Path **NEVER** writes to `LastRequested`
+   - User Path **NEVER** writes to `NoRebalanceRange`
+   - All cache mutations are performed exclusively by Rebalance Execution (single-writer)
+- *Observable via*: DEBUG instrumentation counters (`CacheExpanded`, `CacheReplaced` remain 0 for User Path)
+- *Test verifies*: User Path returns correct data without mutating cache; Rebalance Execution populates cache
 
-**A.9** 🔵 **[Architectural]** The User Path **never removes data from the cache** during expansion operations.
-- *Enforced by*: `ExtendCacheAsync` only adds data, never trims
-- *Architecture*: No deletion logic in User Path components
+**A.9** 🔵 **[Architectural]** Cache mutations are performed **exclusively by Rebalance Execution** (single-writer architecture).
+- *Enforced by*: Component encapsulation, internal setters on CacheState
+- *Architecture*: Only `RebalanceExecutor` has write access to cache state
 
 **A.9a** 🟢 **[Behavioral — Test: `Invariant_A3_9a_CacheContiguityMaintained`]** **Cache Contiguity Rule:** `CacheData` **MUST always remain contiguous** — gapped or partially materialized cache states are invalid.
 - *Observable via*: All requests return valid contiguous data
 - *Test verifies*: Sequential overlapping requests all succeed
-
-**A.9b** 🔵 **[Architectural]** **Non-Intersecting Request Rule:** If `RequestedRange` does NOT intersect `CurrentCacheRange`, the User Path **MUST fully replace** both `CacheData` and `CurrentCacheRange` with data for `RequestedRange`.
-- *Enforced by*: Control flow in `UserRequestHandler.HandleRequestAsync`
-- *Architecture*: Intersection check determines expand vs. replace logic
 
 ---
 
@@ -194,6 +193,14 @@ Attempting to test architectural or conceptual invariants would require:
 - *Design decision*: Rebalance is opportunistic, not mandatory
 - *Test note*: Test verifies skip behavior exists, but non-execution is acceptable
 
+**C.24e** 🔵 **[Architectural]** Intent **MUST contain delivered data** (`RangeData<TRange,TData,TDomain>`) representing what was actually returned to the user for the requested range.
+- *Enforced by*: `PublishIntent()` signature requires `deliveredData` parameter
+- *Architecture*: User Path materializes data once and passes to both user and intent
+
+**C.24f** 🟡 **[Conceptual]** Delivered data in intent serves as the **authoritative source** for Rebalance Execution, avoiding duplicate fetches and ensuring consistency with user view.
+- *Design guarantee*: Rebalance Execution uses delivered data as base, not current cache
+- *Rationale*: Eliminates redundant IDataSource calls, ensures cache converges to what user received
+
 ---
 
 ## D. Rebalance Decision Path Invariants
@@ -263,16 +270,20 @@ Attempting to test architectural or conceptual invariants would require:
 
 ### F.2 Cache Mutation Rules (Rebalance Execution)
 
-**F.36** 🔵 **[Architectural]** The Rebalance Execution Path is the **only path responsible for cache normalization**.
-- *Enforced by*: Only `RebalanceExecutor` has trimming logic
-- *Architecture*: Component ownership, responsibility assignment
+**F.36** 🔵 **[Architectural]** The Rebalance Execution Path is the **ONLY component that mutates cache state** (single-writer architecture).
+- *Enforced by*: Component encapsulation, internal setters on CacheState
+- *Architecture*: Only `RebalanceExecutor` writes to Cache, LastRequested, NoRebalanceRange
 
-**F.36a** 🟢 **[Behavioral — Test: `Invariant_F36a_RebalanceNormalizesCache`]** Rebalance Execution may mutate cache **ONLY** for normalization purposes:
-   - **Expanding cache** to `DesiredCacheRange`
+**F.36a** 🟢 **[Behavioral — Test: `Invariant_F36a_RebalanceNormalizesCache`]** Rebalance Execution mutates cache for normalization using **delivered data from intent as authoritative base**:
+   - **Uses delivered data** from intent (not current cache) as starting point
+   - **Expanding to DesiredCacheRange** by fetching only truly missing ranges
    - **Trimming excess data** outside `DesiredCacheRange`
-   - **Recomputing** `NoRebalanceRange`
+   - **Writing to cache** via `Cache.Rematerialize()`
+   - **Writing to LastRequested** with original requested range
+   - **Recomputing NoRebalanceRange** based on final cache range
 - *Observable via*: After rebalance, cache serves data from expanded range
 - *Test verifies*: Cache covers larger area after rebalance completes
+- *Single-writer guarantee*: These are the ONLY mutations in the system
 
 **F.37** 🔵 **[Architectural]** Rebalance Execution may **replace, expand, or shrink cache data** to achieve normalization.
 - *Enforced by*: `RebalanceExecutor` has full mutation capability
@@ -357,7 +368,7 @@ For conceptual invariants, the design rationale is explained.
 - **[Component Map](component-map.md)** - Detailed component responsibilities and ownership
 - **[Concurrency Model](concurrency-model.md)** - Single-consumer model and coordination
 - **[Scenario Model](scenario-model.md)** - Temporal behavior scenarios
-- **[Storage Strategies](STORAGE_STRATEGIES.md)** - Staging buffer pattern and memory behavior
+- **[Storage Strategies](storage-strategies.md)** - Staging buffer pattern and memory behavior
 
 ---
 

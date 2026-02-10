@@ -279,118 +279,137 @@ public class WindowCacheInvariantTests : IDisposable
     #region A.3 Cache Mutation Rules (User Path)
 
     /// <summary>
-    /// Tests Invariant A.8 (🟢 Behavioral): The User Path may mutate cache for initial population
-    /// during cold start (when CurrentCacheRange == null).
+    /// Tests Invariant A.8 (🟢 Behavioral): The User Path MUST NOT mutate cache.
+    /// Initial cache population is performed by Rebalance Execution, not User Path.
     /// </summary>
     /// <remarks>
-    /// This test verifies that the first user request to an empty cache properly populates the cache
-    /// with the requested data. This is one of the three controlled mutation scenarios allowed for
-    /// the User Path (cold start, expansion for intersecting requests, full replacement for non-intersecting).
+    /// This test verifies that during cold start, the User Path returns correct data to the user
+    /// immediately by fetching from IDataSource, but does NOT write to cache. The cache is populated
+    /// asynchronously by Rebalance Execution using the delivered data from the intent.
+    /// This validates the single-writer architecture where only Rebalance Execution mutates cache state.
     /// </remarks>
     [Fact]
     public async Task Invariant_A3_8_ColdStart_InitialCachePopulation()
     {
-        // Invariant A.3.8: The User Path may mutate cache in controlled ways:
-        // - Initial cache population (cold start: CurrentCacheRange == null)
+        // Invariant A.8 (NEW): User Path MUST NOT mutate cache under any circumstance.
+        // Cache population is performed exclusively by Rebalance Execution (single-writer).
 
         // Arrange
-        var options = TestHelpers.CreateDefaultOptions();
+        var options = TestHelpers.CreateDefaultOptions(debounceDelay: TimeSpan.FromMilliseconds(50));
         var mockDataSource = CreateMockDataSource();
         var cache = new WindowCache<int, int, IntegerFixedStepDomain>(mockDataSource.Object, _domain, options);
-
-#if DEBUG
-        var initialExpanded = CacheInstrumentationCounters.CacheExpanded;
-        var initialReplaced = CacheInstrumentationCounters.CacheReplaced;
-#endif
 
         // Act: First request (cold start)
         var data = await cache.GetDataAsync(TestHelpers.CreateRange(100, 110), CancellationToken.None);
 
-        // Assert
+        // Assert: User receives correct data immediately
         TestHelpers.VerifyDataMatchesRange(data, TestHelpers.CreateRange(100, 110));
 
 #if DEBUG
-        // Cold start should trigger either expansion or replacement
-        Assert.True(CacheInstrumentationCounters.CacheExpanded > initialExpanded ||
-                    CacheInstrumentationCounters.CacheReplaced > initialReplaced,
-            "Cold start should populate cache");
+        // User Path should NOT have triggered cache mutations
+        // CacheExpanded and CacheReplaced counters should remain at 0
+        Assert.Equal(0, CacheInstrumentationCounters.CacheExpanded);
+        Assert.Equal(0, CacheInstrumentationCounters.CacheReplaced);
+        
+        // Intent should be published for rebalance
+        Assert.Equal(1, CacheInstrumentationCounters.RebalanceIntentPublished);
+#endif
+
+        // Wait for rebalance execution to complete
+        await TestHelpers.WaitForRebalanceAsync(200);
+
+#if DEBUG
+        // After rebalance completes, cache should be populated by Rebalance Execution
+        Assert.True(CacheInstrumentationCounters.RebalanceExecutionCompleted > 0,
+            "Rebalance Execution should populate cache, not User Path");
 #endif
     }
 
     /// <summary>
-    /// Tests Invariant A.8 (🟢 Behavioral): The User Path may mutate cache by expanding it
-    /// when RequestedRange intersects with CurrentCacheRange.
+    /// Tests Invariant A.8 (🟢 Behavioral): The User Path MUST NOT mutate cache.
+    /// Cache expansion is performed by Rebalance Execution, not User Path.
     /// </summary>
     /// <remarks>
     /// This test verifies that when a user request partially overlaps with existing cache,
-    /// the cache is expanded to include both the old and new data. The system properly unions
-    /// the ranges and serves the complete requested data.
+    /// the User Path returns correct data by reading from cache and fetching missing parts,
+    /// but does NOT expand the cache. Cache expansion is handled asynchronously by Rebalance Execution.
+    /// This validates the single-writer architecture.
     /// </remarks>
     [Fact]
     public async Task Invariant_A3_8_CacheExpansion_IntersectingRequest()
     {
-        // Invariant A.3.8: Cache expansion when RequestedRange intersects CurrentCacheRange
+        // Invariant A.8 (NEW): User Path MUST NOT mutate cache, even for intersecting requests.
 
         // Arrange
-        var options = TestHelpers.CreateDefaultOptions();
+        var options = TestHelpers.CreateDefaultOptions(debounceDelay: TimeSpan.FromMilliseconds(50));
         var mockDataSource = CreateMockDataSource();
         var cache = new WindowCache<int, int, IntegerFixedStepDomain>(mockDataSource.Object, _domain, options);
 
-        // Act: First request
+        // Act: First request to populate cache via rebalance
         await cache.GetDataAsync(TestHelpers.CreateRange(100, 110), CancellationToken.None);
+        await TestHelpers.WaitForRebalanceAsync(200); // Wait for initial cache population
 
 #if DEBUG
-        CacheInstrumentationCounters.Reset(); // Reset to track only expansion
+        CacheInstrumentationCounters.Reset(); // Reset to track only the second request
 #endif
 
         // Second request intersects with first
         var data = await cache.GetDataAsync(TestHelpers.CreateRange(105, 120), CancellationToken.None);
 
-        // Assert
+        // Assert: User receives correct data
         TestHelpers.VerifyDataMatchesRange(data, TestHelpers.CreateRange(105, 120));
 
 #if DEBUG
-        Assert.True(CacheInstrumentationCounters.CacheExpanded > 0,
-            "Intersecting request should expand cache");
+        // User Path should NOT have expanded cache
+        Assert.Equal(0, CacheInstrumentationCounters.CacheExpanded);
+        
+        // Intent should be published for rebalance
+        Assert.True(CacheInstrumentationCounters.RebalanceIntentPublished > 0,
+            "Intent should be published for every request");
 #endif
     }
 
     /// <summary>
-    /// Tests Invariant A.8 (🟢 Behavioral): The User Path may mutate cache by performing
-    /// full cache replacement when RequestedRange does NOT intersect CurrentCacheRange.
+    /// Tests Invariant A.8 (🟢 Behavioral): The User Path MUST NOT mutate cache.
+    /// Cache replacement is performed by Rebalance Execution, not User Path.
     /// </summary>
     /// <remarks>
     /// This test verifies that when a user request is completely disjoint from the current cache
-    /// (a "jump" to a different region), the cache is entirely replaced with the new data.
-    /// This prevents memory waste from maintaining distant, non-contiguous cache regions.
+    /// (a "jump" to a different region), the User Path returns correct data by fetching from IDataSource,
+    /// but does NOT replace the cache. Cache replacement is handled asynchronously by Rebalance Execution.
+    /// This validates the single-writer architecture.
     /// </remarks>
     [Fact]
     public async Task Invariant_A3_8_FullCacheReplacement_NonIntersectingRequest()
     {
-        // Invariant A.3.8 & A.3.9b: Full cache replacement when RequestedRange
-        // does NOT intersect CurrentCacheRange
+        // Invariant A.8 (NEW): User Path MUST NOT mutate cache, even for non-intersecting jumps.
 
         // Arrange
-        var options = TestHelpers.CreateDefaultOptions();
+        var options = TestHelpers.CreateDefaultOptions(debounceDelay: TimeSpan.FromMilliseconds(50));
         var mockDataSource = CreateMockDataSource();
         var cache = new WindowCache<int, int, IntegerFixedStepDomain>(mockDataSource.Object, _domain, options);
 
-        // Act: First request
+        // Act: First request to populate cache via rebalance
         await cache.GetDataAsync(TestHelpers.CreateRange(100, 110), CancellationToken.None);
+        await TestHelpers.WaitForRebalanceAsync(200); // Wait for initial cache population
 
 #if DEBUG
         CacheInstrumentationCounters.Reset();
 #endif
 
-        // Second request does NOT intersect
+        // Second request does NOT intersect (jump to different region)
         var data = await cache.GetDataAsync(TestHelpers.CreateRange(200, 210), CancellationToken.None);
 
-        // Assert
+        // Assert: User receives correct data
         TestHelpers.VerifyDataMatchesRange(data, TestHelpers.CreateRange(200, 210));
 
 #if DEBUG
-        Assert.True(CacheInstrumentationCounters.CacheReplaced > 0,
-            "Non-intersecting request should replace cache");
+        // User Path should NOT have replaced cache
+        Assert.Equal(0, CacheInstrumentationCounters.CacheReplaced);
+        
+        // Intent should be published for rebalance
+        Assert.True(CacheInstrumentationCounters.RebalanceIntentPublished > 0,
+            "Intent should be published for every request");
 #endif
     }
 
@@ -1230,9 +1249,10 @@ public class WindowCacheInvariantTests : IDisposable
             "All user requests should be served");
         Assert.True(CacheInstrumentationCounters.RebalanceIntentPublished >= 5,
             "Intent should be published for each request");
-        Assert.True(CacheInstrumentationCounters.CacheExpanded +
-            CacheInstrumentationCounters.CacheReplaced > 0,
-            "Cache mutations should occur");
+        // NOTE: CacheExpanded/CacheReplaced are no longer called by User Path in single-writer architecture
+        // Cache mutations now occur exclusively in Rebalance Execution
+        Assert.True(CacheInstrumentationCounters.RebalanceExecutionCompleted > 0,
+            "Rebalance execution should have completed at least once");
 #endif
     }
 

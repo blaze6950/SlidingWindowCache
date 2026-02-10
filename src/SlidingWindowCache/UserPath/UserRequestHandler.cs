@@ -72,100 +72,114 @@ internal sealed class UserRequestHandler<TRange, TData, TDomain>
     /// of data for the specified range from the materialized cache.
     /// </returns>
     /// <remarks>
-    /// <para>This method implements the User Path logic:</para>
+    /// <para>This method implements the User Path logic (READ-ONLY with respect to cache state):</para>
     /// <list type="number">
-    /// <item><description>Cancel any pending/ongoing rebalance (Invariant A.1-0a: User Path priority)</description></item>
-    /// <item><description>Check if requested range is fully covered by cache</description></item>
-    /// <item><description>If not, extend cache to cover requested range (User Path mutation allowed for expansion)</description></item>
-    /// <item><description>Update LastRequestedRange</description></item>
-    /// <item><description>Publish rebalance intent (fire-and-forget, NEVER invokes decision logic)</description></item>
-    /// <item><description>Return data for requested range from materialized cache</description></item>
+    /// <item><description>Cancel any pending/ongoing rebalance (Invariant A.0: User Path priority)</description></item>
+    /// <item><description>Check if requested range is fully or partially covered by cache</description></item>
+    /// <item><description>Fetch missing data from IDataSource as needed</description></item>
+    /// <item><description>Materialize assembled data to array</description></item>
+    /// <item><description>Return ReadOnlyMemory to user immediately</description></item>
+    /// <item><description>Publish rebalance intent with delivered data (fire-and-forget)</description></item>
     /// </list>
+    /// <para><strong>CRITICAL: User Path is READ-ONLY</strong></para>
+    /// <para>
+    /// User Path NEVER writes to cache state. All cache mutations are performed exclusively
+    /// by Rebalance Execution Path (single-writer architecture). The User Path:
+    /// <list type="bullet">
+    /// <item><description>✅ May READ from cache</description></item>
+    /// <item><description>✅ May READ from IDataSource</description></item>
+    /// <item><description>❌ NEVER writes to Cache (no Rematerialize calls)</description></item>
+    /// <item><description>❌ NEVER writes to LastRequested</description></item>
+    /// <item><description>❌ NEVER writes to NoRebalanceRange</description></item>
+    /// </list>
+    /// </para>
     /// </remarks>
     public async ValueTask<ReadOnlyMemory<TData>> HandleRequestAsync(
         Range<TRange> requestedRange,
         CancellationToken cancellationToken)
     {
-        // CRITICAL: Cancel any pending/ongoing rebalance FIRST, before any cache access
-        // This satisfies Invariant A.1-0a: "Every User Request MUST cancel any ongoing or pending
-        // Rebalance Execution before performing cache mutations"
-        // This also implements State Machine Transition T4: User Path cancels rebalance before mutations
+        // CRITICAL: Cancel any pending/ongoing rebalance FIRST (Invariant A.0: User Path priority)
+        // This ensures rebalance execution doesn't interfere even though User Path no longer mutates
         _intentManager.CancelPendingRebalance();
 
-        // Check if cache is cold (never used)
+        // Check if cache is cold (never used) - use ToRangeData to detect empty cache
+        var currentCacheData = _state.Cache.ToRangeData();
         var isColdStart = !_state.LastRequested.HasValue;
 
-        // User Path: Check if the requested range is fully covered by the cache
-        if (isColdStart || !_state.Cache.Range.Contains(requestedRange))
-        {
-            RangeData<TRange, TData, TDomain> newCacheData;
-            bool isExpansion;
+        RangeData<TRange, TData, TDomain> assembledData;
 
-            if (isColdStart)
+        if (isColdStart)
+        {
+            // Scenario 1: Cold Start
+            // Cache has never been populated - fetch data ONLY for requested range
+            assembledData = await _cacheFetcher.FetchDataAsync(requestedRange, cancellationToken);
+        }
+        else
+        {
+            var currentCacheRange = _state.Cache.Range;
+            var fullyInCache = currentCacheRange.Contains(requestedRange);
+
+            if (fullyInCache)
             {
-                // Scenario 1: Cold Start (Invariant A.3.8)
-                // Initial cache population - fetch data ONLY for requested range
-                isExpansion = false;
-                newCacheData = await _cacheFetcher.FetchDataAsync(requestedRange, cancellationToken);
+                // Scenario 2: Full Cache Hit
+                // All requested data is available in cache - read from cache (no IDataSource call)
+                var cachedData = _state.Cache.Read(requestedRange);
+                
+                // Create RangeData from cached data for intent
+                // Note: We must materialize to array to create proper RangeData for intent
+                var array = cachedData.ToArray();
+                assembledData = new RangeData<TRange, TData, TDomain>(requestedRange, array, _state.Domain);
             }
             else
             {
-                var currentCacheData = _state.Cache.ToRangeData();
                 var hasIntersection = currentCacheData.Range.Intersect(requestedRange).HasValue;
 
                 if (hasIntersection)
                 {
-                    // Scenario 2: Cache Expansion (Invariant A.3.8)
-                    // RequestedRange intersects CurrentCacheRange - extend cache to cover requested range
-                    // This preserves all existing data and only fetches missing parts
-                    isExpansion = true;
-                    newCacheData =
-                        await _cacheFetcher.ExtendCacheAsync(currentCacheData, requestedRange, cancellationToken);
+                    // Scenario 3: Partial Cache Hit
+                    // RequestedRange intersects CurrentCacheRange - read from cache and fetch missing parts
+                    // ExtendCacheAsync will compute missing ranges and fetch only those parts
+                    var extendedData = await _cacheFetcher.ExtendCacheAsync(currentCacheData, requestedRange, cancellationToken);
+                    
+                    // Slice to requested range only (ExtendCacheAsync returns union of cache + requested)
+                    assembledData = extendedData[requestedRange];
                 }
                 else
                 {
-                    // Scenario 3: Full Cache Replacement (Invariant A.3.8 & A.3.9b)
+                    // Scenario 4: Full Cache Miss (Non-intersecting Jump)
                     // RequestedRange does NOT intersect CurrentCacheRange
-                    // MUST fully replace cache - fetch ONLY the requested range, discard old cache
-                    // Per Invariant A.3.9b: "If RequestedRange does NOT intersect CurrentCacheRange,
-                    // the User Path MUST fully replace both CacheData and CurrentCacheRange"
-                    isExpansion = false;
-                    newCacheData = await _cacheFetcher.FetchDataAsync(requestedRange, cancellationToken);
+                    // Fetch ONLY the requested range from IDataSource
+                    assembledData = await _cacheFetcher.FetchDataAsync(requestedRange, cancellationToken);
                 }
             }
-
-            // Materialize the new cache data (atomic update)
-            _state.Cache.Rematerialize(newCacheData);
-
-#if DEBUG
-            // Track cache mutation type
-            if (isExpansion)
-            {
-                Instrumentation.CacheInstrumentationCounters.OnCacheExpanded();
-            }
-            else
-            {
-                Instrumentation.CacheInstrumentationCounters.OnCacheReplaced();
-            }
-#endif
         }
 
-        // CRITICAL: Read from cache IMMEDIATELY after ensuring it contains the requested range
-        // This minimizes the window for race conditions in concurrent scenarios
-        var result = _state.Cache.Read(requestedRange);
+        // CRITICAL: Materialize assembled data to array
+        // This serves two purposes:
+        // 1. Create ReadOnlyMemory<TData> to return to user
+        // 2. Create RangeData<TRange,TData,TDomain> for intent
+        // Note: assembledData.Data is IEnumerable, must materialize to array
+        var materializedArray = assembledData.Data.ToArray();
 
-        // Update the last requested range
-        _state.LastRequested = requestedRange;
+        // Create ReadOnlyMemory to return to user immediately
+        var result = new ReadOnlyMemory<TData>(materializedArray);
 
-        // Publish rebalance intent (fire-and-forget)
-        // UserRequestHandler NEVER invokes decision logic - it only publishes intents
-        _intentManager.PublishIntent(requestedRange);
+        // Create RangeData for intent using the same materialized array
+        var deliveredData = new RangeData<TRange, TData, TDomain>(
+            requestedRange,
+            materializedArray,
+            _state.Domain);
+
+        // Publish rebalance intent with delivered data (fire-and-forget)
+        // The intent contains both the requested range and the actual data delivered to the user
+        // Rebalance Execution will use this as the authoritative source
+        _intentManager.PublishIntent(deliveredData);
 
 #if DEBUG
         Instrumentation.CacheInstrumentationCounters.OnUserRequestServed();
 #endif
 
-        // Return the data
+        // Return the data immediately (User Path never waits for rebalance)
         return result;
     }
 }

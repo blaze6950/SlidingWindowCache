@@ -2,16 +2,59 @@
 
 ## Core Principle
 
-This library is built around a **single logical consumer per cache instance**.
+This library is built around a **single logical consumer per cache instance** with a **single-writer architecture**.
 
 A cache instance:
-- is **not thread-safe**
-- is **not designed for concurrent access**
+- is **not thread-safe for shared access**
+- is **designed for concurrent reads** (User Path is read-only)
 - assumes a single, coherent access pattern
+- enforces single-writer for all mutations (Rebalance Execution only)
 
 This is an **ideological requirement**, not merely an architectural or technical limitation.
 
 The architecture of the library reflects and enforces this principle.
+
+---
+
+## Single-Writer Architecture
+
+### Core Design
+
+The cache implements a **single-writer** concurrency model:
+
+- **One Writer:** Rebalance Execution Path exclusively
+- **Read-Only User Path:** User Path never mutates cache state
+- **No Locks:** Coordination via cancellation, not mutual exclusion
+- **Eventual Consistency:** Cache state converges asynchronously to optimal configuration
+
+### Write Ownership
+
+Only `RebalanceExecutor` may write to:
+- Cache data and range (via `Cache.Rematerialize()`)
+- `LastRequested` field
+- `NoRebalanceRange` field
+
+All other components have read-only access to cache state.
+
+### Read Safety
+
+User Path safely reads cache state without locks because:
+- User Path never writes to cache (read-only guarantee)
+- Rebalance Execution performs atomic updates via `Rematerialize()`
+- Cancellation ensures Rebalance Execution yields before User Path operations
+- Single-writer eliminates race conditions
+
+### Eventual Consistency Model
+
+Cache state converges to optimal configuration asynchronously:
+
+1. **User Path** returns correct data immediately (from cache or IDataSource)
+2. **User Path** publishes intent with delivered data
+3. **Cache state** updates occur in background via Rebalance Execution
+4. **Debounce delay** controls convergence timing
+5. **User correctness** never depends on cache state being up-to-date
+
+**Key insight:** User always receives correct data, regardless of whether cache has converged yet.
 
 ---
 
@@ -26,6 +69,10 @@ Each cache instance represents:
 
 Attempting to share a single cache instance across multiple users or threads
 violates this fundamental assumption.
+
+**Note:** The single-consumer constraint exists for coherent access patterns,
+not for mutation safety (User Path is read-only, so parallel reads would be safe
+from a mutation perspective, but would still violate the single-consumer model).
 
 ---
 
@@ -102,10 +149,14 @@ result in inefficient or unstable behavior.
 
 ## What Is Supported
 
-- Single-threaded access per cache instance
+- Single logical consumer per cache instance (coherent access pattern)
+- Single-writer architecture (Rebalance Execution only)
+- Read-only User Path (safe for repeated calls from same consumer)
 - Background asynchronous rebalance
 - Cancellation and debouncing of rebalance execution
 - High-frequency access from one logical consumer
+- Eventual consistency model (cache converges asynchronously)
+- Intent-based data delivery (delivered data in intent avoids duplicate fetches)
 
 ---
 

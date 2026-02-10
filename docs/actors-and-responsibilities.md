@@ -18,35 +18,36 @@ Handles user requests with minimal latency and maximal isolation from background
 
 **Critical Contract:**
 ```
-Every user access produces a rebalance intent.
-The UserRequestHandler NEVER invokes decision logic.
+Every user access produces a rebalance intent containing delivered data.
+The UserRequestHandler is READ-ONLY with respect to cache state.
+The UserRequestHandler NEVER invokes directly decision logic - it just publishes an intent.
 ```
 
 **Responsible for invariants:**
-- -1. User Path can NOT be executed concurrently with rebalance execution
+- -1. User Path and Rebalance Execution never write to cache concurrently
 - 0. User Path has higher priority than rebalance execution
-- 0a. Every User Request MUST cancel any ongoing or pending Rebalance Execution before performing cache mutations
+- 0a. Every User Request MUST cancel any ongoing or pending Rebalance Execution to prevent interference
 - 1. User Path always serves user requests
 - 2. User Path never waits for rebalance execution
 - 3. User Path is the sole source of rebalance intent
 - 5. Performs only work necessary to return data
 - 6. May synchronously request from IDataSource
-- 7. May read cache and source, but does not normalize
-- 8. May mutate cache ONLY in controlled ways:
-  - Initial cache population (cold start)
-  - Cache expansion when RequestedRange intersects CurrentCacheRange
-  - Full cache replacement when RequestedRange does NOT intersect CurrentCacheRange
-- 9. Never removes data from cache during expansion operations
+- 7. May read cache and source, but does not mutate cache state
+- 8. (NEW) MUST NOT mutate cache under any circumstance (read-only)
 - 9a. Cache data MUST always remain contiguous (no gaps allowed)
-- 9b. Non-intersecting requests MUST fully replace cache
 - 10. Always returns exactly RequestedRange
+- 24e. Intent MUST contain delivered data (RangeData)
+- 24f. Delivered data represents what user actually received
 
 **Explicit Non-Responsibilities:**
 - ❌ **NEVER checks NoRebalanceRange** (belongs to DecisionEngine)
 - ❌ **NEVER computes DesiredCacheRange** (belongs to GeometryPolicy)
 - ❌ **NEVER decides whether to rebalance** (belongs to DecisionEngine)
+- ❌ **NEVER writes to cache** (no Rematerialize calls)
+- ❌ **NEVER writes to LastRequested**
+- ❌ **NEVER writes to NoRebalanceRange**
 
-**Responsibility Type:** ensures and enforces fast, correct user access with strict mutation boundaries
+**Responsibility Type:** ensures and enforces fast, correct user access with strict read-only boundaries
 
 ---
 
@@ -157,13 +158,21 @@ but externally appears as a single unified actor.
 
 ---
 
-## 5. Rebalance Executor (Mutating Actor)
+## 5. Rebalance Executor (Single-Writer Actor)
 
 **Role:**  
-The sole component responsible for cache normalization (expanding to desired range, trimming excess, recomputing no-rebalance range).
+The **ONLY component** that mutates cache state (single-writer architecture). Responsible for cache normalization using delivered data from intent as authoritative source.
 
 **Execution Context:**  
 **Lives in: Background / ThreadPool**
+
+**Single-Writer Guarantee:**
+Rebalance Executor is the ONLY component that mutates:
+- Cache data and range (via `Cache.Rematerialize()`)
+- `LastRequested` field
+- `NoRebalanceRange` field
+
+This eliminates race conditions and ensures consistent cache state.
 
 **Responsible for invariants:**
 - 4. Rebalance is asynchronous relative to User Path
@@ -171,12 +180,15 @@ The sole component responsible for cache normalization (expanding to desired ran
 - 34a. MUST yield to User Path requests immediately upon cancellation
 - 34b. Partially executed or cancelled execution MUST NOT leave cache inconsistent
 - 35. Only path responsible for cache normalization
-- 35a. May mutate cache ONLY for normalization purposes:
-  - Expanding cache to DesiredCacheRange
+- 35a. Mutates cache ONLY for normalization, using delivered data from intent:
+  - Uses delivered data from intent as authoritative base (not current cache)
+  - Expanding to DesiredCacheRange by fetching only truly missing ranges
   - Trimming excess data outside DesiredCacheRange
+  - Writing to Cache.Rematerialize()
+  - Writing to LastRequested
   - Recomputing NoRebalanceRange
 - 36. May replace / expand / shrink cache to achieve normalization
-- 37. Requests data only for missing subranges
+- 37. Requests data only for missing subranges (not covered by delivered data)
 - 38. Does not overwrite intersecting data
 - 39. Upon completion: CacheData corresponds to DesiredCacheRange
 - 40. Upon completion: CurrentCacheRange == DesiredCacheRange

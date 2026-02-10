@@ -1,13 +1,14 @@
 ﻿# WindowCache Invariant Tests - Implementation Summary
 
 ## Overview
-Comprehensive unit test suite for the WindowCache library verifying all 47 system invariants through the public API using DEBUG-only instrumentation counters.
+Comprehensive unit test suite for the WindowCache library verifying system invariants through the public API using DEBUG-only instrumentation counters.
+
+**Architecture**: Single-Writer Model (User Path is read-only, Rebalance Execution is sole writer)
 
 **Test Statistics**:
-- **Total Invariants**: 47 (19 Behavioral, 20 Architectural, 8 Conceptual)
-- **Total Tests**: 28 automated tests (27 invariant tests + 1 comprehensive scenario)
-- **Test Coverage**: 19/19 behavioral invariants directly covered
-- **Test Execution Time**: ~8.5 seconds for full suite
+- **Total Tests**: 27 automated tests (all passing)
+- **Test Execution Time**: ~7 seconds for full suite
+- **Architecture**: Single-writer with intent-carried data
 
 ## Implementation Details
 
@@ -19,22 +20,24 @@ Comprehensive unit test suite for the WindowCache library verifying all 47 syste
   
 - **Instrumented Components**:
   - `WindowCache.cs` - No direct instrumentation (facade)
-  - `UserRequestHandler.cs` - Tracks user requests served, cache expansions/replacements
+  - `UserRequestHandler.cs` - Tracks user requests served (NO cache mutations - read-only)
   - `IntentController.cs` - Tracks intent published/cancelled
   - `RebalanceScheduler.cs` - Tracks execution started/completed/cancelled, policy-based skips
   - `RebalanceExecutor.cs` - Tracks optimization-based skips (same-range detection)
 
 - **Counter Types** (with Invariant References):
   - `UserRequestsServed` - User requests completed
-  - `CacheExpanded` - Cache expanded (intersecting request)
-  - `CacheReplaced` - Cache replaced (non-intersecting request)
-  - `RebalanceIntentPublished` - Rebalance intent published (every user request)
+  - `CacheExpanded` - **DEPRECATED** - No longer incremented (User Path is read-only)
+  - `CacheReplaced` - **DEPRECATED** - No longer incremented (User Path is read-only)
+  - `RebalanceIntentPublished` - Rebalance intent published (every user request with delivered data)
   - `RebalanceIntentCancelled` - Rebalance intent cancelled (new request supersedes old)
   - `RebalanceExecutionStarted` - Rebalance execution began
-  - `RebalanceExecutionCompleted` - Rebalance execution finished successfully
+  - `RebalanceExecutionCompleted` - Rebalance execution finished successfully (sole writer)
   - `RebalanceExecutionCancelled` - Rebalance execution cancelled
   - `RebalanceSkippedNoRebalanceRange` - **Policy-based skip** (Invariant D.27) - Request within NoRebalanceRange threshold
   - `RebalanceSkippedSameRange` - **Optimization-based skip** (Invariant D.28) - DesiredRange == CurrentRange
+
+**Note**: `CacheExpanded` and `CacheReplaced` counters remain in code for compatibility but are never incremented under the new single-writer architecture.
 
 ### 2. Test Infrastructure
 - **Location**: `tests/SlidingWindowCache.Invariants.Tests/TestInfrastructure/`
@@ -66,13 +69,13 @@ Comprehensive unit test suite for the WindowCache library verifying all 47 syste
 #### Test Categories:
 
 **A. User Path & Fast User Access (8 tests)**
-- A.1-0a: User request cancels rebalance before mutations
+- A.1-0a: User request cancels rebalance (to prevent interference, not for mutation safety)
 - A.2.1: User path always serves requests
 - A.2.2: User path never waits for rebalance
 - A.2.10: User always receives exact requested range
-- A.3.8: Cold start cache population
-- A.3.8: Cache expansion (intersecting request)
-- A.3.8: Full cache replacement (non-intersecting request)
+- A.3.8: Cold start - User Path does NOT populate cache (read-only)
+- A.3.8: Cache expansion - User Path does NOT expand cache (read-only)
+- A.3.8: Full cache replacement - User Path does NOT replace cache (read-only)
 - A.3.9a: Cache contiguity maintained
 
 **B. Cache State & Consistency (2 tests)**
@@ -111,12 +114,33 @@ Comprehensive unit test suite for the WindowCache library verifying all 47 syste
 - Concurrency scenario with rapid request bursts and cancellation
 - Read mode variations (Snapshot and CopyOnRead)
 
-### 5. Key Implementation Fixes
+### 5. Key Implementation Changes (Single-Writer Architecture Migration)
 
 **UserRequestHandler.cs**:
-- Added cold start detection using `LastRequested.HasValue`
-- Fixed to avoid calling `ToRangeData()` on uninitialized cache
-- Properly tracks cache expansion vs replacement with instrumentation
+- **REMOVED**: All `_state.Cache.Rematerialize()` calls (User Path is now read-only)
+- **REMOVED**: `_state.LastRequested` writes (only Rebalance Execution writes)
+- **ADDED**: Cold start detection using cache data enumeration
+- **ADDED**: Materialization of assembled data to array (for user + intent)
+- **ADDED**: Creation of `RangeData` for intent with delivered data
+- **PRESERVED**: Cancellation logic (User Path priority)
+- **PRESERVED**: Cache hit detection and read logic
+- **PRESERVED**: IDataSource fetching for missing data
+
+**IntentController.cs & RebalanceScheduler.cs**:
+- **ADDED**: `RangeData<TRange,TData,TDomain> deliveredData` parameter to intent
+- **ADDED**: Intent now carries both requested range and actual delivered data
+- **PURPOSE**: Enables Rebalance Execution to use delivered data as authoritative source
+
+**RebalanceExecutor.cs**:
+- **ADDED**: Accept `requestedRange` and `deliveredData` parameters
+- **CHANGED**: Uses delivered data from intent as base (not current cache)
+- **ADDED**: Writes to `_state.LastRequested` (sole writer)
+- **ADDED**: Writes to `_state.NoRebalanceRange` (already was sole writer)
+- **RESPONSIBILITY**: Sole writer of all cache state (Cache, LastRequested, NoRebalanceRange)
+
+**CacheState.cs**:
+- **CHANGED**: `LastRequested` and `NoRebalanceRange` setters to `internal`
+- **PURPOSE**: Enforce single-writer pattern at compile time
 
 **Storage Classes**:
 - **CopyOnReadStorage.cs**: Refactored to use dual-buffer (staging buffer) pattern for safe rematerialization
@@ -134,47 +158,34 @@ Comprehensive unit test suite for the WindowCache library verifying all 47 syste
 
 ## Invariants Coverage
 
-### Classification System
-Invariants are classified into three categories based on their nature and enforcement mechanism:
+### Single-Writer Architecture
 
-- 🟢 **Behavioral** (test-covered): Externally observable via public API, verified by automated tests
-- 🔵 **Architectural** (structure-enforced): Internal constraints enforced by code organization, not directly testable
-- 🟡 **Conceptual** (design-level): Design intent and guarantees, enforced by documentation
-
-**By design, this document contains MORE invariants (47) than the test suite covers (28 tests).**
+**Key Architectural Change**:
+- **User Path**: Read-only with respect to cache state (never mutates)
+- **Rebalance Execution**: Sole writer of all cache state
+- **Intent Structure**: Contains both requested range and delivered data (`RangeData`)
+- **Concurrency**: Single-writer eliminates race conditions
 
 ### Test Coverage Breakdown
 
-**Directly Testable - Behavioral Invariants (19 covered by 27 tests)**:
-- User Path behavior (A.0a, A.1, A.2, A.10, A.8, A.9a)
-- Cache consistency (B.11, B.15)
-- Intent lifecycle (C.17, C.18, C.23, C.24)
-- Decision path blocking (D.27 - policy-based skip, D.28 - optimization-based skip)
-- Geometry computation (E.30)
-- Execution cancellation & normalization (F.35, F.35a, F.36a, F.40-42)
-- Execution context (G.43-46)
+**User Path Tests (8 tests - verify read-only behavior)**:
+- User Path serves requests without mutating cache
+- User Path cancels rebalance to prevent interference (not for mutation safety)
+- User Path returns correct data immediately
+- User Path publishes intent with delivered data
+- Cache mutations occur exclusively via Rebalance Execution
 
-**Meta-Invariants (1 test)**:
-- Execution lifecycle integrity: `started == (completed + cancelled)`
+**Rebalance Execution Tests (verify single-writer)**:
+- Rebalance Execution is sole writer of cache state
+- Rebalance Execution uses delivered data from intent
+- Rebalance Execution handles cancellation properly
+- Cache state converges asynchronously (eventual consistency)
 
-**Architectural Invariants (20 total - enforced by code structure)**:
-- Examples: A.-1, A.0 (user path priority), A.3-5, A.7, A.9, A.9b (mutation rules)
-- D.25, D.26, D.29 (decision path purity)
-- E.31, E.34 (geometry independence)
-- F.36, F.37-39 (execution mutation rules)
-- G.44, G.45 (execution context)
-- These are enforced by component boundaries, encapsulation, and ownership model
-
-**Conceptual Invariants (8 total - documented design decisions)**:
-- Examples: A.6 (user path may sync fetch), B.14 (temporary inefficiency acceptable)
-- C.22 (convergence toward latest pattern - best-effort)
-- C.22a (known race condition limitation - documented trade-off)
-- C.24 (opportunistic execution with sub-invariants C.24a-d)
-- E.32, E.33 (design principles)
-- F.42 (internal state update)
-
-**Indirectly Observable** (with TODOs):
-- Execution details (F.38, F.39) - would need IDataSource instrumentation
+**Architectural Invariants (enforced by code structure)**:
+- A.-1: User Path and Rebalance Execution never write concurrently (User Path doesn't write)
+- A.8: User Path MUST NOT mutate cache (enforced by removing Rematerialize calls)
+- F.36: Rebalance Execution is ONLY writer (enforced by internal setters)
+- C.24e/f: Intent contains delivered data (enforced by PublishIntent signature)
 
 ## Usage
 
@@ -221,15 +232,19 @@ This pattern ensures:
 See `docs/STORAGE_STRATEGIES.md` for detailed documentation.
 
 ## Notes
+- **Architecture**: Single-writer model (User Path read-only, Rebalance Execution sole writer)
+- **Intent Structure**: Intent carries delivered `RangeData` (requested range + actual data)
+- **Eventual Consistency**: Cache state converges asynchronously via background rebalance
 - Instrumentation is DEBUG-only (`#if DEBUG`) - zero overhead in Release builds
 - Tests use timing-based async verification with `WaitForRebalanceAsync()` helper
 - Counter reset in constructor/dispose ensures test isolation
 - Uses `Intervals.NET.Domain.Default.Numeric.IntegerFixedStepDomain` for proper range inclusivity handling
-- Some architectural and conceptual invariants are not meant to be unit-tested (enforced by code structure and documentation)
-- The gap between 46 invariants and 28 tests is intentional and by design
+- `CacheExpanded` and `CacheReplaced` counters are deprecated (User Path no longer mutates)
 
 ## Related Documentation
-- `docs/invariants.md` - Complete invariant classification and descriptions
-- `docs/TEST_ENHANCEMENT_SUMMARY.md` - Details on counter-based test enhancements
-- `docs/STORAGE_STRATEGIES.md` - CopyOnRead vs Snapshot storage comparison
-- `docs/concurrency-model.md` - Single-consumer model and coordination
+- `docs/invariants.md` - Complete invariant documentation (updated for single-writer architecture)
+- `docs/cache-state-machine.md` - State transitions (updated to show only Rebalance Execution mutates)
+- `docs/actors-and-responsibilities.md` - Component responsibilities (updated for read-only User Path)
+- `docs/concurrency-model.md` - Single-writer architecture and eventual consistency model
+- `MIGRATION_SUMMARY.md` - Implementation details of single-writer migration
+- `DOCUMENTATION_UPDATES.md` - Documentation changes made for new architecture
