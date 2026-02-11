@@ -511,6 +511,15 @@ public void CancelPendingRebalance()
 }
 ```
 
+**`WaitForIdleAsync(TimeSpan? timeout = null)`** (Infrastructure/Testing):
+```csharp
+public Task WaitForIdleAsync(TimeSpan? timeout = null)
+{
+    // Delegate to RebalanceScheduler's Task tracking mechanism
+    return _scheduler.WaitForIdleAsync(timeout);
+}
+```
+
 **Characteristics**:
 - ✅ Owns intent identity (CancellationTokenSource lifecycle)
 - ✅ Single-flight enforcement (only one active intent)
@@ -534,6 +543,7 @@ public void CancelPendingRebalance()
 - Intent lifecycle management
 - Cancellation coordination
 - Identity versioning
+- Idle synchronization proxy (delegates to RebalanceScheduler for testing infrastructure)
 
 **Invariants Enforced**:
 - C.17: At most one active intent
@@ -558,10 +568,11 @@ internal sealed class RebalanceScheduler<TRange, TData, TDomain>
 - `RebalanceDecisionEngine<TRange, TDomain> _decisionEngine`
 - `RebalanceExecutor<TRange, TData, TDomain> _executor`
 - `TimeSpan _debounceDelay`
+- `Task _idleTask` (DEBUG-only) - Tracks latest background Task for deterministic synchronization
 
 **Key Methods**:
 
-**`ScheduleRebalance(Range<TRange> requestedRange, CancellationToken intentToken)`**:
+**`ScheduleRebalance(RangeData<TRange, TData, TDomain> deliveredData, CancellationToken intentToken)`**:
 ```csharp
 public void ScheduleRebalance(Range<TRange> requestedRange, CancellationToken intentToken)
 {
@@ -609,6 +620,20 @@ private async Task ExecutePipelineAsync(...)
 }
 ```
 
+**`WaitForIdleAsync(TimeSpan? timeout = null)`** (Infrastructure/Testing):
+```csharp
+public async Task WaitForIdleAsync(TimeSpan? timeout = null)
+{
+    // DEBUG builds: Observe-and-stabilize pattern
+    // 1. Volatile.Read(_idleTask) → observe current Task
+    // 2. await observedTask → wait for completion
+    // 3. Re-check if _idleTask changed → detect new rebalance
+    // 4. Loop until Task reference stabilizes
+    
+    // RELEASE builds: returns Task.CompletedTask immediately (zero overhead)
+}
+```
+
 **Characteristics**:
 - ✅ Executes in **Background / ThreadPool**
 - ✅ Handles debounce delay
@@ -621,18 +646,17 @@ private async Task ExecutePipelineAsync(...)
 
 **Execution Context**: Background / ThreadPool
 
-**State**: **Stateless** (only readonly fields)
+**State**: Stateless (only readonly fields, plus DEBUG-only `_idleTask` field for deterministic testing)
 
 **Important Design Note**: RebalanceScheduler is intentionally stateless and does not own intent identity.
 All intent lifecycle, superseding, and cancellation semantics are delegated to the Intent Controller (IntentController).
 The scheduler receives a CancellationToken for each execution and simply checks its validity.
 
-**State**: Stateless (only readonly fields)
-
 **Responsibilities**:
-- Timing and debounce
-- Pipeline orchestration
-- Validity checking
+- Timing and debounce delay
+- Pipeline orchestration (Decision → Execution)
+- Validity checking before execution starts
+- Task lifecycle tracking for deterministic synchronization (DEBUG-only, infrastructure/testing)
 
 **Invariants Enforced**:
 - C.20: Obsolete intents don't start execution
@@ -1016,6 +1040,7 @@ public sealed class WindowCache<TRange, TData, TDomain> : IWindowCache<TRange, T
 
 **Fields**:
 - `UserRequestHandler<TRange, TData, TDomain> _userRequestHandler` (readonly, private)
+- `IntentController<TRange, TData, TDomain> _intentController` (readonly, private)
 
 **Constructor**: Creates and wires all internal components:
 ```csharp
@@ -1034,21 +1059,28 @@ public WindowCache(
     var decisionEngine = new RebalanceDecisionEngine<TRange, TDomain>(rebalancePolicy, rangePlanner);
     var executor = new RebalanceExecutor<TRange, TData, TDomain>(state, cacheFetcher, rebalancePolicy);
     
-    var intentManager = new IntentController<TRange, TData, TDomain>(
+    _intentController = new IntentController<TRange, TData, TDomain>(
         state, decisionEngine, executor, options.DebounceDelay);
     
     _userRequestHandler = new UserRequestHandler<TRange, TData, TDomain>(
-        state, cacheFetcher, intentManager);
+        state, cacheFetcher, _intentController);
 }
 ```
 
 **Public API**:
 ```csharp
+// Primary domain API
 public ValueTask<ReadOnlyMemory<TData>> GetDataAsync(
     Range<TRange> requestedRange,
     CancellationToken cancellationToken)
 {
     return _userRequestHandler.HandleRequestAsync(requestedRange, cancellationToken);
+}
+
+// Infrastructure/testing API (DEBUG-only Task tracking, RELEASE no-op)
+public Task WaitForIdleAsync(TimeSpan? timeout = null)
+{
+    return _intentController.WaitForIdleAsync(timeout);
 }
 ```
 
@@ -1066,7 +1098,8 @@ public ValueTask<ReadOnlyMemory<TData>> GetDataAsync(
 **Execution Context**: Neutral (just delegates)
 
 **Responsibilities**:
-- Expose public API
+- Expose public API (GetDataAsync for domain operations)
+- Expose testing infrastructure (WaitForIdleAsync for deterministic synchronization)
 - Wire internal components together
 - Own configuration and lifecycle
 

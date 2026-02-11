@@ -174,6 +174,11 @@ For detailed architectural documentation, see:
 - **[Storage Strategies](docs/storage-strategies.md)** - Detailed comparison of Snapshot vs. CopyOnRead modes and multi-level cache patterns
 - **[Cache Hit/Miss Tracking Implementation](docs/cache-hit-miss-tracking-implementation.md)** - Implementation details for cache hit/miss tracking
 
+### Testing Infrastructure
+
+- **[Test Suite README](tests/SlidingWindowCache.Invariants.Tests/README.md)** - Comprehensive invariant test suite with deterministic synchronization
+- **Deterministic Testing**: `WaitForIdleAsync()` API provides race-free synchronization with background rebalance operations (DEBUG-only, zero RELEASE overhead)
+
 ### Key Architectural Principles
 
 1. **Cache Contiguity**: Cache data must always remain contiguous (no gaps). Non-intersecting requests fully replace the cache.

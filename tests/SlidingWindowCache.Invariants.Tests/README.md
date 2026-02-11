@@ -39,10 +39,34 @@ Comprehensive unit test suite for the WindowCache library verifying system invar
 
 **Note**: `CacheExpanded` and `CacheReplaced` counters remain in code for compatibility but are never incremented under the new single-writer architecture.
 
-### 2. Test Infrastructure
+### 2. Deterministic Synchronization Infrastructure
 - **Location**: `tests/SlidingWindowCache.Invariants.Tests/TestInfrastructure/`
 - **Files Created**:
-  - `TestHelpers.cs` - Factory methods for creating domains, ranges, cache options, and data verification utilities
+  - `TestHelpers.cs` - Factory methods, data verification, and deterministic synchronization utilities
+
+- **Synchronization Strategy**: Deterministic Task Lifecycle Tracking
+  - **Method**: `WaitForRebalanceToSettleAsync(cache, timeout)` - Delegates to `cache.WaitForIdleAsync()`
+  - **Mechanism**: Observe-and-stabilize pattern based on Task reference tracking (not counter polling)
+  - **Benefits**:
+    - ✅ Race-free: No timing dependencies or polling intervals
+    - ✅ Deterministic: Guaranteed idle state when method returns
+    - ✅ Fast: Completes immediately when background work finishes
+    - ✅ Reliable: Works under concurrent intent cancellation and rescheduling
+
+- **Implementation Details**:
+  - **RebalanceScheduler** tracks latest background Task in DEBUG builds (`_idleTask` field)
+  - **WaitForIdleAsync()** implements observe-and-stabilize loop:
+    1. Read current `_idleTask` via `Volatile.Read` (ensures visibility)
+    2. Await the observed Task
+    3. Re-check if `_idleTask` changed (new rebalance scheduled)
+    4. Loop until Task reference stabilizes and completes
+  - **RELEASE builds**: `WaitForIdleAsync()` returns `Task.CompletedTask` immediately (zero overhead)
+
+- **Old Approach (Removed)**:
+  - Counter-based polling with stability windows
+  - Timing-dependent with configurable intervals
+  - Complex lifecycle tracking logic
+  - Replaced by deterministic Task tracking
 
 - **Domain Strategy**: Uses `Intervals.NET.Domain.Default.Numeric.IntegerFixedStepDomain` for proper range handling with inclusivity support
 
@@ -151,9 +175,9 @@ Comprehensive unit test suite for the WindowCache library verifying system invar
 - **SnapshotReadStorage.cs**: No changes needed - already uses safe rematerialization pattern
 
 ### 6. Test Execution
-- **Build Configuration**: DEBUG mode (required for instrumentation)
+- **Build Configuration**: DEBUG mode (required for instrumentation and Task tracking)
 - **Reset Pattern**: Each test resets counters in constructor/dispose
-- **Async Handling**: Uses `Task.Delay` for background rebalance observation (timing-based)
+- **Synchronization**: Uses deterministic `cache.WaitForIdleAsync()` for race-free background work completion
 - **Data Verification**: Custom helper verifies returned data matches expected range values
 
 ## Invariants Coverage

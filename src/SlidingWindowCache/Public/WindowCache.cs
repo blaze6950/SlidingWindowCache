@@ -84,6 +84,7 @@ public sealed class WindowCache<TRange, TData, TDomain>
 {
     // Internal actors
     private readonly UserRequestHandler<TRange, TData, TDomain> _userRequestHandler;
+    private readonly IntentController<TRange, TData, TDomain> _intentController;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="WindowCache{TRange,TData,TDomain}"/> class.
@@ -118,7 +119,7 @@ public sealed class WindowCache<TRange, TData, TDomain>
         var executor = new RebalanceExecutor<TRange, TData, TDomain>(state, cacheFetcher, rebalancePolicy);
 
         // IntentController composes with Execution Scheduler to form the Rebalance Intent Manager actor
-        var intentManager = new IntentController<TRange, TData, TDomain>(
+        _intentController = new IntentController<TRange, TData, TDomain>(
             state,
             decisionEngine,
             executor,
@@ -128,7 +129,7 @@ public sealed class WindowCache<TRange, TData, TDomain>
         _userRequestHandler = new UserRequestHandler<TRange, TData, TDomain>(
             state,
             cacheFetcher,
-            intentManager);
+            _intentController);
 
         return;
 
@@ -157,4 +158,50 @@ public sealed class WindowCache<TRange, TData, TDomain>
         // Pure facade: delegate to UserRequestHandler actor
         return _userRequestHandler.HandleRequestAsync(requestedRange, cancellationToken);
     }
+
+    /// <summary>
+    /// Waits for any pending background rebalance operations to complete.
+    /// This is an infrastructure/testing API, not part of the domain semantics.
+    /// </summary>
+    /// <param name="timeout">
+    /// Maximum time to wait for idle state. Defaults to 30 seconds.
+    /// Throws <see cref="TimeoutException"/> if background tasks do not stabilize within this period.
+    /// </param>
+    /// <returns>
+    /// A Task that completes when all scheduled background rebalance operations have finished.
+    /// </returns>
+    /// <remarks>
+    /// <para><strong>Infrastructure/Testing API:</strong></para>
+    /// <para>
+    /// This method provides deterministic synchronization with background rebalance execution
+    /// for testing and infrastructure scenarios. It is NOT part of the cache's domain semantics
+    /// or normal usage patterns.
+    /// </para>
+    /// <para><strong>Use Cases:</strong></para>
+    /// <list type="bullet">
+    /// <item><description>Test stabilization: Ensure cache has converged before assertions</description></item>
+    /// <item><description>Integration testing: Synchronize with background work completion</description></item>
+    /// <item><description>Diagnostic scenarios: Verify rebalance execution has finished</description></item>
+    /// </list>
+    /// <para><strong>DEBUG vs RELEASE Behavior:</strong></para>
+    /// <list type="bullet">
+    /// <item><description>DEBUG builds: Tracks Task lifecycle, implements observe-and-stabilize pattern</description></item>
+    /// <item><description>RELEASE builds: Returns completed Task immediately (zero overhead)</description></item>
+    /// </list>
+    /// <para><strong>Actor Responsibility Boundaries:</strong></para>
+    /// <para>
+    /// This method does NOT alter actor responsibilities. It is a pure delegation facade:
+    /// </para>
+    /// <list type="bullet">
+    /// <item><description>UserRequestHandler remains the ONLY publisher of rebalance intents</description></item>
+    /// <item><description>IntentController remains the lifecycle authority for intent cancellation</description></item>
+    /// <item><description>RebalanceScheduler remains the authority for background Task execution</description></item>
+    /// <item><description>WindowCache remains a composition root with no business logic</description></item>
+    /// </list>
+    /// <para>
+    /// This method exists solely to expose the idle synchronization mechanism through the public API
+    /// for testing purposes, maintaining the existing architectural separation.
+    /// </para>
+    /// </remarks>
+    public Task WaitForIdleAsync(TimeSpan? timeout = null) => _intentController.WaitForIdleAsync(timeout);
 }

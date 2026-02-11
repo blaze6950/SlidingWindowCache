@@ -54,6 +54,68 @@ Attempting to test architectural or conceptual invariants would require:
 
 ---
 
+## Testing Infrastructure: Deterministic Synchronization
+
+### Background
+
+Tests verify behavioral invariants through the public API using DEBUG-only instrumentation counters
+to observe internal state changes. However, tests also need to **synchronize** with background
+rebalance operations to ensure cache has converged before making assertions.
+
+### Synchronization Mechanism: `WaitForIdleAsync()`
+
+The cache exposes a public `WaitForIdleAsync()` method for deterministic synchronization with
+background rebalance execution:
+
+- **Purpose**: Infrastructure/testing API (not part of domain semantics)
+- **Mechanism**: Task lifecycle tracking using observe-and-stabilize pattern
+- **Guarantee**: Returns only when no rebalance execution is running
+- **Safety**: Works correctly under concurrent intent cancellation and rescheduling
+
+### Implementation Strategy
+
+**DEBUG builds:**
+- `RebalanceScheduler` tracks latest background Task in `_idleTask` field
+- `WaitForIdleAsync()` implements observe-and-stabilize loop:
+  1. Read current `_idleTask` via `Volatile.Read` (ensures visibility)
+  2. Await the observed Task
+  3. Re-check if `_idleTask` changed (new rebalance scheduled)
+  4. Loop until Task reference stabilizes and completes
+
+**RELEASE builds:**
+- `WaitForIdleAsync()` returns `Task.CompletedTask` immediately
+- Zero runtime overhead (no Task tracking field exists)
+
+### Architectural Boundaries
+
+This synchronization mechanism **does not alter actor responsibilities**:
+
+- ✅ UserRequestHandler remains the ONLY publisher of rebalance intents
+- ✅ IntentController remains the lifecycle authority for intent cancellation
+- ✅ RebalanceScheduler remains the authority for background Task execution
+- ✅ WindowCache remains a composition root with no business logic
+
+The method exists solely to expose idle synchronization through the public API for testing,
+maintaining architectural separation.
+
+### Relation to Instrumentation Counters
+
+Instrumentation counters track **events** (intent published, execution started, etc.) but are
+not used for synchronization. The observe-and-stabilize pattern based on Task lifecycle provides
+deterministic, race-free synchronization without polling or timing dependencies.
+
+**Old approach (removed):**
+- Counter-based polling with stability windows
+- Timing-dependent with configurable intervals
+- Complex lifecycle calculation
+
+**Current approach:**
+- Direct Task lifecycle tracking
+- Deterministic (no timing assumptions)
+- Simple and race-free
+
+---
+
 ## A. User Path & Fast User Access Invariants
 
 ### A.1 Concurrency & Priority

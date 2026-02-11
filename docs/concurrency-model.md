@@ -147,6 +147,64 @@ result in inefficient or unstable behavior.
 
 ---
 
+## Deterministic Background Job Synchronization
+
+### Testing Infrastructure API
+
+The cache provides a `WaitForIdleAsync()` method for deterministic synchronization with
+background rebalance operations. This is **infrastructure/testing API**, not part of normal
+usage patterns or domain semantics.
+
+### Implementation
+
+**Mechanism**: Task lifecycle tracking via observe-and-stabilize pattern
+
+**DEBUG builds:**
+- `RebalanceScheduler` maintains `_idleTask` field tracking latest background Task
+- `WaitForIdleAsync()` implements:
+  ```
+  1. Volatile.Read(_idleTask) → observe current Task
+  2. await observedTask → wait for completion
+  3. Re-check if _idleTask changed → detect new rebalance
+  4. Loop until Task reference stabilizes
+  ```
+- Guarantees: No rebalance execution running when method returns
+- Safety: Handles concurrent intent cancellation and rescheduling correctly
+
+**RELEASE builds:**
+- `WaitForIdleAsync()` returns `Task.CompletedTask` immediately
+- No `_idleTask` field exists (zero overhead)
+- Conditional compilation ensures production builds unaffected
+
+### Use Cases
+
+- **Test stabilization**: Ensure cache has converged before assertions
+- **Integration testing**: Synchronize with background work completion
+- **Diagnostic scenarios**: Verify rebalance execution finished
+
+### Architectural Preservation
+
+This synchronization mechanism does **not** alter actor responsibilities:
+
+- UserRequestHandler remains sole intent publisher
+- IntentController remains lifecycle authority
+- RebalanceScheduler remains execution authority
+- WindowCache remains pure facade
+
+Method exists only to expose idle synchronization through public API for testing purposes.
+
+### Relation to Concurrency Model
+
+The observe-and-stabilize pattern:
+- Does not introduce locking or mutual exclusion
+- Leverages existing single-writer architecture
+- Provides visibility through volatile reads
+- Maintains eventual consistency model
+
+This is synchronization **with** background work, not synchronization **of** concurrent writers.
+
+---
+
 ## What Is Supported
 
 - Single logical consumer per cache instance (coherent access pattern)

@@ -43,6 +43,19 @@ The following terms are used consistently across all scenarios:
 
 ---
 
+## Testing Infrastructure Note
+
+**Deterministic Synchronization**: Tests use `cache.WaitForIdleAsync()` to synchronize with
+background rebalance completion. This is infrastructure/testing API implementing an
+observe-and-stabilize pattern based on Task lifecycle tracking.
+
+This synchronization mechanism is **not part of the domain flow** described below.
+It exists solely to enable deterministic testing without timing dependencies.
+
+See [Concurrency Model](concurrency-model.md) for implementation details.
+
+---
+
 # I. USER PATH — User-Facing Scenarios
 
 *(Synchronous — executed in the user's thread)*

@@ -93,8 +93,7 @@ public static class CacheInstrumentationCounters
     internal static void OnRebalanceExecutionCancelled() => Interlocked.Increment(ref _rebalanceExecutionCancelled);
 
     [Conditional("DEBUG")]
-    internal static void OnRebalanceSkippedNoRebalanceRange() =>
-        Interlocked.Increment(ref _rebalanceSkippedNoRebalanceRange);
+    internal static void OnRebalanceSkippedNoRebalanceRange() => Interlocked.Increment(ref _rebalanceSkippedNoRebalanceRange);
 
     [Conditional("DEBUG")]
     internal static void OnRebalanceSkippedSameRange() => Interlocked.Increment(ref _rebalanceSkippedSameRange);

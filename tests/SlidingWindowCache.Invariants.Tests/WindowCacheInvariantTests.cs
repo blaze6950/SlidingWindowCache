@@ -3,6 +3,7 @@ using Intervals.NET.Domain.Extensions.Fixed;
 using Intervals.NET.Extensions;
 using SlidingWindowCache.Infrastructure.Instrumentation;
 using SlidingWindowCache.Invariants.Tests.TestInfrastructure;
+using SlidingWindowCache.Public;
 using SlidingWindowCache.Public.Configuration;
 
 namespace SlidingWindowCache.Invariants.Tests;
@@ -13,9 +14,10 @@ namespace SlidingWindowCache.Invariants.Tests;
 /// Tests use DEBUG instrumentation counters to verify behavioral properties.
 /// Uses Intervals.NET for proper range handling and inclusivity considerations.
 /// </summary>
-public class WindowCacheInvariantTests : IDisposable
+public class WindowCacheInvariantTests : IAsyncDisposable
 {
     private readonly IntegerFixedStepDomain _domain;
+    private WindowCache<int, int, IntegerFixedStepDomain>? _currentCache;
 
     public WindowCacheInvariantTests()
     {
@@ -23,9 +25,25 @@ public class WindowCacheInvariantTests : IDisposable
         CacheInstrumentationCounters.Reset();
     }
 
-    public void Dispose()
+    /// <summary>
+    /// Ensures any background rebalance operations are completed before executing next test
+    /// </summary>
+    public async ValueTask DisposeAsync()
     {
+        // Wait for any background rebalance from current test to complete
+        await _currentCache.WaitForIdleAsync();
         CacheInstrumentationCounters.Reset();
+    }
+
+    /// <summary>
+    /// Tracks a cache instance for automatic cleanup in Dispose.
+    /// </summary>
+    private (WindowCache<int, int, IntegerFixedStepDomain> cache, Moq.Mock<IDataSource<int, int>> mockDataSource)
+        TrackCache(
+            (WindowCache<int, int, IntegerFixedStepDomain> cache, Moq.Mock<IDataSource<int, int>> mockDataSource) tuple)
+    {
+        _currentCache = tuple.cache;
+        return tuple;
     }
 
     #region A. User Path & Fast User Access Invariants
@@ -44,7 +62,7 @@ public class WindowCacheInvariantTests : IDisposable
         // ARRANGE
         var options = TestHelpers.CreateDefaultOptions(leftCacheSize: 2.0, rightCacheSize: 2.0,
             debounceDelay: TimeSpan.FromMilliseconds(100));
-        var (cache, _) = TestHelpers.CreateCacheWithDefaults(_domain, options);
+        var (cache, _) = TrackCache(TestHelpers.CreateCacheWithDefaults(_domain, options));
 
         // ACT: First request triggers rebalance intent
         await cache.GetDataAsync(TestHelpers.CreateRange(100, 110), CancellationToken.None);
@@ -53,6 +71,9 @@ public class WindowCacheInvariantTests : IDisposable
 
         // Second request cancels the first rebalance intent
         await cache.GetDataAsync(TestHelpers.CreateRange(120, 130), CancellationToken.None);
+
+        // Wait for background rebalance to settle before checking counters
+        await cache.WaitForIdleAsync();
 
         // ASSERT: Verify cancellation occurred
         TestHelpers.AssertRebalancePathCancelled();
@@ -70,7 +91,7 @@ public class WindowCacheInvariantTests : IDisposable
     public async Task Invariant_A2_1_UserPathAlwaysServesRequests()
     {
         // ARRANGE
-        var (cache, _) = TestHelpers.CreateCacheWithDefaults(_domain);
+        var (cache, _) = TrackCache(TestHelpers.CreateCacheWithDefaults(_domain));
 
         // ACT: Make multiple requests
         var data1 = await cache.GetDataAsync(TestHelpers.CreateRange(100, 110), CancellationToken.None);
@@ -93,7 +114,7 @@ public class WindowCacheInvariantTests : IDisposable
     {
         // ARRANGE: Cache with slow rebalance (1s debounce)
         var options = TestHelpers.CreateDefaultOptions(debounceDelay: TimeSpan.FromSeconds(1));
-        var (cache, _) = TestHelpers.CreateCacheWithDefaults(_domain, options);
+        var (cache, _) = TrackCache(TestHelpers.CreateCacheWithDefaults(_domain, options));
 
         // ACT: Request completes immediately without waiting for rebalance
         var stopwatch = System.Diagnostics.Stopwatch.StartNew();
@@ -114,7 +135,7 @@ public class WindowCacheInvariantTests : IDisposable
     public async Task Invariant_A2_10_UserAlwaysReceivesExactRequestedRange()
     {
         // ARRANGE
-        var (cache, _) = TestHelpers.CreateCacheWithDefaults(_domain);
+        var (cache, _) = TrackCache(TestHelpers.CreateCacheWithDefaults(_domain));
 
         // Act & Assert: Request various ranges and verify exact match
         var testRanges = new[]
@@ -157,7 +178,7 @@ public class WindowCacheInvariantTests : IDisposable
     {
         // ARRANGE
         var options = TestHelpers.CreateDefaultOptions(debounceDelay: TimeSpan.FromMilliseconds(50));
-        var (cache, _) = TestHelpers.CreateCacheWithDefaults(_domain, options);
+        var (cache, _) = TrackCache(TestHelpers.CreateCacheWithDefaults(_domain, options));
 
         // ACT: Execute prior request if needed to establish cache state
         if (hasPriorRequest)
@@ -179,7 +200,7 @@ public class WindowCacheInvariantTests : IDisposable
         TestHelpers.AssertIntentPublished(1);
 
         // Wait for rebalance and verify it completes (cache mutations happen here)
-        await TestHelpers.WaitForRebalanceAsync(200);
+        await cache.WaitForIdleAsync();
         TestHelpers.AssertRebalanceCompleted();
     }
 
@@ -192,7 +213,7 @@ public class WindowCacheInvariantTests : IDisposable
     public async Task Invariant_A3_9a_CacheContiguityMaintained()
     {
         // ARRANGE
-        var (cache, _) = TestHelpers.CreateCacheWithDefaults(_domain);
+        var (cache, _) = TrackCache(TestHelpers.CreateCacheWithDefaults(_domain));
 
         // ACT: Make various requests including overlapping and expanding ranges
         var data1 = await cache.GetDataAsync(TestHelpers.CreateRange(100, 110), CancellationToken.None);
@@ -219,7 +240,7 @@ public class WindowCacheInvariantTests : IDisposable
     public async Task Invariant_B11_CacheDataAndRangeAlwaysConsistent()
     {
         // ARRANGE
-        var (cache, _) = TestHelpers.CreateCacheWithDefaults(_domain);
+        var (cache, _) = TrackCache(TestHelpers.CreateCacheWithDefaults(_domain));
 
         // Act & Assert: Make multiple requests and verify consistency
         var ranges = new[]
@@ -248,7 +269,7 @@ public class WindowCacheInvariantTests : IDisposable
     {
         // ARRANGE
         var options = TestHelpers.CreateDefaultOptions(debounceDelay: TimeSpan.FromMilliseconds(100));
-        var (cache, _) = TestHelpers.CreateCacheWithDefaults(_domain, options);
+        var (cache, _) = TrackCache(TestHelpers.CreateCacheWithDefaults(_domain, options));
 
         // ACT: First request starts rebalance intent, then immediately cancel with another request
         await cache.GetDataAsync(TestHelpers.CreateRange(100, 110), CancellationToken.None);
@@ -275,12 +296,15 @@ public class WindowCacheInvariantTests : IDisposable
     {
         // ARRANGE
         var options = TestHelpers.CreateDefaultOptions(debounceDelay: TimeSpan.FromMilliseconds(200));
-        var (cache, _) = TestHelpers.CreateCacheWithDefaults(_domain, options);
+        var (cache, _) = TrackCache(TestHelpers.CreateCacheWithDefaults(_domain, options));
 
         // ACT: Make rapid requests
         await cache.GetDataAsync(TestHelpers.CreateRange(100, 110), CancellationToken.None);
         await cache.GetDataAsync(TestHelpers.CreateRange(110, 120), CancellationToken.None);
         await cache.GetDataAsync(TestHelpers.CreateRange(120, 130), CancellationToken.None);
+
+        // Wait for background rebalance to settle before checking counters
+        await cache.WaitForIdleAsync();
 
         // ASSERT: Each new request publishes intent and cancels previous (at least 2 cancelled)
         TestHelpers.AssertIntentPublished(3);
@@ -297,7 +321,7 @@ public class WindowCacheInvariantTests : IDisposable
     {
         // ARRANGE
         var options = TestHelpers.CreateDefaultOptions(debounceDelay: TimeSpan.FromMilliseconds(150));
-        var (cache, _) = TestHelpers.CreateCacheWithDefaults(_domain, options);
+        var (cache, _) = TrackCache(TestHelpers.CreateCacheWithDefaults(_domain, options));
 
         // ACT: First request publishes intent
         await cache.GetDataAsync(TestHelpers.CreateRange(100, 110), CancellationToken.None);
@@ -305,6 +329,9 @@ public class WindowCacheInvariantTests : IDisposable
 
         // Second request publishes new intent and cancels old one
         await cache.GetDataAsync(TestHelpers.CreateRange(200, 210), CancellationToken.None);
+
+        // Wait for background rebalance to settle before checking counters
+        await cache.WaitForIdleAsync();
 
         // ASSERT: New intent published, old one cancelled
         Assert.True(CacheInstrumentationCounters.RebalanceIntentPublished > publishedBefore);
@@ -323,15 +350,15 @@ public class WindowCacheInvariantTests : IDisposable
         // ARRANGE: Large threshold creates large NoRebalanceRange to block rebalance
         var options = TestHelpers.CreateDefaultOptions(leftCacheSize: 2.0, rightCacheSize: 2.0,
             leftThreshold: 0.5, rightThreshold: 0.5, debounceDelay: TimeSpan.FromMilliseconds(100));
-        var (cache, _) = TestHelpers.CreateCacheWithDefaults(_domain, options);
+        var (cache, _) = TrackCache(TestHelpers.CreateCacheWithDefaults(_domain, options));
 
         // ACT: First request establishes cache
-        await TestHelpers.ExecuteRequestAndWaitForRebalance(cache, TestHelpers.CreateRange(100, 110), 300);
+        await TestHelpers.ExecuteRequestAndWaitForRebalance(cache, TestHelpers.CreateRange(100, 110));
         CacheInstrumentationCounters.Reset();
 
         // Second request within NoRebalanceRange - intent published but execution may be skipped
         await cache.GetDataAsync(TestHelpers.CreateRange(102, 108), CancellationToken.None);
-        await TestHelpers.WaitForRebalanceAsync(300);
+        await cache.WaitForIdleAsync();
 
         // ASSERT: Intent published but execution may be skipped due to NoRebalanceRange
         TestHelpers.AssertIntentPublished();
@@ -352,7 +379,7 @@ public class WindowCacheInvariantTests : IDisposable
     {
         // ARRANGE
         var options = TestHelpers.CreateDefaultOptions(debounceDelay: TimeSpan.FromMilliseconds(50));
-        var (cache, _) = TestHelpers.CreateCacheWithDefaults(_domain, options);
+        var (cache, _) = TrackCache(TestHelpers.CreateCacheWithDefaults(_domain, options));
 
         // ACT: Rapid burst of requests
         var tasks = new List<Task>();
@@ -363,7 +390,7 @@ public class WindowCacheInvariantTests : IDisposable
         }
 
         await Task.WhenAll(tasks);
-        await TestHelpers.WaitForRebalanceAsync();
+        await cache.WaitForIdleAsync();
 
         // ASSERT: System is stable and serves new requests correctly
         var finalData = await cache.GetDataAsync(TestHelpers.CreateRange(105, 115), CancellationToken.None);
@@ -385,16 +412,16 @@ public class WindowCacheInvariantTests : IDisposable
     {
         // ARRANGE: Large thresholds to create wide NoRebalanceRange
         var options = TestHelpers.CreateDefaultOptions(leftCacheSize: 2.0, rightCacheSize: 2.0,
-            leftThreshold: 0.4, rightThreshold: 0.4, debounceDelay: TimeSpan.FromMilliseconds(100));
-        var (cache, _) = TestHelpers.CreateCacheWithDefaults(_domain, options);
+            leftThreshold: 0.4, rightThreshold: 0.4, debounceDelay: TimeSpan.FromMilliseconds(1000));
+        var (cache, _) = TrackCache(TestHelpers.CreateCacheWithDefaults(_domain, options));
 
         // ACT: First request establishes cache and NoRebalanceRange
-        await TestHelpers.ExecuteRequestAndWaitForRebalance(cache, TestHelpers.CreateRange(100, 110), 300);
+        await TestHelpers.ExecuteRequestAndWaitForRebalance(cache, TestHelpers.CreateRange(100, 110));
         CacheInstrumentationCounters.Reset();
 
         // Second request within NoRebalanceRange
         await cache.GetDataAsync(TestHelpers.CreateRange(103, 107), CancellationToken.None);
-        await TestHelpers.WaitForRebalanceAsync(300);
+        await cache.WaitForIdleAsync();
 
         // ASSERT: Rebalance skipped due to NoRebalanceRange policy (execution should never start)
         TestHelpers.AssertRebalanceSkippedDueToPolicy();
@@ -412,16 +439,16 @@ public class WindowCacheInvariantTests : IDisposable
         // ARRANGE
         var options = TestHelpers.CreateDefaultOptions(leftCacheSize: 1.0, rightCacheSize: 1.0,
             leftThreshold: 0.3, rightThreshold: 0.3, debounceDelay: TimeSpan.FromMilliseconds(100));
-        var (cache, _) = TestHelpers.CreateCacheWithDefaults(_domain, options);
+        var (cache, _) = TrackCache(TestHelpers.CreateCacheWithDefaults(_domain, options));
 
         // ACT: First request establishes cache at desired range
         var firstRange = TestHelpers.CreateRange(100, 110);
-        await TestHelpers.ExecuteRequestAndWaitForRebalance(cache, firstRange, 300);
+        await TestHelpers.ExecuteRequestAndWaitForRebalance(cache, firstRange);
         CacheInstrumentationCounters.Reset();
 
         // Second request: same range should trigger intent but skip execution due to same-range optimization
         await cache.GetDataAsync(firstRange, CancellationToken.None);
-        await TestHelpers.WaitForRebalanceAsync(300);
+        await cache.WaitForIdleAsync();
 
         // ASSERT: Intent published but execution optimized away
         TestHelpers.AssertIntentPublished();
@@ -455,7 +482,7 @@ public class WindowCacheInvariantTests : IDisposable
         // ARRANGE: Expansion coefficients: leftSize=1.0 (expand left by 100%), rightSize=1.0 (expand right by 100%)
         var options = TestHelpers.CreateDefaultOptions(leftCacheSize: 1.0, rightCacheSize: 1.0,
             debounceDelay: TimeSpan.FromMilliseconds(50));
-        var (cache, _) = TestHelpers.CreateCacheWithDefaults(_domain, options);
+        var (cache, _) = TrackCache(TestHelpers.CreateCacheWithDefaults(_domain, options));
 
         // ACT: Request a range [100, 110] (Size: 11)
         var requestRange = TestHelpers.CreateRange(100, 110);
@@ -475,7 +502,7 @@ public class WindowCacheInvariantTests : IDisposable
 
         // Verify this was a full cache hit, proving the desired range was calculated correctly
         TestHelpers.AssertFullCacheHit();
-        
+
         // Verify the expected desired range calculation matches actual behavior
         // The request [95, 115] should be fully within expectedDesiredRange
         Assert.True(expectedDesiredRange.Contains(TestHelpers.CreateRange(95, 115)),
@@ -501,7 +528,7 @@ public class WindowCacheInvariantTests : IDisposable
         // ARRANGE
         var options = TestHelpers.CreateDefaultOptions(leftCacheSize: 1.0, rightCacheSize: 1.0,
             debounceDelay: TimeSpan.FromMilliseconds(50));
-        var (cache, _) = TestHelpers.CreateCacheWithDefaults(_domain, options);
+        var (cache, _) = TrackCache(TestHelpers.CreateCacheWithDefaults(_domain, options));
 
         // SCENARIO 1: Cold Start - Full Cache Miss
         CacheInstrumentationCounters.Reset();
@@ -514,7 +541,7 @@ public class WindowCacheInvariantTests : IDisposable
         Assert.Equal(0, CacheInstrumentationCounters.DataSourceFetchMissingSegments);
 
         // Wait for rebalance to populate cache with expanded range
-        await TestHelpers.WaitForRebalanceAsync(200);
+        await cache.WaitForIdleAsync();
 
         // SCENARIO 2: Full Cache Hit - Request within cached range
         CacheInstrumentationCounters.Reset();
@@ -526,11 +553,14 @@ public class WindowCacheInvariantTests : IDisposable
         Assert.Equal(0, CacheInstrumentationCounters.DataSourceFetchFullRange);
         Assert.Equal(0, CacheInstrumentationCounters.DataSourceFetchMissingSegments);
 
+        // Wait for rebalance
+        await cache.WaitForIdleAsync();
+
         // SCENARIO 3: Partial Cache Hit - Request partially overlaps cache
         CacheInstrumentationCounters.Reset();
         // Shift the expected desired range to create a new request that partially overlaps the existing cache
         expectedDesired = TestHelpers.CalculateExpectedDesiredRange(expectedDesired, options, _domain);
-        expectedDesired.Shift(_domain, expectedDesired.Span(_domain).Value / 2);
+        expectedDesired = expectedDesired.Shift(_domain, expectedDesired.Span(_domain).Value / 2);
         await cache.GetDataAsync(expectedDesired, CancellationToken.None);
         TestHelpers.AssertPartialCacheHit();
         TestHelpers.AssertDataSourceFetchedMissingSegments();
@@ -539,14 +569,14 @@ public class WindowCacheInvariantTests : IDisposable
         Assert.Equal(0, CacheInstrumentationCounters.DataSourceFetchFullRange);
 
         // Wait for rebalance
-        await TestHelpers.WaitForRebalanceAsync(200);
+        await cache.WaitForIdleAsync();
 
         // SCENARIO 4: Full Cache Miss - Non-intersecting jump
         CacheInstrumentationCounters.Reset();
         // Create a request that is completely outside the current cache range to trigger a full cache miss
         expectedDesired = TestHelpers.CalculateExpectedDesiredRange(expectedDesired, options, _domain);
-        expectedDesired.Shift(_domain, expectedDesired.Span(_domain).Value * 2);
-        await cache.GetDataAsync(TestHelpers.CreateRange(300, 310), CancellationToken.None);
+        expectedDesired = expectedDesired.Shift(_domain, expectedDesired.Span(_domain).Value * 2);
+        await cache.GetDataAsync(expectedDesired, CancellationToken.None);
         TestHelpers.AssertFullCacheMiss();
         TestHelpers.AssertDataSourceFetchedFullRange();
         Assert.Equal(0, CacheInstrumentationCounters.UserRequestFullCacheHit);
@@ -573,14 +603,14 @@ public class WindowCacheInvariantTests : IDisposable
         // ARRANGE: Slow data source to allow cancellation during execution
         var options = TestHelpers.CreateDefaultOptions(leftCacheSize: 2.0, rightCacheSize: 2.0,
             debounceDelay: TimeSpan.FromMilliseconds(50));
-        var (cache, _) = TestHelpers.CreateCacheWithDefaults(_domain, options,
-            fetchDelay: TimeSpan.FromMilliseconds(200));
+        var (cache, _) = TrackCache(TestHelpers.CreateCacheWithDefaults(_domain, options,
+            fetchDelay: TimeSpan.FromMilliseconds(200)));
 
         // ACT: First request triggers rebalance, then immediately cancel with multiple new requests
         await cache.GetDataAsync(TestHelpers.CreateRange(100, 110), CancellationToken.None);
         await cache.GetDataAsync(TestHelpers.CreateRange(105, 115), CancellationToken.None);
         await cache.GetDataAsync(TestHelpers.CreateRange(110, 120), CancellationToken.None);
-        await TestHelpers.WaitForRebalanceAsync();
+        await cache.WaitForIdleAsync();
 
         // ASSERT: Verify cancellation occurred (F.35, G.46)
         TestHelpers.AssertRebalancePathCancelled(2); // 2 cancels for the 2 new requests after the first
@@ -601,7 +631,7 @@ public class WindowCacheInvariantTests : IDisposable
         // ARRANGE
         var options = TestHelpers.CreateDefaultOptions(leftCacheSize: 1.0, rightCacheSize: 1.0,
             debounceDelay: TimeSpan.FromMilliseconds(50));
-        var (cache, _) = TestHelpers.CreateCacheWithDefaults(_domain, options);
+        var (cache, _) = TrackCache(TestHelpers.CreateCacheWithDefaults(_domain, options));
 
         // ACT: Make request and wait for rebalance
         await TestHelpers.ExecuteRequestAndWaitForRebalance(cache, TestHelpers.CreateRange(100, 110));
@@ -627,7 +657,7 @@ public class WindowCacheInvariantTests : IDisposable
         // ARRANGE
         var options = TestHelpers.CreateDefaultOptions(leftCacheSize: 1.0, rightCacheSize: 1.0,
             debounceDelay: TimeSpan.FromMilliseconds(50));
-        var (cache, _) = TestHelpers.CreateCacheWithDefaults(_domain, options);
+        var (cache, _) = TrackCache(TestHelpers.CreateCacheWithDefaults(_domain, options));
 
         // ACT: Request and wait for rebalance to complete
         await TestHelpers.ExecuteRequestAndWaitForRebalance(cache, TestHelpers.CreateRange(100, 110));
@@ -661,7 +691,7 @@ public class WindowCacheInvariantTests : IDisposable
     {
         // ARRANGE
         var options = TestHelpers.CreateDefaultOptions(debounceDelay: TimeSpan.FromMilliseconds(100));
-        var (cache, _) = TestHelpers.CreateCacheWithDefaults(_domain, options);
+        var (cache, _) = TrackCache(TestHelpers.CreateCacheWithDefaults(_domain, options));
 
         // ACT: User request completes synchronously (in user context)
         var stopwatch = System.Diagnostics.Stopwatch.StartNew();
@@ -674,7 +704,7 @@ public class WindowCacheInvariantTests : IDisposable
         TestHelpers.AssertUserDataCorrect(data, TestHelpers.CreateRange(100, 110));
 
         // Wait for background rebalance and verify it executed
-        await TestHelpers.WaitForRebalanceAsync(300);
+        await cache.WaitForIdleAsync();
         TestHelpers.AssertIntentPublished();
     }
 
@@ -689,8 +719,8 @@ public class WindowCacheInvariantTests : IDisposable
     public async Task Invariant_G46_UserCancellationDuringFetch()
     {
         // ARRANGE: Slow mock data source to allow cancellation during fetch
-        var (cache, _) = TestHelpers.CreateCacheWithDefaults(_domain, TestHelpers.CreateDefaultOptions(),
-            fetchDelay: TimeSpan.FromMilliseconds(300));
+        var (cache, _) = TrackCache(TestHelpers.CreateCacheWithDefaults(_domain, TestHelpers.CreateDefaultOptions(),
+            fetchDelay: TimeSpan.FromMilliseconds(300)));
 
         // Act & Assert: Cancel token during fetch operation
         var cts = new CancellationTokenSource();
@@ -723,7 +753,7 @@ public class WindowCacheInvariantTests : IDisposable
         // ARRANGE
         var options = TestHelpers.CreateDefaultOptions(leftCacheSize: 1.0, rightCacheSize: 1.0,
             leftThreshold: 0.2, rightThreshold: 0.2, debounceDelay: TimeSpan.FromMilliseconds(50));
-        var (cache, _) = TestHelpers.CreateCacheWithDefaults(_domain, options);
+        var (cache, _) = TrackCache(TestHelpers.CreateCacheWithDefaults(_domain, options));
 
         // Act & Assert: Sequential user requests
         // Request 1: Cold start
@@ -733,7 +763,7 @@ public class WindowCacheInvariantTests : IDisposable
         // Request 2: Overlapping expansion
         var data2 = await cache.GetDataAsync(TestHelpers.CreateRange(105, 120), CancellationToken.None);
         TestHelpers.AssertUserDataCorrect(data2, TestHelpers.CreateRange(105, 120));
-        await TestHelpers.WaitForRebalanceAsync(200);
+        await cache.WaitForIdleAsync();
 
         // Request 3: Within cached/rebalanced range
         var data3 = await cache.GetDataAsync(TestHelpers.CreateRange(110, 115), CancellationToken.None);
@@ -742,11 +772,14 @@ public class WindowCacheInvariantTests : IDisposable
         // Request 4: Non-intersecting jump
         var data4 = await cache.GetDataAsync(TestHelpers.CreateRange(200, 210), CancellationToken.None);
         TestHelpers.AssertUserDataCorrect(data4, TestHelpers.CreateRange(200, 210));
-        await TestHelpers.WaitForRebalanceAsync(200);
+        await cache.WaitForIdleAsync();
 
         // Request 5: Verify cache stability
         var data5 = await cache.GetDataAsync(TestHelpers.CreateRange(205, 215), CancellationToken.None);
         TestHelpers.AssertUserDataCorrect(data5, TestHelpers.CreateRange(205, 215));
+
+        // Wait for background rebalance to settle before checking counters
+        await cache.WaitForIdleAsync();
 
         // Verify key behavioral properties
         Assert.Equal(5, CacheInstrumentationCounters.UserRequestsServed);
@@ -766,7 +799,7 @@ public class WindowCacheInvariantTests : IDisposable
     {
         // ARRANGE
         var options = TestHelpers.CreateDefaultOptions(debounceDelay: TimeSpan.FromMilliseconds(100));
-        var (cache, _) = TestHelpers.CreateCacheWithDefaults(_domain, options);
+        var (cache, _) = TrackCache(TestHelpers.CreateCacheWithDefaults(_domain, options));
 
         // ACT: Fire 20 rapid concurrent requests
         var tasks = new List<Task<ReadOnlyMemory<int>>>();
@@ -777,6 +810,9 @@ public class WindowCacheInvariantTests : IDisposable
         }
 
         var results = await Task.WhenAll(tasks);
+
+        // Wait for background rebalance to settle before checking counters
+        await cache.WaitForIdleAsync();
 
         // ASSERT: All requests completed successfully with correct data
         Assert.Equal(20, results.Length);
@@ -803,7 +839,7 @@ public class WindowCacheInvariantTests : IDisposable
     {
         // ARRANGE
         var options = TestHelpers.CreateDefaultOptions(readMode: readMode);
-        var (cache, _) = TestHelpers.CreateCacheWithDefaults(_domain, options);
+        var (cache, _) = TrackCache(TestHelpers.CreateCacheWithDefaults(_domain, options));
 
         // Act
         var data1 = await cache.GetDataAsync(TestHelpers.CreateRange(100, 110), CancellationToken.None);

@@ -100,8 +100,6 @@ internal sealed class IntentController<TRange, TData, TDomain>
         _currentIntentCts.Cancel();
         _currentIntentCts.Dispose();
         _currentIntentCts = null;
-
-        CacheInstrumentationCounters.OnRebalanceIntentCancelled();
     }
 
     /// <summary>
@@ -149,4 +147,31 @@ internal sealed class IntentController<TRange, TData, TDomain>
         // The scheduler owns timing, debounce, and pipeline orchestration
         _scheduler.ScheduleRebalance(deliveredData, intentToken);
     }
+
+    /// <summary>
+    /// Waits for the latest scheduled rebalance background Task to complete.
+    /// Provides deterministic synchronization for testing infrastructure.
+    /// </summary>
+    /// <param name="timeout">
+    /// Maximum time to wait for idle state. Defaults to 30 seconds.
+    /// </param>
+    /// <returns>A Task that completes when the background rebalance has finished.</returns>
+    /// <remarks>
+    /// <para><strong>Idle Proxy Responsibility:</strong></para>
+    /// <para>
+    /// This method delegates to <see cref="RebalanceScheduler{TRange,TData,TDomain}"/> which owns
+    /// the background Task lifecycle. IntentController acts as a proxy, exposing the idle
+    /// synchronization mechanism without implementing Task tracking itself.
+    /// </para>
+    /// <para>
+    /// This is infrastructure/testing API, not part of domain semantics.
+    /// Intent lifecycle and cancellation logic remain unchanged.
+    /// </para>
+    /// <para><strong>DEBUG vs RELEASE Behavior:</strong></para>
+    /// <list type="bullet">
+    /// <item><description>DEBUG: Implements observe-and-stabilize pattern with Task tracking</description></item>
+    /// <item><description>RELEASE: Returns completed Task immediately (zero overhead)</description></item>
+    /// </list>
+    /// </remarks>
+    public Task WaitForIdleAsync(TimeSpan? timeout = null) => _scheduler.WaitForIdleAsync(timeout);
 }

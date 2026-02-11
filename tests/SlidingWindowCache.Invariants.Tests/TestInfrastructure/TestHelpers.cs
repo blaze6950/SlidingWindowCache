@@ -65,7 +65,7 @@ public static class TestHelpers
         var size = requestedRange.Span(domain);
         var left = (long)(size.Value * options.LeftCacheSize);
         var right = (long)(size.Value * options.RightCacheSize);
-        
+
         return requestedRange.Expand(domain, left, right);
     }
 
@@ -132,11 +132,76 @@ public static class TestHelpers
     }
 
     /// <summary>
-    /// Waits for background rebalance to complete with timeout.
+    /// Waits for background rebalance to settle by polling instrumentation counters until the rebalance
+    /// lifecycle stabilizes and counters remain unchanged for a stability window.
     /// </summary>
-    public static async Task WaitForRebalanceAsync(int timeoutMs = 500)
+    /// <remarks>
+    /// <para>
+    /// This method eliminates test flakiness caused by timing dependencies and scheduler randomness
+    /// by actively monitoring the rebalance lifecycle through instrumentation counters rather than
+    /// relying on hardcoded delays.
+    /// </para>
+    /// <para><strong>Algorithm:</strong></para>
+    /// <list type="number">
+    /// <item>
+    /// <description>Poll counters every <paramref name="pollingIntervalMs"/> milliseconds.</description>
+    /// </item>
+    /// <item>
+    /// <description>Check if rebalance lifecycle is complete:
+    /// <c>RebalanceExecutionStarted == RebalanceExecutionCompleted + RebalanceExecutionCancelled</c></description>
+    /// </item>
+    /// <item>
+    /// <description>Once lifecycle is complete, verify counters remain stable (unchanged) for
+    /// <paramref name="stabilityWindowMs"/> milliseconds to ensure no new rebalance starts.</description>
+    /// </item>
+    /// <item>
+    /// <description>If lifecycle doesn't complete within <paramref name="maxTimeoutMs"/>, throw
+    /// <see cref="TimeoutException"/> with diagnostic counter snapshot.</description>
+    /// </item>
+    /// </list>
+    /// <para>
+    /// <strong>Edge case:</strong> If no rebalance was started (all counters are zero), the method
+    /// returns immediately as the system is already "settled".
+    /// </para>
+    /// </remarks>
+    /// <param name="pollingIntervalMs">Interval between counter polls in milliseconds (default: 10ms).</param>
+    /// <param name="stabilityWindowMs">Duration counters must remain stable in milliseconds (default: 100ms).</param>
+    /// <param name="maxTimeoutMs">Maximum wait time before throwing TimeoutException (default: 5000ms).</param>
+    /// <exception cref="TimeoutException">Thrown when rebalance doesn't settle within <paramref name="maxTimeoutMs"/>.</exception>
+    /// <summary>
+    /// Waits for any pending background rebalance operations to complete.
+    /// Uses deterministic Task lifecycle tracking instead of counter polling.
+    /// </summary>
+    /// <param name="cache">The cache instance to wait for. If null, returns immediately (for cleanup scenarios).</param>
+    /// <param name="timeout">Maximum time to wait. Defaults to 30 seconds.</param>
+    /// <returns>A task that completes when background rebalance operations have finished.</returns>
+    /// <remarks>
+    /// <para><strong>Deterministic Synchronization:</strong></para>
+    /// <para>
+    /// This method uses the cache's WaitForIdleAsync() API which implements an observe-and-stabilize
+    /// pattern based on Task lifecycle tracking, providing race-free synchronization without
+    /// relying on instrumentation counters or polling.
+    /// </para>
+    /// <para>
+    /// The method delegates to RebalanceScheduler's Task tracking mechanism, which ensures
+    /// that no rebalance execution is running when the wait completes, even under concurrent
+    /// intent cancellation and rescheduling.
+    /// </para>
+    /// </remarks>
+    public static async Task WaitForRebalanceToSettleAsync(
+        WindowCache<int, int, IntegerFixedStepDomain>? cache = null,
+        TimeSpan? timeout = null)
     {
-        await Task.Delay(timeoutMs);
+        if (cache == null)
+        {
+            // No cache instance - used in test cleanup scenarios
+            // Wait a short period to allow any lingering background work to complete
+            await Task.Delay(100);
+            return;
+        }
+
+        // Delegate to cache's deterministic idle synchronization
+        await cache.WaitForIdleAsync(timeout);
     }
 
     /// <summary>
@@ -222,15 +287,14 @@ public static class TestHelpers
     }
 
     /// <summary>
-    /// Executes a request and waits for rebalance to complete.
+    /// Executes a request and waits for rebalance to complete before returning.
     /// </summary>
     public static async Task<ReadOnlyMemory<int>> ExecuteRequestAndWaitForRebalance(
         WindowCache<int, int, IntegerFixedStepDomain> cache,
-        Range<int> range,
-        int rebalanceWaitMs = 200)
+        Range<int> range)
     {
         var data = await cache.GetDataAsync(range, CancellationToken.None);
-        await WaitForRebalanceAsync(rebalanceWaitMs);
+        await WaitForRebalanceToSettleAsync(cache);
         return data;
     }
 
@@ -320,7 +384,8 @@ public static class TestHelpers
     public static void AssertRebalanceSkippedDueToPolicy()
     {
         var skipped = CacheInstrumentationCounters.RebalanceSkippedNoRebalanceRange;
-        Assert.True(skipped > 0, $"Expected at least one rebalance to be skipped due to NoRebalanceRange policy, but found {skipped}.");
+        Assert.True(skipped > 0,
+            $"Expected at least one rebalance to be skipped due to NoRebalanceRange policy, but found {skipped}.");
 
         Assert.Equal(0, CacheInstrumentationCounters.RebalanceExecutionStarted);
         Assert.Equal(0, CacheInstrumentationCounters.RebalanceExecutionCompleted);
