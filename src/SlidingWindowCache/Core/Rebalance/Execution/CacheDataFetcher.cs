@@ -163,6 +163,7 @@ internal sealed class CacheDataFetcher<TRange, TData, TDomain>
     )
     {
         CacheInstrumentationCounters.OnDataSourceFetchFullRange();
+
         return (await _dataSource.FetchAsync(requested, ct)).ToRangeData(requested, _domain);
     }
 }

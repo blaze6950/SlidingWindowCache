@@ -90,44 +90,44 @@ public static class TestHelpers
         {
             // For closed ranges [start, end], data should be sequential from start
             case { IsStartInclusive: true, IsEndInclusive: true }:
-            {
-                for (var i = 0; i < span.Length; i++)
                 {
-                    Assert.Equal(start + i, span[i]);
-                }
+                    for (var i = 0; i < span.Length; i++)
+                    {
+                        Assert.Equal(start + i, span[i]);
+                    }
 
-                break;
-            }
+                    break;
+                }
             case { IsStartInclusive: true, IsEndInclusive: false }:
-            {
-                // [start, end) - start inclusive, end exclusive
-                for (var i = 0; i < span.Length; i++)
                 {
-                    Assert.Equal(start + i, span[i]);
-                }
+                    // [start, end) - start inclusive, end exclusive
+                    for (var i = 0; i < span.Length; i++)
+                    {
+                        Assert.Equal(start + i, span[i]);
+                    }
 
-                break;
-            }
+                    break;
+                }
             case { IsStartInclusive: false, IsEndInclusive: true }:
-            {
-                // (start, end] - start exclusive, end inclusive
-                for (var i = 0; i < span.Length; i++)
                 {
-                    Assert.Equal(start + 1 + i, span[i]);
-                }
+                    // (start, end] - start exclusive, end inclusive
+                    for (var i = 0; i < span.Length; i++)
+                    {
+                        Assert.Equal(start + 1 + i, span[i]);
+                    }
 
-                break;
-            }
+                    break;
+                }
             default:
-            {
-                // (start, end) - both exclusive
-                for (var i = 0; i < span.Length; i++)
                 {
-                    Assert.Equal(start + 1 + i, span[i]);
-                }
+                    // (start, end) - both exclusive
+                    for (var i = 0; i < span.Length; i++)
+                    {
+                        Assert.Equal(start + 1 + i, span[i]);
+                    }
 
-                break;
-            }
+                    break;
+                }
         }
     }
 
