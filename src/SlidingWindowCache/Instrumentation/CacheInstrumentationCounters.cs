@@ -18,11 +18,17 @@ public static class CacheInstrumentationCounters
     private static int _rebalanceExecutionCancelled;
     private static int _rebalanceSkippedNoRebalanceRange;
     private static int _rebalanceSkippedSameRange;
+    private static int _userRequestFullCacheHit;
+    private static int _userRequestPartialCacheHit;
+    private static int _userRequestFullCacheMiss;
 
     // User Path counters
     public static int UserRequestsServed => _userRequestsServed;
     public static int CacheExpanded => _cacheExpanded;
     public static int CacheReplaced => _cacheReplaced;
+    public static int UserRequestFullCacheHit => _userRequestFullCacheHit;
+    public static int UserRequestPartialCacheHit => _userRequestPartialCacheHit;
+    public static int UserRequestFullCacheMiss => _userRequestFullCacheMiss;
 
     // Rebalance Intent lifecycle counters
     public static int RebalanceIntentPublished => _rebalanceIntentPublished;
@@ -78,6 +84,15 @@ public static class CacheInstrumentationCounters
     [Conditional("DEBUG")]
     internal static void OnRebalanceSkippedSameRange() => Interlocked.Increment(ref _rebalanceSkippedSameRange);
 
+    [Conditional("DEBUG")]
+    internal static void OnUserRequestFullCacheHit() => Interlocked.Increment(ref _userRequestFullCacheHit);
+
+    [Conditional("DEBUG")]
+    internal static void OnUserRequestPartialCacheHit() => Interlocked.Increment(ref _userRequestPartialCacheHit);
+
+    [Conditional("DEBUG")]
+    internal static void OnUserRequestFullCacheMiss() => Interlocked.Increment(ref _userRequestFullCacheMiss);
+
     /// <summary>
     /// Resets all counters to zero. Use this before each test to ensure clean state.
     /// </summary>
@@ -94,5 +109,8 @@ public static class CacheInstrumentationCounters
         _rebalanceExecutionCancelled = 0;
         _rebalanceSkippedNoRebalanceRange = 0;
         _rebalanceSkippedSameRange = 0;
+        _userRequestFullCacheHit = 0;
+        _userRequestPartialCacheHit = 0;
+        _userRequestFullCacheMiss = 0;
     }
 }

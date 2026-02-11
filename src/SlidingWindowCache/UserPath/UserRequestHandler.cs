@@ -113,6 +113,7 @@ internal sealed class UserRequestHandler<TRange, TData, TDomain>
             // Scenario 1: Cold Start
             // Cache has never been populated - fetch data ONLY for requested range
             assembledData = await _cacheFetcher.FetchDataAsync(requestedRange, cancellationToken);
+            Instrumentation.CacheInstrumentationCounters.OnUserRequestFullCacheMiss();
         }
         else
         {
@@ -129,6 +130,7 @@ internal sealed class UserRequestHandler<TRange, TData, TDomain>
                 // Note: We must materialize to array to create proper RangeData for intent
                 var array = cachedData.ToArray();
                 assembledData = new RangeData<TRange, TData, TDomain>(requestedRange, array, _state.Domain);
+                Instrumentation.CacheInstrumentationCounters.OnUserRequestFullCacheHit();
             }
             else
             {
@@ -143,6 +145,7 @@ internal sealed class UserRequestHandler<TRange, TData, TDomain>
 
                     // Slice to requested range only (ExtendCacheAsync returns union of cache + requested)
                     assembledData = extendedData[requestedRange];
+                    Instrumentation.CacheInstrumentationCounters.OnUserRequestPartialCacheHit();
                 }
                 else
                 {
@@ -150,6 +153,7 @@ internal sealed class UserRequestHandler<TRange, TData, TDomain>
                     // RequestedRange does NOT intersect CurrentCacheRange
                     // Fetch ONLY the requested range from IDataSource
                     assembledData = await _cacheFetcher.FetchDataAsync(requestedRange, cancellationToken);
+                    Instrumentation.CacheInstrumentationCounters.OnUserRequestFullCacheMiss();
                 }
             }
         }

@@ -5,6 +5,7 @@ using SlidingWindowCache.Configuration;
 using SlidingWindowCache.DTO;
 using Moq;
 using SlidingWindowCache.Instrumentation;
+using SlidingWindowCache.Extensions;
 
 namespace SlidingWindowCache.Invariants.Tests.TestInfrastructure;
 
@@ -48,6 +49,27 @@ public static class TestHelpers
     );
 
     /// <summary>
+    /// Calculates the expected desired cache range using the same logic as ProportionalRangePlanner.
+    /// This helper ensures tests verify the actual planner behavior rather than hardcoding imagined values.
+    /// </summary>
+    /// <param name="requestedRange">The range requested by the user.</param>
+    /// <param name="options">The cache options containing leftCacheSize and rightCacheSize.</param>
+    /// <param name="domain">The domain for range calculations.</param>
+    /// <returns>The expected desired cache range after expansion.</returns>
+    public static Range<int> CalculateExpectedDesiredRange(
+        Range<int> requestedRange,
+        WindowCacheOptions options,
+        IntegerFixedStepDomain domain)
+    {
+        // Mimic ProportionalRangePlanner.Plan() logic
+        var size = requestedRange.Span(domain);
+        var left = (long)(size.Value * options.LeftCacheSize);
+        var right = (long)(size.Value * options.RightCacheSize);
+        
+        return requestedRange.Expand(domain, left, right);
+    }
+
+    /// <summary>
     /// Verifies that the data matches the expected range values using Intervals.NET domain calculations.
     /// Properly handles range inclusivity.
     /// </summary>
@@ -68,44 +90,44 @@ public static class TestHelpers
         {
             // For closed ranges [start, end], data should be sequential from start
             case { IsStartInclusive: true, IsEndInclusive: true }:
+            {
+                for (var i = 0; i < span.Length; i++)
                 {
-                    for (var i = 0; i < span.Length; i++)
-                    {
-                        Assert.Equal(start + i, span[i]);
-                    }
-
-                    break;
+                    Assert.Equal(start + i, span[i]);
                 }
+
+                break;
+            }
             case { IsStartInclusive: true, IsEndInclusive: false }:
+            {
+                // [start, end) - start inclusive, end exclusive
+                for (var i = 0; i < span.Length; i++)
                 {
-                    // [start, end) - start inclusive, end exclusive
-                    for (var i = 0; i < span.Length; i++)
-                    {
-                        Assert.Equal(start + i, span[i]);
-                    }
-
-                    break;
+                    Assert.Equal(start + i, span[i]);
                 }
+
+                break;
+            }
             case { IsStartInclusive: false, IsEndInclusive: true }:
+            {
+                // (start, end] - start exclusive, end inclusive
+                for (var i = 0; i < span.Length; i++)
                 {
-                    // (start, end] - start exclusive, end inclusive
-                    for (var i = 0; i < span.Length; i++)
-                    {
-                        Assert.Equal(start + 1 + i, span[i]);
-                    }
-
-                    break;
+                    Assert.Equal(start + 1 + i, span[i]);
                 }
+
+                break;
+            }
             default:
+            {
+                // (start, end) - both exclusive
+                for (var i = 0; i < span.Length; i++)
                 {
-                    // (start, end) - both exclusive
-                    for (var i = 0; i < span.Length; i++)
-                    {
-                        Assert.Equal(start + 1 + i, span[i]);
-                    }
-
-                    break;
+                    Assert.Equal(start + 1 + i, span[i]);
                 }
+
+                break;
+            }
         }
     }
 
@@ -121,7 +143,8 @@ public static class TestHelpers
     /// Creates a mock IDataSource that generates sequential integer data for any requested range.
     /// Properly handles range inclusivity using Intervals.NET domain calculations.
     /// </summary>
-    public static Mock<IDataSource<int, int>> CreateMockDataSource(IntegerFixedStepDomain domain, TimeSpan? fetchDelay = null)
+    public static Mock<IDataSource<int, int>> CreateMockDataSource(IntegerFixedStepDomain domain,
+        TimeSpan? fetchDelay = null)
     {
         var mock = new Mock<IDataSource<int, int>>();
 
@@ -183,16 +206,15 @@ public static class TestHelpers
     public static WindowCache<int, int, IntegerFixedStepDomain> CreateCache(
         Mock<IDataSource<int, int>> mockDataSource,
         IntegerFixedStepDomain domain,
-        WindowCacheOptions options)
-    {
-        return new WindowCache<int, int, IntegerFixedStepDomain>(mockDataSource.Object, domain, options);
-    }
+        WindowCacheOptions options) =>
+        new(mockDataSource.Object, domain, options);
 
     /// <summary>
     /// Creates a WindowCache with default options and returns both cache and mock data source.
     /// </summary>
-    public static (WindowCache<int, int, IntegerFixedStepDomain> cache, Mock<IDataSource<int, int>> mock) 
-        CreateCacheWithDefaults(IntegerFixedStepDomain domain, WindowCacheOptions? options = null, TimeSpan? fetchDelay = null)
+    public static (WindowCache<int, int, IntegerFixedStepDomain> cache, Mock<IDataSource<int, int>> mock)
+        CreateCacheWithDefaults(IntegerFixedStepDomain domain, WindowCacheOptions? options = null,
+            TimeSpan? fetchDelay = null)
     {
         var mock = CreateMockDataSource(domain, fetchDelay);
         var cache = CreateCache(mock, domain, options ?? CreateDefaultOptions());
@@ -235,19 +257,50 @@ public static class TestHelpers
     public static void AssertIntentPublished(int expectedCount = -1)
     {
         if (expectedCount >= 0)
+        {
             Assert.Equal(expectedCount, CacheInstrumentationCounters.RebalanceIntentPublished);
+        }
         else
+        {
             Assert.True(CacheInstrumentationCounters.RebalanceIntentPublished > 0,
-                "Intent should be published");
+                $"Intent should be published, but actual count was {CacheInstrumentationCounters.RebalanceIntentPublished}");
+        }
     }
 
     /// <summary>
-    /// Asserts that rebalance intent was cancelled.
+    /// Asserts that rebalance was cancelled (at either intent or execution stage).
     /// </summary>
-    public static void AssertIntentCancelled(int minExpected = 1)
+    /// <remarks>
+    /// <para>
+    /// Due to timing, cancellation can occur at two distinct lifecycle points:
+    /// </para>
+    /// <list type="number">
+    /// <item>
+    /// <description><strong>Intent-level cancellation</strong>: When a new request arrives while the previous
+    /// rebalance is still in debounce delay (before execution starts). This increments
+    /// <see cref="CacheInstrumentationCounters.RebalanceIntentCancelled"/>.</description>
+    /// </item>
+    /// <item>
+    /// <description><strong>Execution-level cancellation</strong>: When a new request arrives after the debounce
+    /// delay completed and execution has started. This increments
+    /// <see cref="CacheInstrumentationCounters.RebalanceExecutionCancelled"/>.</description>
+    /// </item>
+    /// </list>
+    /// <para>
+    /// This method checks the <strong>total</strong> cancellations across both stages, making assertions
+    /// stable regardless of timing variations. Most tests care that cancellation occurred, not the
+    /// specific lifecycle stage where it happened.
+    /// </para>
+    /// </remarks>
+    /// <param name="minExpected">Minimum number of total cancellations expected (default: 1).</param>
+    public static void AssertRebalancePathCancelled(int minExpected = 1)
     {
-        Assert.True(CacheInstrumentationCounters.RebalanceIntentCancelled >= minExpected,
-            $"At least {minExpected} intent(s) should be cancelled");
+        var totalCancelled = CacheInstrumentationCounters.RebalanceIntentCancelled +
+                             CacheInstrumentationCounters.RebalanceExecutionCancelled;
+        Assert.True(totalCancelled >= minExpected,
+            $"At least {minExpected} cancellation(s) expected (intent or execution), but actual count was {totalCancelled} " +
+            $"(IntentCancelled: {CacheInstrumentationCounters.RebalanceIntentCancelled}, " +
+            $"ExecutionCancelled: {CacheInstrumentationCounters.RebalanceExecutionCancelled})");
     }
 
     /// <summary>
@@ -257,8 +310,8 @@ public static class TestHelpers
     {
         var started = CacheInstrumentationCounters.RebalanceExecutionStarted;
         var completed = CacheInstrumentationCounters.RebalanceExecutionCompleted;
-        var cancelled = CacheInstrumentationCounters.RebalanceExecutionCancelled;
-        Assert.Equal(started, completed + cancelled);
+        var executionsCancelled = CacheInstrumentationCounters.RebalanceExecutionCancelled;
+        Assert.Equal(started, completed + executionsCancelled);
     }
 
     /// <summary>
@@ -267,11 +320,10 @@ public static class TestHelpers
     public static void AssertRebalanceSkippedDueToPolicy()
     {
         var skipped = CacheInstrumentationCounters.RebalanceSkippedNoRebalanceRange;
-        if (skipped > 0)
-        {
-            Assert.Equal(0, CacheInstrumentationCounters.RebalanceExecutionStarted);
-            Assert.Equal(0, CacheInstrumentationCounters.RebalanceExecutionCompleted);
-        }
+        Assert.True(skipped > 0, $"Expected at least one rebalance to be skipped due to NoRebalanceRange policy, but found {skipped}.");
+
+        Assert.Equal(0, CacheInstrumentationCounters.RebalanceExecutionStarted);
+        Assert.Equal(0, CacheInstrumentationCounters.RebalanceExecutionCompleted);
     }
 
     /// <summary>
@@ -280,6 +332,30 @@ public static class TestHelpers
     public static void AssertRebalanceCompleted(int minExpected = 1)
     {
         Assert.True(CacheInstrumentationCounters.RebalanceExecutionCompleted >= minExpected,
-            $"Rebalance should have completed at least {minExpected} time(s)");
+            $"Rebalance should have completed at least {minExpected} time(s), but actual count was {CacheInstrumentationCounters.RebalanceExecutionCompleted}");
+    }
+
+    /// <summary>
+    /// Asserts that the request resulted in a full cache hit (all data served from cache).
+    /// </summary>
+    public static void AssertFullCacheHit(int expectedCount = 1)
+    {
+        Assert.Equal(expectedCount, CacheInstrumentationCounters.UserRequestFullCacheHit);
+    }
+
+    /// <summary>
+    /// Asserts that the request resulted in a partial cache hit (some data from cache, some from data source).
+    /// </summary>
+    public static void AssertPartialCacheHit(int expectedCount = 1)
+    {
+        Assert.Equal(expectedCount, CacheInstrumentationCounters.UserRequestPartialCacheHit);
+    }
+
+    /// <summary>
+    /// Asserts that the request resulted in a full cache miss (all data fetched from data source).
+    /// </summary>
+    public static void AssertFullCacheMiss(int expectedCount = 1)
+    {
+        Assert.Equal(expectedCount, CacheInstrumentationCounters.UserRequestFullCacheMiss);
     }
 }
