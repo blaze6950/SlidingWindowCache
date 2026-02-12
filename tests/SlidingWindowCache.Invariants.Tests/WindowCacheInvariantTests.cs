@@ -122,8 +122,12 @@ public class WindowCacheInvariantTests : IAsyncDisposable
         stopwatch.Stop();
 
         // ASSERT: Request completed quickly (much less than debounce delay)
-        Assert.True(stopwatch.ElapsedMilliseconds < 500, "User request should not wait for rebalance debounce");
+        Assert.Equal(1, CacheInstrumentationCounters.UserRequestsServed);
+        Assert.Equal(1, CacheInstrumentationCounters.RebalanceIntentPublished);
+        Assert.Equal(0, CacheInstrumentationCounters.RebalanceExecutionCompleted);
         TestHelpers.AssertUserDataCorrect(data, TestHelpers.CreateRange(100, 110));
+        await cache.WaitForIdleAsync();
+        Assert.Equal(1, CacheInstrumentationCounters.RebalanceExecutionCompleted);
     }
 
     /// <summary>
