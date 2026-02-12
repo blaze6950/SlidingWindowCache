@@ -455,13 +455,11 @@ public class WindowCacheInvariantTests : IAsyncDisposable
         await cache.WaitForIdleAsync();
 
         // ASSERT: Intent published but execution optimized away
-        TestHelpers.AssertIntentPublished();
-        var skippedSameRange = CacheInstrumentationCounters.RebalanceSkippedSameRange;
-        var started = CacheInstrumentationCounters.RebalanceExecutionStarted;
-        if (started > 0 && skippedSameRange > 0 || started == 0)
-        {
-            Assert.Equal(0, CacheInstrumentationCounters.RebalanceExecutionCompleted);
-        }
+        Assert.Equal(1, CacheInstrumentationCounters.RebalanceIntentPublished);
+        
+        // Execution should either be skipped entirely or not completed
+        // (skipped due to same-range optimization or never started)
+        Assert.Equal(0, CacheInstrumentationCounters.RebalanceExecutionCompleted);
     }
 
     // TODO: Invariant D.25, D.26, D.28, D.29: Decision Path is purely analytical,
