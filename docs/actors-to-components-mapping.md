@@ -362,6 +362,9 @@ The Rebalance Intent Manager actor is responsible for:
 - Invalidates previous intent when new intent arrives
 - Does NOT perform scheduling or timing logic
 - Does NOT orchestrate execution pipeline
+- **Lock-free implementation** using `Interlocked.Exchange` for atomic operations
+- **Thread-safe without locks** - no race conditions, no blocking
+- Validated by `ConcurrencyStabilityTests` under concurrent load
 
 #### Execution Scheduler (RebalanceScheduler)
 - Receives intent + cancellation token from Intent Controller

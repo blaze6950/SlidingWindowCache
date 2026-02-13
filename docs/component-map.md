@@ -1,4 +1,4 @@
-﻿# Sliding Window Cache - Complete Component Map
+﻿﻿# Sliding Window Cache - Complete Component Map
 
 ## Document Purpose
 
@@ -524,8 +524,16 @@ public Task WaitForIdleAsync(TimeSpan? timeout = null)
 - ✅ Owns intent identity (CancellationTokenSource lifecycle)
 - ✅ Single-flight enforcement (only one active intent)
 - ✅ Exposes cancellation to User Path
+- ✅ **Lock-free implementation** using `Interlocked.Exchange` for atomic operations
+- ✅ **Thread-safe without locks** - no race conditions, tested under concurrent load
 - ⚠️ **Intent does not guarantee execution** - execution is opportunistic
 - ❌ **Does NOT**: Timing, scheduling, execution logic
+
+**Concurrency Model**:
+- Uses lightweight synchronization primitives (`Interlocked.Exchange`)
+- No locks, no `lock` statements, no mutexes
+- Atomic field replacement ensures thread-safety
+- Validated by `ConcurrencyStabilityTests` under concurrent load
 
 **Ownership**: 
 - Owned by WindowCache
