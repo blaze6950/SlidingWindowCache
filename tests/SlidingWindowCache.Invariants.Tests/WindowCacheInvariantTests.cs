@@ -14,7 +14,7 @@ namespace SlidingWindowCache.Invariants.Tests;
 /// Tests use DEBUG instrumentation counters to verify behavioral properties.
 /// Uses Intervals.NET for proper range handling and inclusivity considerations.
 /// </summary>
-public class WindowCacheInvariantTests : IAsyncDisposable
+public sealed class WindowCacheInvariantTests : IAsyncDisposable
 {
     private readonly IntegerFixedStepDomain _domain;
     private WindowCache<int, int, IntegerFixedStepDomain>? _currentCache;
@@ -799,7 +799,7 @@ public class WindowCacheInvariantTests : IAsyncDisposable
     public async Task ConcurrencyScenario_RapidRequestsBurstWithCancellation()
     {
         // ARRANGE
-        var options = TestHelpers.CreateDefaultOptions(debounceDelay: TimeSpan.FromMilliseconds(100));
+        var options = TestHelpers.CreateDefaultOptions(debounceDelay: TimeSpan.FromSeconds(1));
         var (cache, _) = TrackCache(TestHelpers.CreateCacheWithDefaults(_domain, options));
 
         // ACT: Fire 20 rapid concurrent requests

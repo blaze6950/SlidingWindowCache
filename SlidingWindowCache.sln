@@ -25,6 +25,8 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "tests", "tests", "{8C504091
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SlidingWindowCache.Invariants.Tests", "tests\SlidingWindowCache.Invariants.Tests\SlidingWindowCache.Invariants.Tests.csproj", "{17AB54EA-D245-4867-A047-ED55B4D94C17}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SlidingWindowCache.Dependencies.Tests", "tests\SlidingWindowCache.Dependencies.Tests\SlidingWindowCache.Dependencies.Tests.csproj", "{0023794C-FAD3-490C-96E3-448C68ED2569}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -39,10 +41,15 @@ Global
 		{17AB54EA-D245-4867-A047-ED55B4D94C17}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{17AB54EA-D245-4867-A047-ED55B4D94C17}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{17AB54EA-D245-4867-A047-ED55B4D94C17}.Release|Any CPU.Build.0 = Release|Any CPU
+		{0023794C-FAD3-490C-96E3-448C68ED2569}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{0023794C-FAD3-490C-96E3-448C68ED2569}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{0023794C-FAD3-490C-96E3-448C68ED2569}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{0023794C-FAD3-490C-96E3-448C68ED2569}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(NestedProjects) = preSolution
 		{B0276F89-7127-4A8C-AD8F-C198780A1E34} = {EB667A96-0E73-48B6-ACC8-C99369A59D0D}
 		{40C9BEF3-8CFA-43CC-AFE0-7E374DF7F9A5} = {2126ACFB-75E0-4E60-A84C-463EBA8A8799}
 		{17AB54EA-D245-4867-A047-ED55B4D94C17} = {8C504091-1383-4EEB-879E-7A3769C3DF13}
+		{0023794C-FAD3-490C-96E3-448C68ED2569} = {8C504091-1383-4EEB-879E-7A3769C3DF13}
 	EndGlobalSection
 EndGlobal

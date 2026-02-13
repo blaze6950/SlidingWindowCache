@@ -176,7 +176,13 @@ For detailed architectural documentation, see:
 
 ### Testing Infrastructure
 
-- **[Test Suite README](tests/SlidingWindowCache.Invariants.Tests/README.md)** - Comprehensive invariant test suite with deterministic synchronization
+- **[Invariant Test Suite README](tests/SlidingWindowCache.Invariants.Tests/README.md)** - Comprehensive invariant test suite with deterministic synchronization
+- **[Dependency Test Suite README](tests/SlidingWindowCache.Dependencies.Tests/README.md)** - External contract validation and robustness tests
+  - **DataSourceRangePropagationTests** - Validates exact ranges propagated to IDataSource with boundary semantics
+  - **CacheDataSourceInteractionTests** - Tests cache ↔ DataSource interaction contracts
+  - **RangeSemanticsContractTests** - Validates range behavior assumptions
+  - **RandomRangeRobustnessTests** - Property-based testing with 850+ randomized scenarios
+  - **ConcurrencyStabilityTests** - Concurrent load and stability validation
 - **Deterministic Testing**: `WaitForIdleAsync()` API provides race-free synchronization with background rebalance operations (DEBUG-only, zero RELEASE overhead)
 
 ### Key Architectural Principles
@@ -184,6 +190,7 @@ For detailed architectural documentation, see:
 1. **Cache Contiguity**: Cache data must always remain contiguous (no gaps). Non-intersecting requests fully replace the cache.
 2. **User Priority**: User requests always cancel ongoing/pending rebalance before performing cache mutations.
 3. **Mutation Ownership**: Both User Path and Rebalance Execution may mutate cache, but never concurrently. User Path has priority.
+4. **Lock-Free Concurrency**: Intent management uses `Interlocked.Exchange` for atomic operations - no locks, no race conditions, guaranteed progress. Validated under concurrent load in test suite.
 
 ---
 
