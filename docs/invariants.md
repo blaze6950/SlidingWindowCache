@@ -58,8 +58,8 @@ Attempting to test architectural or conceptual invariants would require:
 
 ### Background
 
-Tests verify behavioral invariants through the public API using DEBUG-only instrumentation counters
-to observe internal state changes. However, tests also need to **synchronize** with background
+Tests verify behavioral invariants through the public API using instrumentation counters
+(DEBUG-only) to observe internal state changes. However, tests also need to **synchronize** with background
 rebalance operations to ensure cache has converged before making assertions.
 
 ### Synchronization Mechanism: `WaitForIdleAsync()`
@@ -74,7 +74,6 @@ background rebalance execution:
 
 ### Implementation Strategy
 
-**DEBUG builds:**
 - `RebalanceScheduler` tracks latest background Task in `_idleTask` field
 - `WaitForIdleAsync()` implements observe-and-stabilize loop:
   1. Read current `_idleTask` via `Volatile.Read` (ensures visibility)
@@ -82,9 +81,8 @@ background rebalance execution:
   3. Re-check if `_idleTask` changed (new rebalance scheduled)
   4. Loop until Task reference stabilizes and completes
 
-**RELEASE builds:**
-- `WaitForIdleAsync()` returns `Task.CompletedTask` immediately
-- Zero runtime overhead (no Task tracking field exists)
+This provides deterministic synchronization useful for testing, graceful shutdown, 
+health checks, and other infrastructure scenarios.
 
 ### Architectural Boundaries
 

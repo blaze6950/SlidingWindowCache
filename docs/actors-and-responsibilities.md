@@ -118,7 +118,7 @@ Manages lifecycle of rebalance intents and prevents races and stale applications
 **Implementation:**
 This logical actor is internally decomposed into two components for separation of concerns:
 - **IntentController** (Intent Controller) - intent identity, lifecycle, cancellation
-- **RebalanceScheduler** (Execution Scheduler) - timing, debounce, pipeline orchestration (stateless, plus DEBUG-only Task tracking for testing)
+- **RebalanceScheduler** (Execution Scheduler) - timing, debounce, pipeline orchestration (stateless, plus Task tracking for infrastructure/testing)
 
 **Execution Context:**  
 **Lives in: Background / ThreadPool**

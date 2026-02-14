@@ -183,7 +183,7 @@ internal sealed class IntentController<TRange, TData, TDomain>
 
     /// <summary>
     /// Waits for the latest scheduled rebalance background Task to complete.
-    /// Provides deterministic synchronization for testing infrastructure.
+    /// Provides deterministic synchronization for infrastructure scenarios.
     /// </summary>
     /// <param name="timeout">
     /// Maximum time to wait for idle state. Defaults to 30 seconds.
@@ -197,14 +197,10 @@ internal sealed class IntentController<TRange, TData, TDomain>
     /// synchronization mechanism without implementing Task tracking itself.
     /// </para>
     /// <para>
-    /// This is infrastructure/testing API, not part of domain semantics.
+    /// This is an infrastructure API useful for testing, graceful shutdown, health checks,
+    /// and other scenarios requiring synchronization with background rebalance operations.
     /// Intent lifecycle and cancellation logic remain unchanged.
     /// </para>
-    /// <para><strong>DEBUG vs RELEASE Behavior:</strong></para>
-    /// <list type="bullet">
-    /// <item><description>DEBUG: Implements observe-and-stabilize pattern with Task tracking</description></item>
-    /// <item><description>RELEASE: Returns completed Task immediately (zero overhead)</description></item>
-    /// </list>
     /// </remarks>
     public Task WaitForIdleAsync(TimeSpan? timeout = null) => _scheduler.WaitForIdleAsync(timeout);
 }

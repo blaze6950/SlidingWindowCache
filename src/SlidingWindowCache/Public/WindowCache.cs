@@ -174,7 +174,7 @@ public sealed class WindowCache<TRange, TData, TDomain>
 
     /// <summary>
     /// Waits for any pending background rebalance operations to complete.
-    /// This is an infrastructure/testing API, not part of the domain semantics.
+    /// This is an infrastructure API, not part of the domain semantics.
     /// </summary>
     /// <param name="timeout">
     /// Maximum time to wait for idle state. Defaults to 30 seconds.
@@ -184,22 +184,19 @@ public sealed class WindowCache<TRange, TData, TDomain>
     /// A Task that completes when all scheduled background rebalance operations have finished.
     /// </returns>
     /// <remarks>
-    /// <para><strong>Infrastructure/Testing API:</strong></para>
+    /// <para><strong>Infrastructure API:</strong></para>
     /// <para>
     /// This method provides deterministic synchronization with background rebalance execution
-    /// for testing and infrastructure scenarios. It is NOT part of the cache's domain semantics
-    /// or normal usage patterns.
+    /// for testing, graceful shutdown, health checks, and integration scenarios. It is NOT part 
+    /// of the cache's domain semantics or normal usage patterns.
     /// </para>
     /// <para><strong>Use Cases:</strong></para>
     /// <list type="bullet">
     /// <item><description>Test stabilization: Ensure cache has converged before assertions</description></item>
-    /// <item><description>Integration testing: Synchronize with background work completion</description></item>
+    /// <item><description>Graceful shutdown: Wait for background work before disposing resources</description></item>
+    /// <item><description>Health checks: Verify rebalance operations are completing successfully</description></item>
+    /// <item><description>Integration scenarios: Synchronize with background work completion</description></item>
     /// <item><description>Diagnostic scenarios: Verify rebalance execution has finished</description></item>
-    /// </list>
-    /// <para><strong>DEBUG vs RELEASE Behavior:</strong></para>
-    /// <list type="bullet">
-    /// <item><description>DEBUG builds: Tracks Task lifecycle, implements observe-and-stabilize pattern</description></item>
-    /// <item><description>RELEASE builds: Returns completed Task immediately (zero overhead)</description></item>
     /// </list>
     /// <para><strong>Actor Responsibility Boundaries:</strong></para>
     /// <para>
@@ -213,7 +210,7 @@ public sealed class WindowCache<TRange, TData, TDomain>
     /// </list>
     /// <para>
     /// This method exists solely to expose the idle synchronization mechanism through the public API
-    /// for testing purposes, maintaining the existing architectural separation.
+    /// for infrastructure purposes, maintaining the existing architectural separation.
     /// </para>
     /// </remarks>
     public Task WaitForIdleAsync(TimeSpan? timeout = null) => _intentController.WaitForIdleAsync(timeout);

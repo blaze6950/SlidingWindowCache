@@ -712,7 +712,7 @@ internal sealed class RebalanceScheduler<TRange, TData, TDomain>
 - `RebalanceDecisionEngine<TRange, TDomain> _decisionEngine`
 - `RebalanceExecutor<TRange, TData, TDomain> _executor`
 - `TimeSpan _debounceDelay`
-- `Task _idleTask` (DEBUG-only) - Tracks latest background Task for deterministic synchronization
+- `Task _idleTask` - Tracks latest background Task for deterministic synchronization
 
 **Key Methods**:
 
@@ -790,7 +790,7 @@ public async Task WaitForIdleAsync(TimeSpan? timeout = null)
 
 **Execution Context**: Background / ThreadPool
 
-**State**: Stateless (only readonly fields, plus DEBUG-only `_idleTask` field for deterministic testing)
+**State**: Stateless (only readonly fields, plus `_idleTask` field for deterministic synchronization)
 
 **Important Design Note**: RebalanceScheduler is intentionally stateless and does not own intent identity.
 All intent lifecycle, superseding, and cancellation semantics are delegated to the Intent Controller (IntentController).
@@ -800,7 +800,7 @@ The scheduler receives a CancellationToken for each execution and simply checks 
 - Timing and debounce delay
 - Pipeline orchestration (Decision → Execution)
 - Validity checking before execution starts
-- Task lifecycle tracking for deterministic synchronization (DEBUG-only, infrastructure/testing)
+- Task lifecycle tracking for deterministic synchronization (infrastructure/testing)
 
 **Invariants Enforced**:
 - C.20: Obsolete intents don't start execution
@@ -1221,7 +1221,7 @@ public ValueTask<ReadOnlyMemory<TData>> GetDataAsync(
     return _userRequestHandler.HandleRequestAsync(requestedRange, cancellationToken);
 }
 
-// Infrastructure/testing API (DEBUG-only Task tracking, RELEASE no-op)
+// Infrastructure API (Task tracking for synchronization)
 public Task WaitForIdleAsync(TimeSpan? timeout = null)
 {
     return _intentController.WaitForIdleAsync(timeout);

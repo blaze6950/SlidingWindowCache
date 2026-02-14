@@ -223,10 +223,9 @@ internal sealed class RebalanceScheduler<TRange, TData, TDomain>
         }
     }
 
-#if DEBUG
     /// <summary>
     /// Waits for the latest scheduled rebalance background Task to complete.
-    /// Provides deterministic synchronization for testing without relying on instrumentation counters.
+    /// Provides deterministic synchronization without relying on instrumentation counters.
     /// </summary>
     /// <param name="timeout">
     /// Maximum time to wait for idle state. Defaults to 30 seconds.
@@ -234,10 +233,11 @@ internal sealed class RebalanceScheduler<TRange, TData, TDomain>
     /// </param>
     /// <returns>A Task that completes when the background rebalance has finished.</returns>
     /// <remarks>
-    /// <para><strong>DEBUG-only Infrastructure:</strong></para>
+    /// <para><strong>Infrastructure API:</strong></para>
     /// <para>
-    /// This method exists only in DEBUG builds to support deterministic testing.
-    /// It has zero overhead in RELEASE builds (returns completed Task immediately).
+    /// This method provides deterministic synchronization with background rebalance operations.
+    /// It is useful for testing, graceful shutdown, health checks, integration scenarios,
+    /// and any situation requiring coordination with cache background work.
     /// </para>
     /// <para><strong>Observe-and-Stabilize Pattern:</strong></para>
     /// <list type="number">
@@ -285,16 +285,4 @@ internal sealed class RebalanceScheduler<TRange, TData, TDomain>
             $"WaitForIdleAsync() timed out after {maxWait.TotalSeconds:F1}s. " +
             $"Final task state: {finalTask.Status}");
     }
-#else
-    /// <summary>
-    /// No-op in RELEASE builds. Returns a completed Task immediately.
-    /// Task lifecycle tracking exists only in DEBUG builds for testing infrastructure.
-    /// </summary>
-    /// <param name="timeout">Ignored in RELEASE builds.</param>
-    /// <returns>A completed Task.</returns>
-    public Task WaitForIdleAsync(TimeSpan? timeout = null)
-    {
-        return Task.CompletedTask;
-    }
-#endif
 }

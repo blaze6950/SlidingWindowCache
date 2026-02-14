@@ -328,7 +328,7 @@ but externally appears as a unified policy concept.
    - Orchestrates DecisionEngine → Executor pipeline
    - Ensures single-flight execution
    - **Intentionally stateless** - does not own intent identity
-   - **DEBUG-only Task tracking** - provides `WaitForIdleAsync()` for deterministic testing (zero RELEASE overhead)
+   - **Task tracking** - provides `WaitForIdleAsync()` for deterministic synchronization (infrastructure/testing)
 
 **Key Principle:** The logical actor (Rebalance Intent Manager) is decomposed into 
 two cooperating components for separation of concerns, but externally appears as 
@@ -374,7 +374,7 @@ The Rebalance Intent Manager actor is responsible for:
 - Ensures only one execution runs at a time (via cancellation)
 - Does NOT own intent identity or versioning
 - Does NOT decide whether rebalance is logically required
-- **DEBUG-only**: Tracks background Task for deterministic synchronization (`WaitForIdleAsync()`)
+- Tracks background Task for deterministic synchronization (`WaitForIdleAsync()`)
 
 **Important**: RebalanceScheduler is intentionally stateless and does not own intent identity.
 All intent lifecycle, superseding, and cancellation semantics are delegated to the Intent Controller (IntentController).

@@ -294,7 +294,7 @@ For detailed architectural documentation, see:
   - **RangeSemanticsContractTests** - Validates range behavior assumptions
   - **RandomRangeRobustnessTests** - Property-based testing with 850+ randomized scenarios
   - **ConcurrencyStabilityTests** - Concurrent load and stability validation
-- **Deterministic Testing**: `WaitForIdleAsync()` API provides race-free synchronization with background rebalance operations (DEBUG-only, zero RELEASE overhead)
+- **Deterministic Testing**: `WaitForIdleAsync()` API provides race-free synchronization with background rebalance operations for testing, graceful shutdown, health checks, and integration scenarios
 
 ### Key Architectural Principles
 

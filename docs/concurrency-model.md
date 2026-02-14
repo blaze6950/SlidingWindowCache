@@ -159,7 +159,6 @@ usage patterns or domain semantics.
 
 **Mechanism**: Task lifecycle tracking via observe-and-stabilize pattern
 
-**DEBUG builds:**
 - `RebalanceScheduler` maintains `_idleTask` field tracking latest background Task
 - `WaitForIdleAsync()` implements:
   ```
@@ -170,11 +169,7 @@ usage patterns or domain semantics.
   ```
 - Guarantees: No rebalance execution running when method returns
 - Safety: Handles concurrent intent cancellation and rescheduling correctly
-
-**RELEASE builds:**
-- `WaitForIdleAsync()` returns `Task.CompletedTask` immediately
-- No `_idleTask` field exists (zero overhead)
-- Conditional compilation ensures production builds unaffected
+- Use cases: Testing, graceful shutdown, health checks, integration scenarios
 
 ### Use Cases
 

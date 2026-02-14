@@ -276,7 +276,7 @@ See `docs/storage-strategies.md` for detailed documentation.
 ## Test Infrastructure
 
 All tests use:
-1. **`WaitForIdleAsync()`** - Deterministic synchronization with background rebalance
+1. **`WaitForIdleAsync()`** - Deterministic synchronization with background rebalance (available in all builds)
 2. **`CacheInstrumentationCounters`** (DEBUG-only) - Observable event counters for validation
 3. **`TestHelpers`** - Test data builders and common assertion patterns
 
