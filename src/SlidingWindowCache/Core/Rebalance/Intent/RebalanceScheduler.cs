@@ -45,14 +45,12 @@ internal sealed class RebalanceScheduler<TRange, TData, TDomain>
     private readonly TimeSpan _debounceDelay;
     private readonly ICacheDiagnostics _cacheDiagnostics;
 
-#if DEBUG
     /// <summary>
     /// Tracks the latest scheduled rebalance background Task for deterministic idle synchronization.
     /// Used by WaitForIdleAsync() to provide race-free testing infrastructure.
     /// This field exists only in DEBUG builds and has zero RELEASE overhead.
     /// </summary>
     private Task _idleTask = Task.CompletedTask;
-#endif
 
     /// <summary>
     /// Initializes a new instance of the <see cref="RebalanceScheduler{TRange,TData,TDomain}"/> class.
@@ -127,10 +125,8 @@ internal sealed class RebalanceScheduler<TRange, TData, TDomain>
         // NOTE: Do NOT pass intentToken to Task.Run ^ - it should only be used inside the lambda
         // to ensure the try-catch properly handles all OperationCanceledExceptions
 
-#if DEBUG
         // Track the latest background task for deterministic idle synchronization (DEBUG-only)
         _idleTask = backgroundTask;
-#endif
     }
 
     /// <summary>

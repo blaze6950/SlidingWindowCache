@@ -30,6 +30,11 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SlidingWindowCache.Integrat
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SlidingWindowCache.Unit.Tests", "tests\SlidingWindowCache.Unit.Tests\SlidingWindowCache.Unit.Tests.csproj", "{906F9E4F-0EFA-4FE8-8DA2-DDECE22B7306}"
 EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "cicd", "cicd", "{9C6688E8-071B-48F5-9B84-4779B58822CC}"
+	ProjectSection(SolutionItems) = preProject
+		.github\workflows\slidingwindowcache.yml = .github\workflows\slidingwindowcache.yml
+	EndProjectSection
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -64,5 +69,6 @@ Global
 		{17AB54EA-D245-4867-A047-ED55B4D94C17} = {8C504091-1383-4EEB-879E-7A3769C3DF13}
 		{0023794C-FAD3-490C-96E3-448C68ED2569} = {8C504091-1383-4EEB-879E-7A3769C3DF13}
 		{906F9E4F-0EFA-4FE8-8DA2-DDECE22B7306} = {8C504091-1383-4EEB-879E-7A3769C3DF13}
+		{9C6688E8-071B-48F5-9B84-4779B58822CC} = {EB667A96-0E73-48B6-ACC8-C99369A59D0D}
 	EndGlobalSection
 EndGlobal
