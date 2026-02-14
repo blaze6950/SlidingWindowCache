@@ -1,4 +1,4 @@
-﻿﻿# Sliding Window Cache - Complete Component Map
+﻿~~~~# Sliding Window Cache - Complete Component Map
 
 ## Document Purpose
 
@@ -349,7 +349,143 @@ internal sealed class CopyOnReadStorage<TRange, TData, TDomain> : ICacheStorage<
 
 ---
 
-### 3. State Management
+### 3. Diagnostics Infrastructure
+
+#### 🟧 ICacheDiagnostics
+```csharp
+public interface ICacheDiagnostics
+```
+
+**File**: `src/SlidingWindowCache/Infrastructure/Instrumentation/ICacheDiagnostics.cs`
+
+**Type**: Interface (public)
+
+**Purpose**: Optional observability and instrumentation for cache behavioral events
+
+**Methods** (15 event recording methods):
+
+**User Path Events:**
+- `void UserRequestServed()` - Records completed user request
+- `void CacheExpanded()` - Records cache expansion (partial hit optimization)
+- `void CacheReplaced()` - Records cache replacement (non-intersecting jump)
+- `void UserRequestFullCacheHit()` - Records full cache hit (optimal path)
+- `void UserRequestPartialCacheHit()` - Records partial cache hit with extension
+- `void UserRequestFullCacheMiss()` - Records full cache miss (cold start or jump)
+
+**Data Source Access Events:**
+- `void DataSourceFetchSingleRange()` - Records single-range fetch from IDataSource
+- `void DataSourceFetchMissingSegments()` - Records multi-segment fetch (gap filling)
+
+**Rebalance Intent Lifecycle Events:**
+- `void RebalanceIntentPublished()` - Records intent publication by User Path
+- `void RebalanceIntentCancelled()` - Records intent cancellation before/during execution
+
+**Rebalance Execution Lifecycle Events:**
+- `void RebalanceExecutionStarted()` - Records execution start after decision approval
+- `void RebalanceExecutionCompleted()` - Records successful execution completion
+- `void RebalanceExecutionCancelled()` - Records execution cancellation mid-flight
+
+**Rebalance Skip Optimization Events:**
+- `void RebalanceSkippedNoRebalanceRange()` - Records skip due to NoRebalanceRange policy
+- `void RebalanceSkippedSameRange()` - Records skip due to same-range optimization
+
+**Implementations**:
+- `EventCounterCacheDiagnostics` - Default counter-based implementation
+- `NoOpDiagnostics` - Zero-cost no-op implementation (default)
+
+**Usage**: Passed to WindowCache constructor as optional parameter
+
+**Ownership**: User creates instance (optional), passed by reference to all actors
+
+**Integration Points**:
+- All actors receive diagnostics instance via constructor injection
+- Events recorded at key behavioral points throughout cache lifecycle
+
+**Zero-Cost Design**: When not provided, `NoOpDiagnostics` is used with empty methods that JIT optimizes away
+
+**See**: [Diagnostics Guide](diagnostics.md) for comprehensive usage documentation
+
+---
+
+#### 🟦 EventCounterCacheDiagnostics
+```csharp
+public class EventCounterCacheDiagnostics : ICacheDiagnostics
+```
+
+**File**: `src/SlidingWindowCache/Infrastructure/Instrumentation/DefaultCacheDiagnostics.cs`
+
+**Type**: Class (public, thread-safe)
+
+**Purpose**: Default thread-safe implementation using atomic counters
+
+**Fields** (15 private int counters):
+- `_userRequestServed`, `_cacheExpanded`, `_cacheReplaced`
+- `_userRequestFullCacheHit`, `_userRequestPartialCacheHit`, `_userRequestFullCacheMiss`
+- `_dataSourceFetchSingleRange`, `_dataSourceFetchMissingSegments`
+- `_rebalanceIntentPublished`, `_rebalanceIntentCancelled`
+- `_rebalanceExecutionStarted`, `_rebalanceExecutionCompleted`, `_rebalanceExecutionCancelled`
+- `_rebalanceSkippedNoRebalanceRange`, `_rebalanceSkippedSameRange`
+
+**Properties**: 15 read-only properties exposing counter values
+
+**Methods**:
+- 15 event recording methods (explicit interface implementation)
+  - All use `Interlocked.Increment` for thread-safety
+  - ~1-5 nanoseconds per event
+- `void Reset()` - Resets all counters to zero (for test isolation)
+
+**Characteristics**:
+- ✅ Thread-safe (atomic operations, no locks)
+- ✅ Low overhead (~60 bytes memory, <5ns per event)
+- ✅ Instance-based (multiple caches can have separate diagnostics)
+- ✅ Observable state for testing and monitoring
+
+**Use Cases**:
+- Testing and validation (primary use case)
+- Development debugging
+- Production monitoring (optional)
+
+**Thread Safety**: Thread-safe via `Interlocked.Increment`
+
+**Lifetime**: Typically matches cache lifetime
+
+**See**: [Diagnostics Guide](diagnostics.md) for complete API reference and examples
+
+---
+
+#### 🟦 NoOpDiagnostics
+```csharp
+public class NoOpDiagnostics : ICacheDiagnostics
+```
+
+**File**: `src/SlidingWindowCache/Infrastructure/Instrumentation/NoOpDiagnostics.cs`
+
+**Type**: Class (public, singleton-compatible)
+
+**Purpose**: Zero-overhead no-op implementation for production use
+
+**Methods**: All 15 interface methods implemented as empty method bodies
+
+**Characteristics**:
+- ✅ **Absolute zero overhead** - empty methods inlined/eliminated by JIT
+- ✅ No state (0 bytes memory)
+- ✅ No allocations
+- ✅ No performance impact
+
+**Usage**: Automatically used when `cacheDiagnostics` parameter is `null` (default)
+
+**Design Rationale**: 
+- Enables diagnostics API without forcing overhead when not needed
+- JIT compiler optimizes away empty method calls completely
+- Maintains clean API without conditional logic in hot paths
+
+**Thread Safety**: Stateless, inherently thread-safe
+
+**Lifetime**: Can be singleton or per-cache (doesn't matter - no state)
+
+---
+
+### 4. State Management
 
 #### 🟦 CacheState<TRange, TData, TDomain>
 ```csharp
@@ -396,7 +532,7 @@ internal sealed class CacheState<TRange, TData, TDomain>
 
 ---
 
-### 4. User Path (Fast Path)
+### 5. User Path (Fast Path)
 
 #### 🟦 UserRequestHandler<TRange, TData, TDomain>
 ```csharp
@@ -1202,7 +1338,7 @@ public Task WaitForIdleAsync(TimeSpan? timeout = null)
 │        await _executor.ExecuteAsync(desiredRange, ct); ──────────┼───┤
 └───────────────────────────────────────────────────────────────────┼───┘
                                                                     │
-┌───────────────────────────────────────────────────────────────────▼───┐
+┌───────────────────────────────────────────────────────────────────▼──┐
 │  RebalanceDecisionEngine  [Pure Decision Logic]                       │
 │  🟦 CLASS (sealed)                                                     │
 │                                                                        │

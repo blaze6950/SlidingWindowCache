@@ -6,6 +6,7 @@ using SlidingWindowCache.Core.Rebalance.Execution;
 using SlidingWindowCache.Core.Rebalance.Intent;
 using SlidingWindowCache.Core.State;
 using SlidingWindowCache.Core.UserPath;
+using SlidingWindowCache.Infrastructure.Instrumentation;
 using SlidingWindowCache.Infrastructure.Storage;
 using SlidingWindowCache.Public.Configuration;
 
@@ -98,32 +99,40 @@ public sealed class WindowCache<TRange, TData, TDomain>
     /// <param name="options">
     /// The configuration options for the window cache.
     /// </param>
+    /// <param name="cacheDiagnostics">
+    /// Optional diagnostics interface for logging and metrics. Can be null if diagnostics are not needed.
+    /// </param>
     /// <exception cref="ArgumentOutOfRangeException">
     /// Thrown when an unknown read mode is specified in the options.
     /// </exception>
     public WindowCache(
         IDataSource<TRange, TData> dataSource,
         TDomain domain,
-        WindowCacheOptions options
+        WindowCacheOptions options,
+        ICacheDiagnostics? cacheDiagnostics = null
     )
     {
+        // Initialize diagnostics (use NoOpDiagnostics if null to avoid null checks in actors)
+        cacheDiagnostics ??= new NoOpDiagnostics();
         var cacheStorage = CreateCacheStorage(domain, options);
         var state = new CacheState<TRange, TData, TDomain>(cacheStorage, domain);
 
         // Initialize all internal actors following corrected execution context model
         var rebalancePolicy = new ThresholdRebalancePolicy<TRange, TDomain>(options, domain);
         var rangePlanner = new ProportionalRangePlanner<TRange, TDomain>(options, domain);
-        var cacheFetcher = new CacheDataExtensionService<TRange, TData, TDomain>(dataSource, domain);
+        var cacheFetcher = new CacheDataExtensionService<TRange, TData, TDomain>(dataSource, domain, cacheDiagnostics);
 
         var decisionEngine = new RebalanceDecisionEngine<TRange, TDomain>(rebalancePolicy, rangePlanner);
-        var executor = new RebalanceExecutor<TRange, TData, TDomain>(state, cacheFetcher, rebalancePolicy);
+        var executor =
+            new RebalanceExecutor<TRange, TData, TDomain>(state, cacheFetcher, rebalancePolicy, cacheDiagnostics);
 
         // IntentController composes with Execution Scheduler to form the Rebalance Intent Manager actor
         _intentController = new IntentController<TRange, TData, TDomain>(
             state,
             decisionEngine,
             executor,
-            options.DebounceDelay
+            options.DebounceDelay,
+            cacheDiagnostics
         );
 
         // Initialize the UserRequestHandler (Fast Path Actor)
@@ -131,8 +140,8 @@ public sealed class WindowCache<TRange, TData, TDomain>
             state,
             cacheFetcher,
             _intentController,
-            domain,
-            dataSource
+            dataSource,
+            cacheDiagnostics
         );
 
         return;

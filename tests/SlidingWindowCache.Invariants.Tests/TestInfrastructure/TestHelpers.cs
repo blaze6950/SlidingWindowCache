@@ -90,44 +90,44 @@ public static class TestHelpers
         {
             // For closed ranges [start, end], data should be sequential from start
             case { IsStartInclusive: true, IsEndInclusive: true }:
+            {
+                for (var i = 0; i < span.Length; i++)
                 {
-                    for (var i = 0; i < span.Length; i++)
-                    {
-                        Assert.Equal(start + i, span[i]);
-                    }
-
-                    break;
+                    Assert.Equal(start + i, span[i]);
                 }
+
+                break;
+            }
             case { IsStartInclusive: true, IsEndInclusive: false }:
+            {
+                // [start, end) - start inclusive, end exclusive
+                for (var i = 0; i < span.Length; i++)
                 {
-                    // [start, end) - start inclusive, end exclusive
-                    for (var i = 0; i < span.Length; i++)
-                    {
-                        Assert.Equal(start + i, span[i]);
-                    }
-
-                    break;
+                    Assert.Equal(start + i, span[i]);
                 }
+
+                break;
+            }
             case { IsStartInclusive: false, IsEndInclusive: true }:
+            {
+                // (start, end] - start exclusive, end inclusive
+                for (var i = 0; i < span.Length; i++)
                 {
-                    // (start, end] - start exclusive, end inclusive
-                    for (var i = 0; i < span.Length; i++)
-                    {
-                        Assert.Equal(start + 1 + i, span[i]);
-                    }
-
-                    break;
+                    Assert.Equal(start + 1 + i, span[i]);
                 }
+
+                break;
+            }
             default:
+            {
+                // (start, end) - both exclusive
+                for (var i = 0; i < span.Length; i++)
                 {
-                    // (start, end) - both exclusive
-                    for (var i = 0; i < span.Length; i++)
-                    {
-                        Assert.Equal(start + 1 + i, span[i]);
-                    }
-
-                    break;
+                    Assert.Equal(start + 1 + i, span[i]);
                 }
+
+                break;
+            }
         }
     }
 
@@ -271,18 +271,23 @@ public static class TestHelpers
     public static WindowCache<int, int, IntegerFixedStepDomain> CreateCache(
         Mock<IDataSource<int, int>> mockDataSource,
         IntegerFixedStepDomain domain,
-        WindowCacheOptions options) =>
-        new(mockDataSource.Object, domain, options);
+        WindowCacheOptions options,
+        EventCounterCacheDiagnostics cacheDiagnostics) =>
+        new(mockDataSource.Object, domain, options, cacheDiagnostics);
 
     /// <summary>
     /// Creates a WindowCache with default options and returns both cache and mock data source.
     /// </summary>
     public static (WindowCache<int, int, IntegerFixedStepDomain> cache, Mock<IDataSource<int, int>> mock)
-        CreateCacheWithDefaults(IntegerFixedStepDomain domain, WindowCacheOptions? options = null,
-            TimeSpan? fetchDelay = null)
+        CreateCacheWithDefaults(
+            IntegerFixedStepDomain domain,
+            EventCounterCacheDiagnostics cacheDiagnostics,
+            WindowCacheOptions? options = null,
+            TimeSpan? fetchDelay = null
+        )
     {
         var mock = CreateMockDataSource(domain, fetchDelay);
-        var cache = CreateCache(mock, domain, options ?? CreateDefaultOptions());
+        var cache = CreateCache(mock, domain, options ?? CreateDefaultOptions(), cacheDiagnostics);
         return (cache, mock);
     }
 
@@ -309,25 +314,25 @@ public static class TestHelpers
     /// <summary>
     /// Asserts that User Path did not mutate cache (single-writer architecture).
     /// </summary>
-    public static void AssertNoUserPathMutations()
+    public static void AssertNoUserPathMutations(EventCounterCacheDiagnostics cacheDiagnostics)
     {
-        Assert.Equal(0, CacheInstrumentationCounters.CacheExpanded);
-        Assert.Equal(0, CacheInstrumentationCounters.CacheReplaced);
+        Assert.Equal(0, cacheDiagnostics.CacheExpanded);
+        Assert.Equal(0, cacheDiagnostics.CacheReplaced);
     }
 
     /// <summary>
     /// Asserts that rebalance intent was published.
     /// </summary>
-    public static void AssertIntentPublished(int expectedCount = -1)
+    public static void AssertIntentPublished(EventCounterCacheDiagnostics cacheDiagnostics, int expectedCount = -1)
     {
         if (expectedCount >= 0)
         {
-            Assert.Equal(expectedCount, CacheInstrumentationCounters.RebalanceIntentPublished);
+            Assert.Equal(expectedCount, cacheDiagnostics.RebalanceIntentPublished);
         }
         else
         {
-            Assert.True(CacheInstrumentationCounters.RebalanceIntentPublished > 0,
-                $"Intent should be published, but actual count was {CacheInstrumentationCounters.RebalanceIntentPublished}");
+            Assert.True(cacheDiagnostics.RebalanceIntentPublished > 0,
+                $"Intent should be published, but actual count was {cacheDiagnostics.RebalanceIntentPublished}");
         }
     }
 
@@ -357,86 +362,88 @@ public static class TestHelpers
     /// </para>
     /// </remarks>
     /// <param name="minExpected">Minimum number of total cancellations expected (default: 1).</param>
-    public static void AssertRebalancePathCancelled(int minExpected = 1)
+    public static void AssertRebalancePathCancelled(EventCounterCacheDiagnostics cacheDiagnostics, int minExpected = 1)
     {
-        var totalCancelled = CacheInstrumentationCounters.RebalanceIntentCancelled +
-                             CacheInstrumentationCounters.RebalanceExecutionCancelled;
+        var totalCancelled = cacheDiagnostics.RebalanceIntentCancelled +
+                             cacheDiagnostics.RebalanceExecutionCancelled;
         Assert.True(totalCancelled >= minExpected,
             $"At least {minExpected} cancellation(s) expected (intent or execution), but actual count was {totalCancelled} " +
-            $"(IntentCancelled: {CacheInstrumentationCounters.RebalanceIntentCancelled}, " +
-            $"ExecutionCancelled: {CacheInstrumentationCounters.RebalanceExecutionCancelled})");
+            $"(IntentCancelled: {cacheDiagnostics.RebalanceIntentCancelled}, " +
+            $"ExecutionCancelled: {cacheDiagnostics.RebalanceExecutionCancelled})");
     }
 
     /// <summary>
     /// Asserts rebalance execution lifecycle integrity: Started == Completed + Cancelled.
     /// </summary>
-    public static void AssertRebalanceLifecycleIntegrity()
+    public static void AssertRebalanceLifecycleIntegrity(EventCounterCacheDiagnostics cacheDiagnostics)
     {
-        var started = CacheInstrumentationCounters.RebalanceExecutionStarted;
-        var completed = CacheInstrumentationCounters.RebalanceExecutionCompleted;
-        var executionsCancelled = CacheInstrumentationCounters.RebalanceExecutionCancelled;
+        var started = cacheDiagnostics.RebalanceExecutionStarted;
+        var completed = cacheDiagnostics.RebalanceExecutionCompleted;
+        var executionsCancelled = cacheDiagnostics.RebalanceExecutionCancelled;
         Assert.Equal(started, completed + executionsCancelled);
     }
 
     /// <summary>
     /// Asserts that rebalance was skipped due to NoRebalanceRange policy.
     /// </summary>
-    public static void AssertRebalanceSkippedDueToPolicy()
+    public static void AssertRebalanceSkippedDueToPolicy(EventCounterCacheDiagnostics cacheDiagnostics)
     {
-        var skipped = CacheInstrumentationCounters.RebalanceSkippedNoRebalanceRange;
+        var skipped = cacheDiagnostics.RebalanceSkippedNoRebalanceRange;
         Assert.True(skipped > 0,
             $"Expected at least one rebalance to be skipped due to NoRebalanceRange policy, but found {skipped}.");
 
-        Assert.Equal(0, CacheInstrumentationCounters.RebalanceExecutionStarted);
-        Assert.Equal(0, CacheInstrumentationCounters.RebalanceExecutionCompleted);
+        Assert.Equal(0, cacheDiagnostics.RebalanceExecutionStarted);
+        Assert.Equal(0, cacheDiagnostics.RebalanceExecutionCompleted);
     }
 
     /// <summary>
     /// Asserts that rebalance execution completed successfully.
     /// </summary>
-    public static void AssertRebalanceCompleted(int minExpected = 1)
+    public static void AssertRebalanceCompleted(EventCounterCacheDiagnostics cacheDiagnostics, int minExpected = 1)
     {
-        Assert.True(CacheInstrumentationCounters.RebalanceExecutionCompleted >= minExpected,
-            $"Rebalance should have completed at least {minExpected} time(s), but actual count was {CacheInstrumentationCounters.RebalanceExecutionCompleted}");
+        Assert.True(cacheDiagnostics.RebalanceExecutionCompleted >= minExpected,
+            $"Rebalance should have completed at least {minExpected} time(s), but actual count was {cacheDiagnostics.RebalanceExecutionCompleted}");
     }
 
     /// <summary>
     /// Asserts that the request resulted in a full cache hit (all data served from cache).
     /// </summary>
-    public static void AssertFullCacheHit(int expectedCount = 1)
+    public static void AssertFullCacheHit(EventCounterCacheDiagnostics cacheDiagnostics, int expectedCount = 1)
     {
-        Assert.Equal(expectedCount, CacheInstrumentationCounters.UserRequestFullCacheHit);
+        Assert.Equal(expectedCount, cacheDiagnostics.UserRequestFullCacheHit);
     }
 
     /// <summary>
     /// Asserts that the request resulted in a partial cache hit (some data from cache, some from data source).
     /// </summary>
-    public static void AssertPartialCacheHit(int expectedCount = 1)
+    public static void AssertPartialCacheHit(EventCounterCacheDiagnostics cacheDiagnostics, int expectedCount = 1)
     {
-        Assert.Equal(expectedCount, CacheInstrumentationCounters.UserRequestPartialCacheHit);
+        Assert.Equal(expectedCount, cacheDiagnostics.UserRequestPartialCacheHit);
     }
 
     /// <summary>
     /// Asserts that the request resulted in a full cache miss (all data fetched from data source).
     /// </summary>
-    public static void AssertFullCacheMiss(int expectedCount = 1)
+    public static void AssertFullCacheMiss(EventCounterCacheDiagnostics cacheDiagnostics, int expectedCount = 1)
     {
-        Assert.Equal(expectedCount, CacheInstrumentationCounters.UserRequestFullCacheMiss);
+        Assert.Equal(expectedCount, cacheDiagnostics.UserRequestFullCacheMiss);
     }
 
     /// <summary>
     /// Asserts that data was fetched from data source for a complete range (cold start or full miss).
     /// </summary>
-    public static void AssertDataSourceFetchedFullRange(int expectedCount = 1)
+    public static void AssertDataSourceFetchedFullRange(EventCounterCacheDiagnostics cacheDiagnostics,
+        int expectedCount = 1)
     {
-        Assert.Equal(expectedCount, CacheInstrumentationCounters.DataSourceFetchSingleRange);
+        Assert.Equal(expectedCount, cacheDiagnostics.DataSourceFetchSingleRange);
     }
 
     /// <summary>
     /// Asserts that data was fetched from data source for missing segments only (partial hit optimization).
     /// </summary>
-    public static void AssertDataSourceFetchedMissingSegments(int expectedCount = 1)
+    public static void AssertDataSourceFetchedMissingSegments(EventCounterCacheDiagnostics cacheDiagnostics,
+        int expectedCount = 1)
     {
-        Assert.Equal(expectedCount, CacheInstrumentationCounters.DataSourceFetchMissingSegments);
+        Assert.Equal(expectedCount, cacheDiagnostics.DataSourceFetchMissingSegments);
     }
 }

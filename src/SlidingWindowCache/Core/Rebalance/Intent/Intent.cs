@@ -1,5 +1,4 @@
-﻿using System.Runtime.InteropServices.ComTypes;
-using Intervals.NET;
+﻿using Intervals.NET;
 using Intervals.NET.Data;
 using Intervals.NET.Domain.Abstractions;
 

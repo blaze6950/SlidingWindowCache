@@ -22,12 +22,12 @@ public sealed class ConcurrencyStabilityTests : IAsyncDisposable
     private readonly IntegerFixedStepDomain _domain;
     private readonly SpyDataSource _dataSource;
     private WindowCache<int, int, IntegerFixedStepDomain>? _cache;
+    private EventCounterCacheDiagnostics _cacheDiagnostics;
 
     public ConcurrencyStabilityTests()
     {
         _domain = new IntegerFixedStepDomain();
         _dataSource = new SpyDataSource();
-        CacheInstrumentationCounters.Reset();
     }
 
     /// <summary>
@@ -37,12 +37,12 @@ public sealed class ConcurrencyStabilityTests : IAsyncDisposable
     {
         // Wait for any background rebalance from current test to complete
         await _cache!.WaitForIdleAsync();
-        CacheInstrumentationCounters.Reset();
         _dataSource.Reset();
     }
 
     private WindowCache<int, int, IntegerFixedStepDomain> CreateCache(WindowCacheOptions? options = null)
     {
+        _cacheDiagnostics = new EventCounterCacheDiagnostics();
         return _cache = new WindowCache<int, int, IntegerFixedStepDomain>(
             _dataSource,
             _domain,
@@ -53,7 +53,8 @@ public sealed class ConcurrencyStabilityTests : IAsyncDisposable
                 leftThreshold: 0.2,
                 rightThreshold: 0.2,
                 debounceDelay: TimeSpan.FromMilliseconds(20)
-            )
+            ),
+            _cacheDiagnostics
         );
     }
 

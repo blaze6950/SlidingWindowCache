@@ -49,8 +49,8 @@ internal sealed class UserRequestHandler<TRange, TData, TDomain>
     private readonly CacheState<TRange, TData, TDomain> _state;
     private readonly CacheDataExtensionService<TRange, TData, TDomain> _cacheExtensionService;
     private readonly IntentController<TRange, TData, TDomain> _intentManager;
-    private readonly TDomain _domain;
     private readonly IDataSource<TRange, TData> _dataSource;
+    private readonly ICacheDiagnostics _cacheDiagnostics;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="UserRequestHandler{TRange,TData,TDomain}"/> class.
@@ -58,26 +58,20 @@ internal sealed class UserRequestHandler<TRange, TData, TDomain>
     /// <param name="state">The cache state.</param>
     /// <param name="cacheExtensionService">The cache data fetcher for extending cache coverage.</param>
     /// <param name="intentManager">The intent controller for publishing rebalance intents.</param>
-    /// <param name="domain">
-    /// The domain defining the range characteristics. This is required for any range computations or transformations
-    /// performed by the UserRequestHandler, such as when creating RangeData for intents or when interpreting cache geometry.
-    /// The domain provides necessary context for understanding the range boundaries and how they relate to the underlying data.
-    /// Even though the UserRequestHandler does not perform complex range planning or decision-making,
-    /// it still needs the domain to correctly handle range data and to create accurate intents for the Rebalance Execution Path.
-    /// </param>
     /// <param name="dataSource"> The data source to request missing data from.</param>
+    /// <param name="cacheDiagnostics">The diagnostics interface for recording cache metrics and events related to user requests.</param>
     public UserRequestHandler(CacheState<TRange, TData, TDomain> state,
         CacheDataExtensionService<TRange, TData, TDomain> cacheExtensionService,
         IntentController<TRange, TData, TDomain> intentManager,
-        TDomain domain,
-        IDataSource<TRange, TData> dataSource
+        IDataSource<TRange, TData> dataSource,
+        ICacheDiagnostics cacheDiagnostics
     )
     {
         _state = state;
         _cacheExtensionService = cacheExtensionService;
         _intentManager = intentManager;
-        _domain = domain;
         _dataSource = dataSource;
+        _cacheDiagnostics = cacheDiagnostics;
     }
 
     /// <summary>
@@ -130,11 +124,11 @@ internal sealed class UserRequestHandler<TRange, TData, TDomain>
         {
             // Scenario 1: Cold Start
             // Cache has never been populated - fetch data ONLY for requested range
-            CacheInstrumentationCounters.OnDataSourceFetchSingleRange();
-            assembledData =
-                (await _dataSource.FetchAsync(requestedRange, cancellationToken)).ToRangeData(requestedRange, _domain);
+            _cacheDiagnostics.DataSourceFetchSingleRange();
+            assembledData = (await _dataSource.FetchAsync(requestedRange, cancellationToken))
+                .ToRangeData(requestedRange, _state.Domain);
 
-            CacheInstrumentationCounters.OnUserRequestFullCacheMiss();
+            _cacheDiagnostics.UserRequestFullCacheMiss();
         }
         else
         {
@@ -147,7 +141,7 @@ internal sealed class UserRequestHandler<TRange, TData, TDomain>
                 // All requested data is available in cache - read from cache (no IDataSource call)
                 assembledData = _state.Cache.ToRangeData();
 
-                CacheInstrumentationCounters.OnUserRequestFullCacheHit();
+                _cacheDiagnostics.UserRequestFullCacheHit();
             }
             else
             {
@@ -162,19 +156,18 @@ internal sealed class UserRequestHandler<TRange, TData, TDomain>
                         await _cacheExtensionService.ExtendCacheAsync(currentCacheData, requestedRange,
                             cancellationToken);
 
-                    CacheInstrumentationCounters.OnUserRequestPartialCacheHit();
+                    _cacheDiagnostics.UserRequestPartialCacheHit();
                 }
                 else
                 {
                     // Scenario 4: Full Cache Miss (Non-intersecting Jump)
                     // RequestedRange does NOT intersect CurrentCacheRange
                     // Fetch ONLY the requested range from IDataSource
-                    CacheInstrumentationCounters.OnDataSourceFetchSingleRange();
-                    assembledData =
-                        (await _dataSource.FetchAsync(requestedRange, cancellationToken)).ToRangeData(requestedRange,
-                            _domain);
+                    _cacheDiagnostics.DataSourceFetchSingleRange();
+                    assembledData = (await _dataSource.FetchAsync(requestedRange, cancellationToken))
+                        .ToRangeData(requestedRange, _state.Domain);
 
-                    CacheInstrumentationCounters.OnUserRequestFullCacheMiss();
+                    _cacheDiagnostics.UserRequestFullCacheMiss();
                 }
             }
         }
@@ -194,7 +187,7 @@ internal sealed class UserRequestHandler<TRange, TData, TDomain>
         // Rebalance Execution will use this as the authoritative source
         _intentManager.PublishIntent(intent);
 
-        CacheInstrumentationCounters.OnUserRequestServed();
+        _cacheDiagnostics.UserRequestServed();
 
         // Return the data immediately (User Path never waits for rebalance)
         return result;

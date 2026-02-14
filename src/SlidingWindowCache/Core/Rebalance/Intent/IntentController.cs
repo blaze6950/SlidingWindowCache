@@ -1,5 +1,4 @@
-﻿using Intervals.NET.Data;
-using Intervals.NET.Domain.Abstractions;
+﻿using Intervals.NET.Domain.Abstractions;
 using SlidingWindowCache.Core.Rebalance.Decision;
 using SlidingWindowCache.Core.Rebalance.Execution;
 using SlidingWindowCache.Core.State;
@@ -51,6 +50,7 @@ internal sealed class IntentController<TRange, TData, TDomain>
     where TDomain : IRangeDomain<TRange>
 {
     private readonly RebalanceScheduler<TRange, TData, TDomain> _scheduler;
+    private readonly ICacheDiagnostics _cacheDiagnostics;
 
     /// <summary>
     /// The current rebalance cancellation token source.
@@ -65,6 +65,7 @@ internal sealed class IntentController<TRange, TData, TDomain>
     /// <param name="decisionEngine">The decision engine for rebalance logic.</param>
     /// <param name="executor">The executor for performing rebalance operations.</param>
     /// <param name="debounceDelay">The debounce delay before executing rebalance.</param>
+    /// <param name="cacheDiagnostics">The diagnostics interface for recording cache metrics and events related to rebalance intents.</param>
     /// <remarks>
     /// This constructor composes the Intent Controller with the Execution Scheduler
     /// to form the complete Rebalance Intent Manager actor.
@@ -73,14 +74,19 @@ internal sealed class IntentController<TRange, TData, TDomain>
         CacheState<TRange, TData, TDomain> state,
         RebalanceDecisionEngine<TRange, TDomain> decisionEngine,
         RebalanceExecutor<TRange, TData, TDomain> executor,
-        TimeSpan debounceDelay)
+        TimeSpan debounceDelay,
+        ICacheDiagnostics cacheDiagnostics
+    )
     {
+        _cacheDiagnostics = cacheDiagnostics;
         // Compose with scheduler component
         _scheduler = new RebalanceScheduler<TRange, TData, TDomain>(
             state,
             decisionEngine,
             executor,
-            debounceDelay);
+            debounceDelay,
+            cacheDiagnostics
+        );
     }
 
     /// <summary>
@@ -172,7 +178,7 @@ internal sealed class IntentController<TRange, TData, TDomain>
         // The scheduler owns timing, debounce, and pipeline orchestration
         _scheduler.ScheduleRebalance(intent, intentToken);
 
-        CacheInstrumentationCounters.OnRebalanceIntentPublished();
+        _cacheDiagnostics.RebalanceIntentPublished();
     }
 
     /// <summary>

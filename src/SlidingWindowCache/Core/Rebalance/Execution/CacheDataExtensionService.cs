@@ -28,6 +28,7 @@ internal sealed class CacheDataExtensionService<TRange, TData, TDomain>
 {
     private readonly IDataSource<TRange, TData> _dataSource;
     private readonly TDomain _domain;
+    private readonly ICacheDiagnostics _cacheDiagnostics;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="CacheDataExtensionService{TRange,TData,TDomain}"/> class.
@@ -38,13 +39,18 @@ internal sealed class CacheDataExtensionService<TRange, TData, TDomain>
     /// <param name="domain">
     /// The domain defining the range characteristics.
     /// </param>
+    /// <param name="cacheDiagnostics">
+    /// The diagnostics interface for recording cache operation metrics and events.
+    /// </param>
     public CacheDataExtensionService(
         IDataSource<TRange, TData> dataSource,
-        TDomain domain
+        TDomain domain,
+        ICacheDiagnostics cacheDiagnostics
     )
     {
         _dataSource = dataSource;
         _domain = domain;
+        _cacheDiagnostics = cacheDiagnostics;
     }
 
     /// <summary>
@@ -77,7 +83,7 @@ internal sealed class CacheDataExtensionService<TRange, TData, TDomain>
         CancellationToken ct
     )
     {
-        CacheInstrumentationCounters.OnDataSourceFetchMissingSegments();
+        _cacheDiagnostics.DataSourceFetchMissingSegments();
 
         // Step 1: Calculate which ranges are missing
         var missingRanges = CalculateMissingRanges(currentCache.Range, requested);
@@ -99,7 +105,7 @@ internal sealed class CacheDataExtensionService<TRange, TData, TDomain>
     /// An enumerable of missing ranges that need to be fetched, or null if there's no intersection
     /// (meaning the entire requested range needs to be fetched).
     /// </returns>
-    private static IEnumerable<Range<TRange>> CalculateMissingRanges(
+    private IEnumerable<Range<TRange>> CalculateMissingRanges(
         Range<TRange> currentRange,
         Range<TRange> requestedRange
     )
@@ -108,12 +114,12 @@ internal sealed class CacheDataExtensionService<TRange, TData, TDomain>
 
         if (intersection.HasValue)
         {
-            CacheInstrumentationCounters.OnCacheExpanded();
+            _cacheDiagnostics.CacheExpanded();
             // Calculate the missing segments using range subtraction
             return requestedRange.Except(intersection.Value);
         }
 
-        CacheInstrumentationCounters.OnCacheReplaced();
+        _cacheDiagnostics.CacheReplaced();
         // No overlap - indicate that entire requested range is missing
         // This signals to fetch the whole requested range without trying to calculate missing segments, as they are all missing.
         return [requestedRange];

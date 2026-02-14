@@ -272,3 +272,137 @@ See `docs/storage-strategies.md` for detailed documentation.
 - `docs/concurrency-model.md` - Single-writer architecture and eventual consistency model
 - `MIGRATION_SUMMARY.md` - Implementation details of single-writer migration
 - `DOCUMENTATION_UPDATES.md` - Documentation changes made for new architecture
+
+## Test Infrastructure
+
+All tests use:
+1. **`WaitForIdleAsync()`** - Deterministic synchronization with background rebalance
+2. **`CacheInstrumentationCounters`** (DEBUG-only) - Observable event counters for validation
+3. **`TestHelpers`** - Test data builders and common assertion patterns
+
+## Diagnostic Usage in Tests
+
+All tests leverage `EventCounterCacheDiagnostics` for observable validation of cache behavior:
+
+```csharp
+private readonly EventCounterCacheDiagnostics _cacheDiagnostics;
+
+public WindowCacheInvariantTests()
+{
+    _cacheDiagnostics = new EventCounterCacheDiagnostics();
+}
+```
+
+### Purpose of Diagnostics in Tests
+
+1. **Observable State**: Tracks internal behavioral events without invasive test hooks
+2. **Invariant Validation**: Verifies system invariants through event patterns
+3. **Scenario Verification**: Confirms expected cache scenarios (hit/miss patterns, rebalance lifecycle)
+4. **Test Isolation**: `Reset()` method ensures clean state between test phases
+
+### Common Assertion Patterns
+
+**User Path Scenario Validation:**
+```csharp
+// Verify full cache hit
+TestHelpers.AssertFullCacheHit(_cacheDiagnostics, expectedCount: 1);
+
+// Verify partial cache hit with extension
+TestHelpers.AssertPartialCacheHit(_cacheDiagnostics, expectedCount: 1);
+
+// Verify full cache miss (cold start or jump)
+TestHelpers.AssertFullCacheMiss(_cacheDiagnostics, expectedCount: 1);
+```
+
+**Rebalance Lifecycle Validation:**
+```csharp
+// Verify rebalance lifecycle integrity (started == completed + cancelled)
+TestHelpers.AssertRebalanceLifecycleIntegrity(_cacheDiagnostics);
+
+// Verify rebalance completed successfully
+TestHelpers.AssertRebalanceCompleted(_cacheDiagnostics, minExpected: 1);
+
+// Verify rebalance was cancelled by new user request
+TestHelpers.AssertRebalancePathCancelled(_cacheDiagnostics, minExpected: 1);
+```
+
+**Data Source Interaction Validation:**
+```csharp
+// Verify single-range fetch (cold start or jump)
+TestHelpers.AssertDataSourceFetchedFullRange(_cacheDiagnostics, expectedCount: 1);
+
+// Verify missing-segments fetch (partial hit optimization)
+TestHelpers.AssertDataSourceFetchedMissingSegments(_cacheDiagnostics, expectedCount: 1);
+```
+
+**Test Isolation with Reset():**
+```csharp
+// Setup phase
+await cache.GetDataAsync(Range.Closed(100, 200), ct);
+await cache.WaitForIdleAsync();
+
+// Reset counters to isolate test scenario
+_cacheDiagnostics.Reset();
+
+// Test phase - only this scenario's events are tracked
+await cache.GetDataAsync(Range.Closed(120, 180), ct);
+
+// Assert only test scenario events
+Assert.Equal(1, _cacheDiagnostics.UserRequestFullCacheHit);
+Assert.Equal(0, _cacheDiagnostics.UserRequestPartialCacheHit);
+```
+
+### Integration with WaitForIdleAsync()
+
+Diagnostics and `WaitForIdleAsync()` work together for complete test determinism:
+
+```csharp
+// 1. Perform action
+await cache.GetDataAsync(Range.Closed(100, 200), ct);
+
+// 2. Wait for rebalance to complete (deterministic synchronization)
+await cache.WaitForIdleAsync();
+
+// 3. Assert using diagnostics (observable validation)
+Assert.Equal(1, _cacheDiagnostics.RebalanceExecutionCompleted);
+TestHelpers.AssertRebalanceLifecycleIntegrity(_cacheDiagnostics);
+```
+
+**Key Distinction:**
+- **`WaitForIdleAsync()`**: Synchronization mechanism (when to assert)
+- **Diagnostics**: Observable state (what to assert)
+
+### Available Diagnostic Counters
+
+**User Path Events:**
+- `UserRequestServed` - Total requests completed
+- `CacheExpanded` - Cache expansion operations
+- `CacheReplaced` - Cache replacement operations
+- `UserRequestFullCacheHit` - Full cache hits
+- `UserRequestPartialCacheHit` - Partial cache hits
+- `UserRequestFullCacheMiss` - Full cache misses
+
+**Data Source Events:**
+- `DataSourceFetchSingleRange` - Single-range fetches
+- `DataSourceFetchMissingSegments` - Multi-segment fetches
+
+**Rebalance Lifecycle:**
+- `RebalanceIntentPublished` - Intents published
+- `RebalanceIntentCancelled` - Intents cancelled
+- `RebalanceExecutionStarted` - Executions started
+- `RebalanceExecutionCompleted` - Executions completed
+- `RebalanceExecutionCancelled` - Executions cancelled
+- `RebalanceSkippedNoRebalanceRange` - Skipped due to policy
+- `RebalanceSkippedSameRange` - Skipped due to optimization
+
+### Helper Assertion Library
+
+See `TestHelpers.cs` for complete assertion library including:
+- `AssertNoUserPathMutations()` - Verify User Path is read-only
+- `AssertIntentPublished()` - Verify intent publication
+- `AssertRebalanceLifecycleIntegrity()` - Verify lifecycle invariants
+- `AssertRebalanceSkippedDueToPolicy()` - Verify skip optimization
+- `AssertFullCacheHit/PartialCacheHit/FullCacheMiss()` - Verify user scenarios
+- `AssertDataSourceFetchedFullRange/MissingSegments()` - Verify data source interaction
+
+**See**: [Diagnostics Guide](../../docs/diagnostics.md) for comprehensive diagnostic API reference

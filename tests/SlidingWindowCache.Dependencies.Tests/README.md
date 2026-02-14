@@ -1,4 +1,4 @@
-﻿﻿﻿﻿﻿﻿﻿﻿# SlidingWindowCache - Dependency Contract & Robustness Tests
+﻿# SlidingWindowCache - Dependency Contract & Robustness Tests
 
 ## Implementation Summary
 
@@ -146,6 +146,72 @@ Custom test spy/fake implementing `IDataSource<int, int>`:
 - `WasRangeCovered(int start, int end)` - Checks if a range was covered by any fetch
 - `AssertRangeRequested(Range<int> range)` - Asserts specific range was fetched (with boundary semantics)
 - `AssertRangeRequested(int start, int end)` - Convenience overload for closed ranges
+
+## Usage
+
+```bash
+# Run all dependency tests
+dotnet test tests/SlidingWindowCache.Dependencies.Tests/SlidingWindowCache.Dependencies.Tests.csproj --configuration Debug
+
+# Run specific test suite
+dotnet test --filter "FullyQualifiedName~RangeSemanticsContractTests"
+dotnet test --filter "FullyQualifiedName~CacheDataSourceInteractionTests"
+dotnet test --filter "FullyQualifiedName~RandomRangeRobustnessTests"
+dotnet test --filter "FullyQualifiedName~ConcurrencyStabilityTests"
+dotnet test --filter "FullyQualifiedName~DataSourceRangePropagationTests"
+```
+
+## Diagnostic Infrastructure
+
+All test suites use `EventCounterCacheDiagnostics` for observable validation:
+
+```csharp
+private EventCounterCacheDiagnostics _cacheDiagnostics;
+
+[SetUp]
+public void Setup()
+{
+    _cacheDiagnostics = new EventCounterCacheDiagnostics();
+}
+```
+
+### Usage in Dependency Tests
+
+**RangeSemanticsContractTests**: Validates cache behavior under range boundary conditions
+```csharp
+// Verify cache hit/miss patterns
+Assert.Equal(1, _cacheDiagnostics.UserRequestFullCacheMiss); // Cold start
+Assert.Equal(1, _cacheDiagnostics.UserRequestFullCacheHit);  // Subsequent hit
+```
+
+**DataSourceRangePropagationTests**: Validates exact ranges passed to IDataSource
+```csharp
+// Verify data source interaction patterns
+Assert.Equal(1, _cacheDiagnostics.DataSourceFetchSingleRange);
+Assert.Equal(0, _cacheDiagnostics.DataSourceFetchMissingSegments);
+```
+
+**RandomRangeRobustnessTests**: Validates stability under random access patterns
+```csharp
+// Verify no unexpected behavior across hundreds of random requests
+Assert.True(_cacheDiagnostics.UserRequestServed > 0);
+TestHelpers.AssertRebalanceLifecycleIntegrity(_cacheDiagnostics);
+```
+
+**ConcurrencyStabilityTests**: Validates behavior under concurrent load
+```csharp
+// Verify all requests completed successfully
+Assert.Equal(totalRequests, _cacheDiagnostics.UserRequestServed);
+```
+
+### Key Benefits
+
+1. **Observable State**: Track internal events without invasive instrumentation
+2. **Contract Validation**: Verify expected patterns (hit/miss ratios, fetch strategies)
+3. **Stability Verification**: Ensure lifecycle integrity under stress
+4. **Test Isolation**: `Reset()` enables clean state between test phases
+
+**See**: [Diagnostics Guide](../../docs/diagnostics.md) for complete API reference
 
 ### Project Configuration
 

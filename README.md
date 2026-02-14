@@ -15,6 +15,7 @@ The Sliding Window Cache is a high-performance caching library designed for scen
 - **Cancellation-Aware**: Full support for `CancellationToken` throughout the async pipeline
 - **Range-Based Operations**: Built on top of the [`Intervals.NET`](https://github.com/blaze6950/Intervals.NET) library for robust range handling
 - **Configurable Read Modes**: Choose between different materialization strategies based on your performance requirements
+- **Optional Diagnostics**: Built-in instrumentation for monitoring cache behavior and validating system invariants
 
 ---
 
@@ -155,6 +156,116 @@ See `WindowCacheOptions` for detailed configuration parameters:
 
 ---
 
+## Optional Diagnostics
+
+The cache supports optional diagnostics for monitoring behavior, measuring performance, and validating system invariants. This is useful for:
+- **Testing and validation**: Verify cache behavior meets expected patterns
+- **Performance monitoring**: Track cache hit/miss ratios and rebalance frequency
+- **Debugging**: Understand cache lifecycle events in development
+- **Production observability**: Optional instrumentation for metrics collection
+
+### ⚠️ CRITICAL: Exception Handling
+
+**You MUST handle the `RebalanceExecutionFailed` event in production applications.**
+
+Rebalance operations run in fire-and-forget background tasks. When exceptions occur, they are silently swallowed to prevent application crashes. Without proper handling of `RebalanceExecutionFailed`:
+
+- ❌ Silent failures in background operations
+- ❌ Cache stops rebalancing with no indication
+- ❌ Degraded performance with no diagnostics
+- ❌ Data source errors go unnoticed
+
+**Minimum requirement: Log all failures**
+
+```csharp
+public class LoggingCacheDiagnostics : ICacheDiagnostics
+{
+    private readonly ILogger<LoggingCacheDiagnostics> _logger;
+    
+    public LoggingCacheDiagnostics(ILogger<LoggingCacheDiagnostics> logger)
+    {
+        _logger = logger;
+    }
+    
+    public void RebalanceExecutionFailed(Exception ex)
+    {
+        // CRITICAL: Always log rebalance failures
+        _logger.LogError(ex, "Cache rebalance execution failed. Cache may not be optimally sized.");
+    }
+    
+    // ...implement other methods (can be no-op if you only care about failures)...
+}
+```
+
+For production systems, consider:
+- **Alerting**: Trigger alerts after N consecutive failures
+- **Metrics**: Track failure rate and exception types
+- **Circuit breaker**: Disable rebalancing after repeated failures
+- **Structured logging**: Include cache state and requested range context
+
+### Using Diagnostics
+
+```csharp
+using SlidingWindowCache.Infrastructure.Instrumentation;
+
+// Create diagnostics instance
+var diagnostics = new EventCounterCacheDiagnostics();
+
+// Pass to cache constructor
+var cache = new WindowCache<int, string, IntegerFixedStepDomain>(
+    dataSource: myDataSource,
+    domain: new IntegerFixedStepDomain(),
+    options: options,
+    cacheDiagnostics: diagnostics  // Optional parameter
+);
+
+// Access diagnostic counters
+Console.WriteLine($"Full cache hits: {diagnostics.UserRequestFullCacheHit}");
+Console.WriteLine($"Partial cache hits: {diagnostics.UserRequestPartialCacheHit}");
+Console.WriteLine($"Full cache misses: {diagnostics.UserRequestFullCacheMiss}");
+Console.WriteLine($"Rebalances completed: {diagnostics.RebalanceExecutionCompleted}");
+```
+
+### Available Metrics
+
+**User Path Metrics:**
+- `UserRequestServed` - Total requests completed
+- `UserRequestFullCacheHit` - Requests served entirely from cache
+- `UserRequestPartialCacheHit` - Requests requiring partial fetch from data source
+- `UserRequestFullCacheMiss` - Requests requiring complete fetch (cold start or jump)
+- `CacheExpanded` - Cache expansion operations (partial hit optimization)
+- `CacheReplaced` - Cache replacement operations (non-intersecting jump)
+
+**Data Source Interaction:**
+- `DataSourceFetchSingleRange` - Single-range fetches from data source
+- `DataSourceFetchMissingSegments` - Multi-segment fetches (gap filling)
+
+**Rebalance Lifecycle:**
+- `RebalanceIntentPublished` - Rebalance intents published by User Path
+- `RebalanceIntentCancelled` - Intents cancelled due to new user requests
+- `RebalanceExecutionStarted` - Rebalance executions started
+- `RebalanceExecutionCompleted` - Rebalance executions completed successfully
+- `RebalanceExecutionCancelled` - Rebalance executions cancelled mid-flight
+- `RebalanceExecutionFailed` - **⚠️ CRITICAL**: Rebalance execution failures (MUST be logged)
+- `RebalanceSkippedNoRebalanceRange` - Rebalances skipped due to threshold policy
+- `RebalanceSkippedSameRange` - Rebalances skipped due to same-range optimization
+
+### Zero-Cost Abstraction
+
+If no diagnostics instance is provided (default), the cache uses `NoOpDiagnostics` - a zero-overhead implementation with empty method bodies that the JIT compiler can optimize away completely. This ensures diagnostics add zero performance overhead when not used.
+
+```csharp
+// No diagnostics - zero overhead
+var cache = new WindowCache<int, string, IntegerFixedStepDomain>(
+    dataSource: myDataSource,
+    domain: new IntegerFixedStepDomain(),
+    options: options
+    // cacheDiagnostics parameter omitted - uses NoOpDiagnostics
+);
+```
+
+---
+
 ## Documentation
 
 For detailed architectural documentation, see:
@@ -172,7 +283,7 @@ For detailed architectural documentation, see:
 
 - **[Component Map](docs/component-map.md)** - Comprehensive component catalog with responsibilities and interactions
 - **[Storage Strategies](docs/storage-strategies.md)** - Detailed comparison of Snapshot vs. CopyOnRead modes and multi-level cache patterns
-- **[Cache Hit/Miss Tracking Implementation](docs/cache-hit-miss-tracking-implementation.md)** - Implementation details for cache hit/miss tracking
+- **[Diagnostics](docs/diagnostics.md)** - Optional instrumentation and observability guide
 
 ### Testing Infrastructure
 
@@ -188,8 +299,8 @@ For detailed architectural documentation, see:
 ### Key Architectural Principles
 
 1. **Cache Contiguity**: Cache data must always remain contiguous (no gaps). Non-intersecting requests fully replace the cache.
-2. **User Priority**: User requests always cancel ongoing/pending rebalance before performing cache mutations.
-3. **Mutation Ownership**: Both User Path and Rebalance Execution may mutate cache, but never concurrently. User Path has priority.
+2. **User Priority**: User requests always cancel ongoing/pending rebalance operations to maintain responsiveness.
+3. **Single-Writer Architecture**: Only Rebalance Execution writes to cache state; User Path is read-only.
 4. **Lock-Free Concurrency**: Intent management uses `Interlocked.Exchange` for atomic operations - no locks, no race conditions, guaranteed progress. Validated under concurrent load in test suite.
 
 ---
@@ -200,6 +311,7 @@ For detailed architectural documentation, see:
 - **CopyOnRead mode**: O(n) reads (copy cost), but cheaper rebalance operations
 - **Rebalancing is asynchronous**: Does not block user reads
 - **Debouncing**: Multiple rapid requests trigger only one rebalance operation
+- **Diagnostics overhead**: Zero when not used (NoOpDiagnostics); minimal when enabled (~1-5ns per event)
 
 ---
 

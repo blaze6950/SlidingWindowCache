@@ -26,15 +26,19 @@ internal sealed class RebalanceExecutor<TRange, TData, TDomain>
     private readonly CacheState<TRange, TData, TDomain> _state;
     private readonly CacheDataExtensionService<TRange, TData, TDomain> _cacheExtensionService;
     private readonly ThresholdRebalancePolicy<TRange, TDomain> _rebalancePolicy;
+    private readonly ICacheDiagnostics _cacheDiagnostics;
 
     public RebalanceExecutor(
         CacheState<TRange, TData, TDomain> state,
         CacheDataExtensionService<TRange, TData, TDomain> cacheExtensionService,
-        ThresholdRebalancePolicy<TRange, TDomain> rebalancePolicy)
+        ThresholdRebalancePolicy<TRange, TDomain> rebalancePolicy,
+        ICacheDiagnostics cacheDiagnostics
+    )
     {
         _state = state;
         _cacheExtensionService = cacheExtensionService;
         _rebalancePolicy = rebalancePolicy;
+        _cacheDiagnostics = cacheDiagnostics;
     }
 
     /// <summary>
@@ -43,7 +47,6 @@ internal sealed class RebalanceExecutor<TRange, TData, TDomain>
     /// </summary>
     /// <param name="intent">The intent with data that was actually assembled in UserPath and the requested range.</param>
     /// <param name="desiredRange">The target cache range to normalize to.</param>
-    /// <param name="requestedRange">The original range requested by the user, used for updating LastRequested field in cache state.</param>
     /// <param name="cancellationToken">Cancellation token to support cancellation at all stages.</param>
     /// <returns>A task representing the asynchronous rebalance operation.</returns>
     /// <remarks>
@@ -72,7 +75,7 @@ internal sealed class RebalanceExecutor<TRange, TData, TDomain>
         // This is a final check before expensive I/O operations
         if (baseRangeData.Range == desiredRange)
         {
-            CacheInstrumentationCounters.OnRebalanceSkippedSameRange();
+            _cacheDiagnostics.RebalanceSkippedSameRange();
             // Even though ranges match, we still need to update cache state since
             // User Path no longer writes to cache. Use delivered data directly.
             UpdateCacheState(baseRangeData, intent.RequestedRange);
@@ -101,7 +104,7 @@ internal sealed class RebalanceExecutor<TRange, TData, TDomain>
         // Phase 3: Apply cache state mutations
         UpdateCacheState(baseRangeData, intent.RequestedRange);
 
-        CacheInstrumentationCounters.OnRebalanceExecutionCompleted();
+        _cacheDiagnostics.RebalanceExecutionCompleted();
     }
 
     /// <summary>

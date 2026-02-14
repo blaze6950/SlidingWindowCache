@@ -1,5 +1,4 @@
-﻿using Intervals.NET.Data;
-using Intervals.NET.Domain.Abstractions;
+﻿using Intervals.NET.Domain.Abstractions;
 using SlidingWindowCache.Core.Rebalance.Decision;
 using SlidingWindowCache.Core.Rebalance.Execution;
 using SlidingWindowCache.Core.State;
@@ -44,6 +43,7 @@ internal sealed class RebalanceScheduler<TRange, TData, TDomain>
     private readonly RebalanceDecisionEngine<TRange, TDomain> _decisionEngine;
     private readonly RebalanceExecutor<TRange, TData, TDomain> _executor;
     private readonly TimeSpan _debounceDelay;
+    private readonly ICacheDiagnostics _cacheDiagnostics;
 
 #if DEBUG
     /// <summary>
@@ -61,16 +61,20 @@ internal sealed class RebalanceScheduler<TRange, TData, TDomain>
     /// <param name="decisionEngine">The decision engine for rebalance logic.</param>
     /// <param name="executor">The executor for performing rebalance operations.</param>
     /// <param name="debounceDelay">The debounce delay before executing rebalance.</param>
+    /// <param name="cacheDiagnostics">The diagnostics interface for recording rebalance-related metrics and events.</param>
     public RebalanceScheduler(
         CacheState<TRange, TData, TDomain> state,
         RebalanceDecisionEngine<TRange, TDomain> decisionEngine,
         RebalanceExecutor<TRange, TData, TDomain> executor,
-        TimeSpan debounceDelay)
+        TimeSpan debounceDelay,
+        ICacheDiagnostics cacheDiagnostics
+    )
     {
         _state = state;
         _decisionEngine = decisionEngine;
         _executor = executor;
         _debounceDelay = debounceDelay;
+        _cacheDiagnostics = cacheDiagnostics;
     }
 
     /// <summary>
@@ -107,17 +111,18 @@ internal sealed class RebalanceScheduler<TRange, TData, TDomain>
             {
                 // Expected when intent is cancelled or superseded
                 // This is normal behavior, not an error
-                CacheInstrumentationCounters.OnRebalanceIntentCancelled();
+                _cacheDiagnostics.RebalanceIntentCancelled();
             }
-#if DEBUG
-            catch (Exception ex)
+            catch (Exception)
             {
-                // Log unexpected exceptions in DEBUG builds for visibility during development
-                // In RELEASE builds, we let exceptions propagate to avoid masking critical issues
-                System.Diagnostics.Debug.WriteLine($"Unexpected exception in rebalance execution: {ex}");
-                throw;
+                // All other exceptions are already recorded via RebalanceExecutionFailed
+                // They bubble up from ExecutePipelineAsync and are swallowed here to prevent
+                // unhandled task exceptions from crashing the application.
+                // 
+                // ⚠️ CRITICAL: Applications MUST subscribe to RebalanceExecutionFailed events
+                // and implement appropriate error handling (logging, alerting, monitoring).
+                // Ignoring this event means silent failures in background operations.
             }
-#endif
         }, CancellationToken.None);
         // NOTE: Do NOT pass intentToken to Task.Run ^ - it should only be used inside the lambda
         // to ensure the try-catch properly handles all OperationCanceledExceptions
@@ -175,7 +180,7 @@ internal sealed class RebalanceScheduler<TRange, TData, TDomain>
         // Ensures we don't do work for an obsolete intent
         if (cancellationToken.IsCancellationRequested)
         {
-            CacheInstrumentationCounters.OnRebalanceIntentCancelled();
+            _cacheDiagnostics.RebalanceIntentCancelled();
             return;
         }
 
@@ -189,11 +194,11 @@ internal sealed class RebalanceScheduler<TRange, TData, TDomain>
         // Step 2: If decision says skip, return early (no-op)
         if (!decision.ShouldExecute)
         {
-            CacheInstrumentationCounters.OnRebalanceSkippedNoRebalanceRange();
+            _cacheDiagnostics.RebalanceSkippedNoRebalanceRange();
             return;
         }
 
-        CacheInstrumentationCounters.OnRebalanceExecutionStarted();
+        _cacheDiagnostics.RebalanceExecutionStarted();
 
         // Step 3: If execution is allowed, invoke Executor with delivered data
         // The executor will use delivered data as authoritative source, merge with existing cache,
@@ -204,7 +209,16 @@ internal sealed class RebalanceScheduler<TRange, TData, TDomain>
         }
         catch (OperationCanceledException)
         {
-            CacheInstrumentationCounters.OnRebalanceExecutionCancelled();
+            _cacheDiagnostics.RebalanceExecutionCancelled();
+            throw;
+        }
+        catch (Exception ex)
+        {
+            // Record failure for diagnostic tracking
+            // WARNING: This is a fire-and-forget background operation failure
+            // Applications MUST monitor RebalanceExecutionFailed events and implement
+            // appropriate error handling (logging, alerting, etc.)
+            _cacheDiagnostics.RebalanceExecutionFailed(ex);
             throw;
         }
     }

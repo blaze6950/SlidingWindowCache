@@ -24,23 +24,23 @@ public sealed class DataSourceRangePropagationTests : IAsyncDisposable
     private readonly IntegerFixedStepDomain _domain;
     private readonly SpyDataSource _dataSource;
     private WindowCache<int, int, IntegerFixedStepDomain>? _cache;
+    private EventCounterCacheDiagnostics _cacheDiagnostics;
 
     public DataSourceRangePropagationTests()
     {
         _domain = new IntegerFixedStepDomain();
         _dataSource = new SpyDataSource();
-        CacheInstrumentationCounters.Reset();
     }
 
     public async ValueTask DisposeAsync()
     {
         await _cache!.WaitForIdleAsync();
-        CacheInstrumentationCounters.Reset();
         _dataSource.Reset();
     }
 
     private WindowCache<int, int, IntegerFixedStepDomain> CreateCache(WindowCacheOptions? options = null)
     {
+        _cacheDiagnostics = new EventCounterCacheDiagnostics();
         _cache = new WindowCache<int, int, IntegerFixedStepDomain>(
             _dataSource,
             _domain,
@@ -51,7 +51,8 @@ public sealed class DataSourceRangePropagationTests : IAsyncDisposable
                 leftThreshold: 0.2,
                 rightThreshold: 0.2,
                 debounceDelay: TimeSpan.FromSeconds(1)
-            )
+            ),
+            _cacheDiagnostics
         );
         return _cache;
     }
