@@ -129,19 +129,35 @@ public sealed class SpyDataSource : IDataSource<int, int>
         {
             case { IsStartInclusive: true, IsEndInclusive: true }:
                 // [start, end]
-                for (var i = start; i <= end; i++) data.Add(i);
+                for (var i = start; i <= end; i++)
+                {
+                    data.Add(i);
+                }
+
                 break;
             case { IsStartInclusive: true, IsEndInclusive: false }:
                 // [start, end)
-                for (var i = start; i < end; i++) data.Add(i);
+                for (var i = start; i < end; i++)
+                {
+                    data.Add(i);
+                }
+
                 break;
             case { IsStartInclusive: false, IsEndInclusive: true }:
                 // (start, end]
-                for (var i = start + 1; i <= end; i++) data.Add(i);
+                for (var i = start + 1; i <= end; i++)
+                {
+                    data.Add(i);
+                }
+
                 break;
             default:
                 // (start, end)
-                for (var i = start + 1; i < end; i++) data.Add(i);
+                for (var i = start + 1; i < end; i++)
+                {
+                    data.Add(i);
+                }
+
                 break;
         }
 

@@ -232,16 +232,32 @@ public static class TestHelpers
                 switch (range)
                 {
                     case { IsStartInclusive: true, IsEndInclusive: true }:
-                        for (var i = start; i <= end; i++) data.Add(i);
+                        for (var i = start; i <= end; i++)
+                        {
+                            data.Add(i);
+                        }
+
                         break;
                     case { IsStartInclusive: true, IsEndInclusive: false }:
-                        for (var i = start; i < end; i++) data.Add(i);
+                        for (var i = start; i < end; i++)
+                        {
+                            data.Add(i);
+                        }
+
                         break;
                     case { IsStartInclusive: false, IsEndInclusive: true }:
-                        for (var i = start + 1; i <= end; i++) data.Add(i);
+                        for (var i = start + 1; i <= end; i++)
+                        {
+                            data.Add(i);
+                        }
+
                         break;
                     default:
-                        for (var i = start + 1; i < end; i++) data.Add(i);
+                        for (var i = start + 1; i < end; i++)
+                        {
+                            data.Add(i);
+                        }
+
                         break;
                 }
 
