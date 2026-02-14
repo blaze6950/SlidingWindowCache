@@ -3,7 +3,7 @@ using Intervals.NET;
 using SlidingWindowCache.Public;
 using SlidingWindowCache.Public.Dto;
 
-namespace SlidingWindowCache.Dependencies.Tests.TestInfrastructure;
+namespace SlidingWindowCache.Integration.Tests.TestInfrastructure;
 
 /// <summary>
 /// A test spy/fake IDataSource implementation that records all fetch calls for verification.

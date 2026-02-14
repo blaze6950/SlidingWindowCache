@@ -288,7 +288,7 @@ For detailed architectural documentation, see:
 ### Testing Infrastructure
 
 - **[Invariant Test Suite README](tests/SlidingWindowCache.Invariants.Tests/README.md)** - Comprehensive invariant test suite with deterministic synchronization
-- **[Dependency Test Suite README](tests/SlidingWindowCache.Dependencies.Tests/README.md)** - External contract validation and robustness tests
+- **[Integration Test Suite README](tests/SlidingWindowCache.Integration.Tests/README.md)** - External contract validation and robustness tests
   - **DataSourceRangePropagationTests** - Validates exact ranges propagated to IDataSource with boundary semantics
   - **CacheDataSourceInteractionTests** - Tests cache ↔ DataSource interaction contracts
   - **RangeSemanticsContractTests** - Validates range behavior assumptions

@@ -1,10 +1,10 @@
 ﻿using Intervals.NET.Domain.Default.Numeric;
-using SlidingWindowCache.Dependencies.Tests.TestInfrastructure;
+using SlidingWindowCache.Integration.Tests.TestInfrastructure;
 using SlidingWindowCache.Infrastructure.Instrumentation;
 using SlidingWindowCache.Public;
 using SlidingWindowCache.Public.Configuration;
 
-namespace SlidingWindowCache.Dependencies.Tests;
+namespace SlidingWindowCache.Integration.Tests;
 
 /// <summary>
 /// Tests that validate the EXACT ranges propagated to IDataSource in different cache scenarios.

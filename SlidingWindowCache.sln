@@ -1,5 +1,4 @@
-﻿
-Microsoft Visual Studio Solution File, Format Version 12.00
+﻿Microsoft Visual Studio Solution File, Format Version 12.00
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SlidingWindowCache", "src\SlidingWindowCache\SlidingWindowCache.csproj", "{40C9BEF3-8CFA-43CC-AFE0-7E374DF7F9A5}"
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "SolutionItems", "SolutionItems", "{EB667A96-0E73-48B6-ACC8-C99369A59D0D}"
@@ -25,7 +24,7 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "tests", "tests", "{8C504091
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SlidingWindowCache.Invariants.Tests", "tests\SlidingWindowCache.Invariants.Tests\SlidingWindowCache.Invariants.Tests.csproj", "{17AB54EA-D245-4867-A047-ED55B4D94C17}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SlidingWindowCache.Dependencies.Tests", "tests\SlidingWindowCache.Dependencies.Tests\SlidingWindowCache.Dependencies.Tests.csproj", "{0023794C-FAD3-490C-96E3-448C68ED2569}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SlidingWindowCache.Integration.Tests", "tests\SlidingWindowCache.Integration.Tests\SlidingWindowCache.Integration.Tests.csproj", "{0023794C-FAD3-490C-96E3-448C68ED2569}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution

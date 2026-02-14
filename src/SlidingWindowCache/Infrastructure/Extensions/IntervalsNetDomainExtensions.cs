@@ -81,38 +81,6 @@ internal static class IntervalsNetDomainExtensions
         };
 
     /// <summary>
-    /// Shifts a range by a specified number of steps for any domain type.
-    /// </summary>
-    /// <typeparam name="TRange">The type representing range boundaries.</typeparam>
-    /// <typeparam name="TDomain">The domain type (can be fixed or variable-step).</typeparam>
-    /// <param name="range">The range to shift.</param>
-    /// <param name="domain">The domain defining discrete steps.</param>
-    /// <param name="offset">Number of steps to shift (positive = forward, negative = backward).</param>
-    /// <returns>The shifted range.</returns>
-    /// <remarks>
-    /// Performance: O(1) for fixed-step domains, O(N) for variable-step domains.
-    /// The O(N) cost is acceptable because it represents in-memory computation that is orders of magnitude
-    /// faster than data source I/O operations.
-    /// </remarks>
-    /// <exception cref="NotSupportedException">
-    /// Thrown when the domain does not implement either IFixedStepDomain or IVariableStepDomain.
-    /// </exception>
-    public static Range<TRange> Shift<TRange, TDomain>(
-        this Range<TRange> range,
-        TDomain domain,
-        long offset)
-        where TRange : IComparable<TRange>
-        where TDomain : IRangeDomain<TRange> => domain switch
-        {
-            IFixedStepDomain<TRange> fixedDomain => Intervals.NET.Domain.Extensions.Fixed.RangeDomainExtensions.Shift(range,
-                fixedDomain, offset),
-            IVariableStepDomain<TRange> variableDomain => Intervals.NET.Domain.Extensions.Variable.RangeDomainExtensions
-                .Shift(range, variableDomain, offset),
-            _ => throw new NotSupportedException(
-                $"Domain type {domain.GetType().Name} must implement either IFixedStepDomain<T> or IVariableStepDomain<T>.")
-        };
-
-    /// <summary>
     /// Expands or shrinks a range by a ratio of its size for any domain type.
     /// </summary>
     /// <typeparam name="TRange">The type representing range boundaries.</typeparam>

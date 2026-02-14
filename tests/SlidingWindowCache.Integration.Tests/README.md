@@ -1,9 +1,9 @@
-﻿# SlidingWindowCache - Dependency Contract & Robustness Tests
+﻿# SlidingWindowCache - Integration Contract & Robustness Tests
 
 ## Implementation Summary
 
 ### Overview
-Successfully added comprehensive dependency contract validation and robustness test suites to the SlidingWindowCache.Dependencies.Tests project. These tests validate architectural assumptions about dependencies and system behavior under various conditions.
+Successfully added comprehensive dependency contract validation and robustness test suites to the SlidingWindowCache.Integration.Tests project. These tests validate architectural assumptions about dependencies and system behavior under various conditions.
 
 ### Test Suites Created
 
@@ -273,7 +273,7 @@ All tests adhere to the specified requirements:
 3. `tests/SlidingWindowCache.Dependencies.Tests/CacheDataSourceInteractionTests.cs` - 386 lines
 4. `tests/SlidingWindowCache.Dependencies.Tests/DataSourceRangePropagationTests.cs` - 468 lines
 5. `tests/SlidingWindowCache.Dependencies.Tests/RandomRangeRobustnessTests.cs` - 184 lines
-6. `tests/SlidingWindowCache.Dependencies.Tests/ConcurrencyStabilityTests.cs` - 389 lines
+6. `tests/SlidingWindowCache.Integration.Tests/ConcurrencyStabilityTests.cs` - 389 lines
 
 **Total**: 1,957 lines of new test code
 
@@ -281,7 +281,7 @@ All tests adhere to the specified requirements:
 
 ```powershell
 # Run all dependency tests
-dotnet test tests\SlidingWindowCache.Dependencies.Tests\SlidingWindowCache.Dependencies.Tests.csproj --configuration Debug
+dotnet test tests\SlidingWindowCache.Integration.Tests\SlidingWindowCache.Integration.Tests.csproj --configuration Debug
 
 # Run specific test class
 dotnet test --filter "FullyQualifiedName~RangeSemanticsContractTests"
@@ -295,11 +295,11 @@ dotnet test --configuration Debug --verbosity normal
 
 The new tests complement the existing `SlidingWindowCache.Invariants.Tests` suite:
 - **Invariants.Tests**: Validate 46 system invariants using DEBUG instrumentation
-- **Dependencies.Tests**: Validate external contracts and robustness assumptions
+- **Integration.Tests**: Validate external contracts and robustness assumptions
 
 Together, these provide comprehensive coverage of:
 - Internal invariants and architecture (Invariants.Tests)
-- External contracts and edge cases (Dependencies.Tests)
+- External contracts and edge cases (Integration.Tests)
 
 ### Next Steps
 

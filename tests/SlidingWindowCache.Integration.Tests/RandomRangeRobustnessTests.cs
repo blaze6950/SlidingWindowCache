@@ -1,12 +1,12 @@
 ﻿using Intervals.NET;
 using Intervals.NET.Domain.Default.Numeric;
 using Intervals.NET.Domain.Extensions.Fixed;
-using SlidingWindowCache.Dependencies.Tests.TestInfrastructure;
+using SlidingWindowCache.Integration.Tests.TestInfrastructure;
 using SlidingWindowCache.Infrastructure.Instrumentation;
 using SlidingWindowCache.Public;
 using SlidingWindowCache.Public.Configuration;
 
-namespace SlidingWindowCache.Dependencies.Tests;
+namespace SlidingWindowCache.Integration.Tests;
 
 /// <summary>
 /// Property-based robustness tests using randomized range requests.

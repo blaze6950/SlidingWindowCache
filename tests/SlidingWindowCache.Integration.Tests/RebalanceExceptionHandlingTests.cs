@@ -4,7 +4,7 @@ using SlidingWindowCache.Infrastructure.Instrumentation;
 using SlidingWindowCache.Public;
 using SlidingWindowCache.Public.Configuration;
 
-namespace SlidingWindowCache.Dependencies.Tests;
+namespace SlidingWindowCache.Integration.Tests;
 
 /// <summary>
 /// Tests for validating proper exception handling in background rebalance operations.
