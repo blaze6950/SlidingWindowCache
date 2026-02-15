@@ -19,4 +19,8 @@
         <ProjectReference Include="..\..\src\SlidingWindowCache\SlidingWindowCache.csproj" />
     </ItemGroup>
 
+    <ItemGroup>
+      <Folder Include="Results\" />
+    </ItemGroup>
+
 </Project>
