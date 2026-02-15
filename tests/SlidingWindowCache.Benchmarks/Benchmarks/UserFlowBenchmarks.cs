@@ -53,7 +53,7 @@ public class UserFlowBenchmarks
         Intervals.NET.Factories.Range.Closed<int>(CachedStart, CachedEnd);
 
     private Range<int> InitialCacheRangeAfterRebalance => InitialCacheRange
-        .ExpandByRatio(_domain, 1, 1);
+        .ExpandByRatio(_domain, CacheCoefficientSize, CacheCoefficientSize);
 
     private Range<int> FullHitRange => InitialCacheRangeAfterRebalance
         .ExpandByRatio(_domain, -0.2, -0.2); // 20% inside cached window
