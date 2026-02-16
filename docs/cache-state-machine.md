@@ -283,4 +283,3 @@ The state machine guarantees:
 - Atomic, consistent cache state (Invariants 11, 12)
 - No race conditions (single-writer eliminates mutation conflicts)
 - Safe cancellation at any time (Invariants 34, 34a, 34b)
-````
