@@ -50,7 +50,6 @@ internal sealed class SnapshotReadStorage<TRange, TData, TDomain> : ICacheStorag
         // This is the trade-off of the Snapshot mode
         Range = rangeData.Range;
         _storage = rangeData.Data.ToArray();
-        Range = rangeData.Range;
     }
 
     /// <inheritdoc />
