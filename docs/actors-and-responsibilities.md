@@ -26,7 +26,7 @@ The UserRequestHandler NEVER invokes directly decision logic - it just publishes
 **Responsible for invariants:**
 - -1. User Path and Rebalance Execution never write to cache concurrently
 - 0. User Path has higher priority than rebalance execution
-- 0a. Every User Request MUST cancel any ongoing or pending Rebalance Execution to prevent interference
+- 0a. User Request MAY cancel any ongoing or pending Rebalance Execution ONLY when a new rebalance is validated as necessary
 - 1. User Path always serves user requests
 - 2. User Path never waits for rebalance execution
 - 3. User Path is the sole source of rebalance intent
@@ -54,31 +54,37 @@ The UserRequestHandler NEVER invokes directly decision logic - it just publishes
 ## 2. Rebalance Decision Engine (Pure Decision Actor)
 
 **Role:**  
-Analyzes the need for rebalance and forms intents without mutating system state.
+The **sole authority for rebalance necessity determination**. Analyzes the need for rebalance through multi-stage analytical validation without mutating system state.
 
 **Execution Context:**  
 **Lives in: Background / ThreadPool**
 
 **Visibility:**
 - **Not visible to User Path**
-- Invoked only by RebalanceIntentManager
+- Invoked only by RebalanceScheduler
 - May execute many times, results may be discarded
 
 **Critical Rule:**
 ```
 DecisionEngine lives strictly inside the background contour.
+DecisionEngine is the ONLY authority for rebalance necessity determination.
 ```
 
+**Multi-Stage Validation Pipeline:**
+1. **Stage 1**: Current Cache NoRebalanceRange containment check (fast path)
+2. **Stage 2**: Pending Desired Cache NoRebalanceRange validation (anti-thrashing, conceptual)
+3. **Stage 3**: DesiredCacheRange vs CurrentCacheRange equality check
+
 **Responsible for invariants:**
-- 24. Decision Path is purely analytical
+- 24. Decision Path is purely analytical (CPU-only, no I/O)
 - 25. Never mutates cache state
-- 26. No rebalance if inside NoRebalanceRange
-- 27. No rebalance if DesiredCacheRange == CurrentCacheRange
-- 28. Rebalance triggered only if confirmed necessary
+- 26. No rebalance if inside NoRebalanceRange (Stage 1 validation)
+- 27. No rebalance if DesiredCacheRange == CurrentCacheRange (Stage 3 validation)
+- 28. Rebalance triggered only if ALL validation stages confirm necessity
 
-**Responsibility Type:** ensures correctness of decisions
+**Responsibility Type:** ensures correctness of rebalance necessity decisions through analytical validation
 
-**Note:** Not a top-level actor — internal tool of IntentManager/Executor pipeline.
+**Note:** Not a top-level actor — internal tool of IntentManager/Executor pipeline, but THE authority for necessity determination.
 
 ---
 
@@ -113,7 +119,7 @@ This logical actor is internally decomposed into two components for separation o
 ## 4. Rebalance Intent Manager (Intent & Concurrency Actor)
 
 **Role:**  
-Manages lifecycle of rebalance intents and prevents races and stale applications.
+Manages lifecycle of rebalance intents, orchestrates decision pipeline, and coordinates cancellation based on validation results.
 
 **Implementation:**
 This logical actor is internally decomposed into two components for separation of concerns:
@@ -128,28 +134,31 @@ This logical actor is internally decomposed into two components for separation o
 Now responsible for:
 - **Receiving intents** (on every user request) [Intent Controller]
 - **Intent identity and versioning** [Intent Controller]
-- **Cancellation** of obsolete intents [Intent Controller]
+- **Cancellation coordination** based on validation results [Intent Controller]
 - **Deduplication** and debouncing [Execution Scheduler]
 - **Single-flight execution** enforcement [Execution Scheduler]
 - **Starting background tasks** [Execution Scheduler]
 - **Orchestrating the decision pipeline**: [Execution Scheduler]
-  1. Invoke DecisionEngine
-  2. If allowed, invoke Executor
-  3. Handle cancellation
+  1. Invoke DecisionEngine (multi-stage validation)
+  2. If ALL stages pass validation, invoke Executor
+  3. If validation rejects, skip execution (no-op)
+  4. Handle cancellation when new validated rebalance is needed
 
-**Authority:** *Owns time and concurrency.*
+**Authority:** *Owns time and concurrency, orchestrates validation-driven execution.*
+
+**Key Principle:** Cancellation is mechanical coordination (prevents concurrent executions), NOT a decision mechanism. The DecisionEngine determines rebalance necessity; the Intent Manager coordinates execution based on those decisions.
 
 **Responsible for invariants:**
 - 17. At most one active rebalance intent
-- 18. Older intents become obsolete
-- 19. Executions can be cancelled or ignored
+- 18. Older intents may become logically superseded
+- 19. Executions can be cancelled based on validation results
 - 20. Obsolete intent must not start execution
 - 21. At most one rebalance execution active
-- 22. Execution reflects latest access pattern
-- 23. System eventually stabilizes under load
-- 24. Intent does not guarantee execution - execution is opportunistic
+- 22. Execution reflects latest access pattern and validated necessity
+- 23. System eventually stabilizes under load through work avoidance
+- 24. Intent does not guarantee execution - execution is opportunistic and validation-driven
 
-**Responsibility Type:** controls and coordinates intent execution
+**Responsibility Type:** controls and coordinates intent execution based on validation results
 
 **Note:** Internally decomposed into Intent Controller + Execution Scheduler,
 but externally appears as a single unified actor.
@@ -159,7 +168,7 @@ but externally appears as a single unified actor.
 ## 5. Rebalance Executor (Single-Writer Actor)
 
 **Role:**  
-The **ONLY component** that mutates cache state (single-writer architecture). Responsible for cache normalization using delivered data from intent as authoritative source.
+The **ONLY component** that mutates cache state (single-writer architecture). Performs mechanical cache normalization using delivered data from intent as authoritative source. **Intentionally simple**: no analytical decisions, assumes decision layer already validated necessity.
 
 **Execution Context:**  
 **Lives in: Background / ThreadPool**
@@ -171,6 +180,14 @@ Rebalance Executor is the ONLY component that mutates:
 - `NoRebalanceRange` field
 
 This eliminates race conditions and ensures consistent cache state.
+
+**Critical Principle:**
+Executor is **mechanically simple** with no analytical logic:
+- Does NOT validate rebalance necessity (DecisionEngine already validated)
+- Does NOT check NoRebalanceRange (validation stage 1 already passed)
+- Does NOT compute whether Desired == Current (validation stage 3 already passed)
+- Assumes decision pipeline already confirmed necessity
+- Performs only: fetch missing data, merge with delivered data, trim to desired range, write atomically
 
 **Responsible for invariants:**
 - 4. Rebalance is asynchronous relative to User Path
@@ -192,14 +209,14 @@ This eliminates race conditions and ensures consistent cache state.
 - 40. Upon completion: CurrentCacheRange == DesiredCacheRange
 - 41. Upon completion: NoRebalanceRange recomputed
 
-**Responsibility Type:** executes rebalance and normalizes cache (cancellable, never concurrent with User Path)
+**Responsibility Type:** executes rebalance and normalizes cache (cancellable, never concurrent with User Path, assumes validated necessity)
 
 ---
 
 ## 6. Cache State Manager (Consistency & Atomicity Actor)
 
 **Role:**  
-Ensures atomicity and internal consistency of cache state, coordinates cancellation between User Path and Rebalance Execution.
+Ensures atomicity and internal consistency of cache state, coordinates cancellation between User Path and Rebalance Execution based on validation results.
 
 **Responsible for invariants:**
 - 11. CacheData and CurrentCacheRange are consistent
@@ -208,9 +225,9 @@ Ensures atomicity and internal consistency of cache state, coordinates cancellat
 - 14. Temporary inefficiencies are acceptable
 - 15. Partial / cancelled execution cannot break consistency
 - 16. Only latest intent results may be applied
-- 0a. Coordinates cancellation: User Request cancels ongoing/pending Rebalance before mutation
+- 0a. Coordinates cancellation: User Request cancels ongoing/pending Rebalance ONLY when validation confirms new rebalance is necessary
 
-**Responsibility Type:** guarantees state correctness and mutual exclusion
+**Responsibility Type:** guarantees state correctness and coordinates single-writer execution
 
 ---
 

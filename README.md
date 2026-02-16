@@ -1,6 +1,6 @@
 # Sliding Window Cache
 
-**A read-only, range-based, sequential-optimized cac~~~~he with background rebalancing and cancellation-aware prefetching.**
+**A read-only, range-based, sequential-optimized cache with background rebalancing and intelligent prefetching.**
 
 ---
 
@@ -38,10 +38,12 @@ The Sliding Window Cache is a high-performance caching library designed for scen
 
 - **Automatic Prefetching**: Intelligently prefetches data on both sides of requested ranges based on configurable coefficients
 - **Background Rebalancing**: Asynchronously adjusts the cache window when access patterns change, with debouncing to avoid thrashing
-- **Cancellation-Aware**: Full support for `CancellationToken` throughout the async pipeline
+- **Multi-Stage Rebalance Validation**: CPU-only analytical decision pipeline determines rebalance necessity through NoRebalanceRange validation and cache geometry analysis
+- **Opportunistic Execution**: Rebalance operations may be skipped when validation determines they are unnecessary (intent represents observed access, not mandatory work)
 - **Range-Based Operations**: Built on top of the [`Intervals.NET`](https://github.com/blaze6950/Intervals.NET) library for robust range handling
 - **Configurable Read Modes**: Choose between different materialization strategies based on your performance requirements
 - **Optional Diagnostics**: Built-in instrumentation for monitoring cache behavior and validating system invariants
+- **Full Cancellation Support**: User-provided `CancellationToken` propagates through the async pipeline
 
 ---
 
@@ -424,9 +426,11 @@ For detailed architectural documentation, see:
 ### Key Architectural Principles
 
 1. **Cache Contiguity**: Cache data must always remain contiguous (no gaps). Non-intersecting requests fully replace the cache.
-2. **User Priority**: User requests always cancel ongoing/pending rebalance operations to maintain responsiveness.
-3. **Single-Writer Architecture**: Only Rebalance Execution writes to cache state; User Path is read-only.
-4. **Lock-Free Concurrency**: Intent management uses `Interlocked.Exchange` for atomic operations - no locks, no race conditions, guaranteed progress. Validated under concurrent load in test suite.
+2. **Multi-Stage Rebalance Validation**: Rebalance necessity determined by CPU-only analytical decision pipeline (NoRebalanceRange validation, cache geometry analysis). Rebalance is opportunistic and may be skipped when validation determines it's unnecessary.
+3. **Intent Semantics**: Intents represent observed access patterns (signals), not mandatory work (commands). Publishing an intent does not guarantee rebalance execution.
+4. **Single-Writer Architecture**: Only Rebalance Execution writes to cache state; User Path is read-only. Cancellation serves as mechanical coordination tool (prevents concurrent executions), not a decision mechanism.
+5. **User Path Priority**: User requests always served immediately. When rebalance validation confirms necessity, pending rebalance is cancelled and rescheduled with new validated parameters.
+6. **Lock-Free Concurrency**: Intent management uses `Interlocked.Exchange` for atomic operations - no locks, no race conditions, guaranteed progress. Validated under concurrent load in test suite.
 
 ---
 

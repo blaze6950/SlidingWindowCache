@@ -92,16 +92,19 @@ The cache exists in one of three states:
 - **Trigger:** User request (any scenario)
 - **Actor:** User Path (reads), Rebalance Executor (writes)
 - **Sequence:**
-  1. User Path cancels any pending rebalance
-  2. User Path reads from cache or fetches from IDataSource (NO cache mutation)
-  3. User Path returns data to user immediately
-  4. User Path publishes intent with delivered data
-  5. Rebalance Execution writes to cache (background)
+  1. User Path reads from cache or fetches from IDataSource (NO cache mutation)
+  2. User Path returns data to user immediately
+  3. User Path publishes intent with delivered data
+  4. Rebalance Decision Engine validates necessity via multi-stage pipeline
+  5. If validation confirms necessity, pending rebalance is cancelled and new execution scheduled
+  6. If validation rejects (NoRebalanceRange containment, Desired==Current), no cancellation occurs
+  7. Rebalance Execution writes to cache (background, only if validated)
 - **Mutation:** Performed by Rebalance Execution ONLY
   - User Path does NOT mutate cache, LastRequested, or NoRebalanceRange
-  - Rebalance Execution normalizes cache to DesiredCacheRange
+  - Rebalance Execution normalizes cache to DesiredCacheRange (only if validated)
 - **Concurrency:** User Path is read-only; no race conditions
-- **Postcondition:** Cache logically enters `Rebalancing` state (background process active)
+- **Cancellation:** Driven by validation results, not automatic
+- **Postcondition:** Cache logically enters `Rebalancing` state (background process active, only if validated)
 
 ### T3: Rebalancing → Initialized (Rebalance Completion)
 - **Trigger:** Rebalance execution completes successfully
@@ -119,16 +122,18 @@ The cache exists in one of three states:
 
 ### T4: Rebalancing → Initialized (User Request Cancels Rebalance)
 - **Trigger:** User request arrives during rebalance execution (Scenarios C1, C2)
-- **Actor:** User Path (cancels), Rebalance Execution (yields)
+- **Actor:** User Path (publishes intent), Rebalance Decision Engine (validates), Rebalance Execution (yields if cancelled)
 - **Sequence:**
-  1. **User Path cancels ongoing/pending rebalance** (Invariant 0a)
-  2. User Path reads from cache or fetches from IDataSource (NO cache mutation)
-  3. User Path returns data to user immediately
-  4. User Path publishes new intent with delivered data
-  5. New rebalance execution begins (background)
-- **Critical Rule:** User Path does NOT mutate cache; only cancels to prevent interference (Invariant 0)
-- **Priority:** User Path always has priority, ensured via cancellation not mutation exclusion
-- **Note:** Cancelled rebalance yields; new rebalance uses new intent's delivered data
+  1. User Path reads from cache or fetches from IDataSource (NO cache mutation)
+  2. User Path returns data to user immediately
+  3. User Path publishes new intent with delivered data
+  4. Rebalance Decision Engine validates necessity of new rebalance
+  5. **If validation confirms necessity**, pending rebalance is cancelled and new execution scheduled
+  6. **If validation rejects**, pending rebalance continues (no cancellation)
+  7. Cancelled rebalance yields; new rebalance uses new intent's delivered data (if validated)
+- **Critical Rule:** User Path does NOT mutate cache; validation determines if cancellation occurs
+- **Priority:** User Path priority enforced via validation-driven cancellation, not automatic cancellation
+- **Note:** Cancellation is mechanical coordination (single-writer), not a decision mechanism
 
 ---
 

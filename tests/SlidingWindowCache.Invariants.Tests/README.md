@@ -3,7 +3,11 @@
 ## Overview
 Comprehensive unit test suite for the WindowCache library verifying system invariants through the public API using DEBUG-only instrumentation counters.
 
-**Architecture**: Single-Writer Model (User Path is read-only, Rebalance Execution is sole writer)
+**Architecture**: Single-Writer Model with Multi-Stage Rebalance Validation
+- User Path is read-only (never mutates cache)
+- Rebalance Execution is sole writer (single-writer architecture)
+- Rebalance necessity determined by multi-stage analytical validation pipeline
+- Cancellation is coordination tool (prevents concurrent executions), not decision mechanism
 
 **Test Statistics**:
 - **Total Tests**: 27 automated tests (all passing)
@@ -111,8 +115,8 @@ not actual cache mutations. Actual mutations only occur in Rebalance Execution v
 
 **C. Rebalance Intent & Temporal (4 tests)**
 - C.17: At most one active intent
-- C.18: Previous intent becomes obsolete
-- C.24: Intent doesn't guarantee execution (opportunistic)
+- C.18: Previous intent becomes logically superseded (execution relevance determined by multi-stage validation)
+- C.24: Intent doesn't guarantee execution (opportunistic, validation-driven)
 - C.23: System stabilizes under load
 
 **D. Rebalance Decision Path (2 tests + TODOs)**

@@ -24,7 +24,8 @@ The cache implements a **single-writer** concurrency model:
 
 - **One Writer:** Rebalance Execution Path exclusively
 - **Read-Only User Path:** User Path never mutates cache state
-- **No Locks:** Coordination via cancellation, not mutual exclusion
+- **Coordination via Cancellation:** Cancellation prevents concurrent executions (mechanical coordination), not duplicate decision-making
+- **Rebalance Decision Validation:** Multi-stage analytical pipeline determines rebalance necessity (CPU-only, no I/O)
 - **Eventual Consistency:** Cache state converges asynchronously to optimal configuration
 
 ### Write Ownership
@@ -41,8 +42,22 @@ All other components have read-only access to cache state.
 User Path safely reads cache state without locks because:
 - User Path never writes to cache (read-only guarantee)
 - Rebalance Execution performs atomic updates via `Rematerialize()`
-- Cancellation ensures Rebalance Execution yields before User Path operations
+- Cancellation ensures Rebalance Execution yields when new validated rebalance is scheduled
 - Single-writer eliminates race conditions
+
+### Rebalance Validation vs Cancellation
+
+**Key Distinction:**
+- **Rebalance Validation** = Decision mechanism (analytical, CPU-only, determines necessity)
+- **Cancellation** = Coordination mechanism (mechanical, prevents concurrent executions)
+
+**User Path Priority Model:**
+1. User Path publishes intent with delivered data
+2. Rebalance Decision Engine validates necessity via multi-stage pipeline
+3. If validation confirms necessity, pending rebalance is cancelled and new execution scheduled
+4. If validation rejects (NoRebalanceRange containment, Desired==Current), no cancellation occurs
+
+**Cancellation does NOT drive decisions; validated rebalance necessity drives cancellation.**
 
 ### Eventual Consistency Model
 
@@ -50,9 +65,10 @@ Cache state converges to optimal configuration asynchronously:
 
 1. **User Path** returns correct data immediately (from cache or IDataSource)
 2. **User Path** publishes intent with delivered data
-3. **Cache state** updates occur in background via Rebalance Execution
-4. **Debounce delay** controls convergence timing
-5. **User correctness** never depends on cache state being up-to-date
+3. **Rebalance Decision Engine** validates rebalance necessity (multi-stage pipeline)
+4. **Cache state** updates occur in background via Rebalance Execution (only if validated)
+5. **Debounce delay** controls convergence timing
+6. **User correctness** never depends on cache state being up-to-date
 
 **Key insight:** User always receives correct data, regardless of whether cache has converged yet.
 
@@ -94,10 +110,11 @@ This is not a concurrency bug — it is a **model mismatch**.
 ### 2. Rebalance Logic Depends on a Single Timeline
 
 Rebalance behavior relies on:
-- ordered intents
-- cancellation of obsolete work
-- "latest access wins" semantics
-- eventual stabilization
+- ordered intents representing sequential access observations
+- multi-stage validation determining rebalance necessity
+- cancellation of pending work when validation confirms new rebalance needed
+- "latest validated decision wins" semantics
+- eventual stabilization through work avoidance (NoRebalanceRange, Desired==Current checks)
 
 These guarantees require a **single temporal sequence of access events**.
 

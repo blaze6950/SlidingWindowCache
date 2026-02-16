@@ -8,8 +8,9 @@ This document provides a comprehensive map of all components in the Sliding Wind
 - Read/write patterns
 - Data flow diagrams
 - Thread safety model
+- Rebalance Decision Model and multi-stage validation pipeline
 
-**Last Updated**: February 8, 2026
+**Last Updated**: February 16, 2026
 
 ---
 
@@ -98,6 +99,80 @@ This document provides a comprehensive map of all components in the Sliding Wind
     └── 🟦 CacheDataExtensionService<TRange, TData, TDomain>
         └── uses → 🟧 IDataSource<TRange, TData> (user-provided)
 ```
+
+---
+
+## Rebalance Decision Model & Validation Pipeline
+
+### Core Conceptual Framework
+
+The system uses a **multi-stage rebalance decision pipeline**, not a cancellation policy. This section clarifies the conceptual model that drives the architecture.
+
+#### Key Distinctions
+
+**Rebalance Validation vs Cancellation:**
+- **Rebalance Validation** = Analytical decision mechanism (determines necessity)
+- **Cancellation** = Mechanical coordination tool (prevents concurrent executions)
+- Cancellation is NOT a decision mechanism; it ensures single-writer architecture
+
+**Intent Semantics:**
+- Intent = Access signal ("user accessed this range"), NOT command ("must rebalance")
+- Publishing intent does NOT guarantee execution (opportunistic behavior)
+- Execution determined by multi-stage validation, not intent existence
+
+### Multi-Stage Validation Pipeline
+
+**Authority**: `RebalanceDecisionEngine` is the sole authority for rebalance necessity determination.
+
+**Pipeline Stages** (all must pass for execution):
+
+1. **Stage 1: Current Cache NoRebalanceRange Validation**
+   - Component: `ThresholdRebalancePolicy.ShouldRebalance()`
+   - Check: Is RequestedRange contained in NoRebalanceRange(CurrentCacheRange)?
+   - Purpose: Fast-path rejection if current cache provides sufficient buffer
+   - Result: Skip if contained (no I/O needed)
+
+2. **Stage 2: Pending Desired Cache NoRebalanceRange Validation** (anti-thrashing)
+   - Conceptual: Check if pending rebalance will satisfy request
+   - Check: Is RequestedRange contained in NoRebalanceRange(PendingDesiredCacheRange)?
+   - Purpose: Prevent oscillating cache geometry (thrashing)
+   - Result: Skip if pending rebalance covers request
+   - Note: May be implemented via cancellation timing optimization
+
+3. **Stage 3: DesiredCacheRange vs CurrentCacheRange Equality**
+   - Component: `RebalanceExecutor.ExecuteAsync()` (early exit optimization)
+   - Check: Does computed DesiredCacheRange == CurrentCacheRange?
+   - Purpose: Avoid no-op mutations
+   - Result: Skip if cache already in optimal configuration
+
+**Execution Rule**: Rebalance executes ONLY if ALL stages confirm necessity.
+
+### Component Responsibilities in Decision Model
+
+| Component | Role | Decision Authority |
+|-----------|------|-------------------|
+| **UserRequestHandler** | Read-only; publishes intents with delivered data | No decision authority |
+| **IntentController** | Manages intent lifecycle; coordinates cancellation | No decision authority |
+| **RebalanceScheduler** | Orchestrates validation pipeline timing | No decision authority |
+| **RebalanceDecisionEngine** | **SOLE AUTHORITY** for necessity determination | **Yes - THE authority** |
+| **ThresholdRebalancePolicy** | Stage 1 validation (NoRebalanceRange check) | Analytical input |
+| **ProportionalRangePlanner** | Computes desired cache geometry | Analytical input |
+| **RebalanceExecutor** | Mechanical execution; assumes validated necessity | No decision authority |
+
+### System Stability Principle
+
+The system prioritizes **decision correctness and work avoidance** over aggressive rebalance responsiveness.
+
+**Work Avoidance Mechanisms:**
+- Stage 1: Avoid rebalance if current cache sufficient
+- Stage 2: Avoid redundant rebalance if pending execution covers request
+- Stage 3: Avoid no-op mutations if cache already optimal
+
+**Trade-offs:**
+- ✅ Prevents thrashing and oscillation
+- ✅ Reduces redundant I/O operations
+- ✅ Improves system stability under rapid access pattern changes
+- ⚠️ May delay cache optimization by debounce period
 
 ---
 
@@ -817,7 +892,7 @@ internal sealed class RebalanceDecisionEngine<TRange, TDomain>
 
 **Type**: Class (sealed)
 
-**Role**: Pure Decision Logic
+**Role**: Pure Decision Logic - **SOLE AUTHORITY for Rebalance Necessity Determination**
 
 **Fields** (all readonly, value types):
 - `ThresholdRebalancePolicy<TRange, TDomain> _policy` (struct, copied)
@@ -829,14 +904,15 @@ public RebalanceDecision<TRange> ShouldExecuteRebalance(
     Range<TRange> requestedRange,
     Range<TRange>? noRebalanceRange)
 {
-    // Decision Path D1: Check NoRebalanceRange (fast path)
+    // Stage 1: Current Cache NoRebalanceRange validation (fast path)
     if (noRebalanceRange.HasValue && 
         !_policy.ShouldRebalance(noRebalanceRange.Value, requestedRange))
     {
         return RebalanceDecision<TRange>.Skip();
     }
     
-    // Decision Path D2/D3: Compute DesiredCacheRange
+    // Stage 3: Compute DesiredCacheRange and return for execution
+    // (Stage 2 may be handled by cancellation timing optimization)
     var desiredRange = _planner.Plan(requestedRange);
     
     return RebalanceDecision<TRange>.Execute(desiredRange);
@@ -844,15 +920,22 @@ public RebalanceDecision<TRange> ShouldExecuteRebalance(
 ```
 
 **Characteristics**:
-- ✅ **Pure function** (no side effects)
+- ✅ **Pure function** (no side effects, CPU-only, no I/O)
 - ✅ **Deterministic** (same inputs → same outputs)
 - ✅ **Stateless** (composes value-type policies)
+- ✅ **THE authority** for rebalance necessity determination
 - ✅ Invoked only in background
 - ❌ Not visible to User Path
 
+**Decision Authority**:
+- **This component is the SOLE AUTHORITY** for determining whether rebalance is necessary
+- All execution decisions flow from this component's analytical validation
+- No other component may override or bypass these decisions
+- Executor assumes necessity already validated when invoked
+
 **Uses**:
-- ◇ `_policy.ShouldRebalance()` - check NoRebalanceRange containment
-- ◇ `_planner.Plan()` - compute DesiredCacheRange
+- ◇ `_policy.ShouldRebalance()` - Stage 1: NoRebalanceRange containment check
+- ◇ `_planner.Plan()` - Compute DesiredCacheRange for execution
 
 **Returns**: `RebalanceDecision<TRange>` (struct)
 
@@ -861,15 +944,18 @@ public RebalanceDecision<TRange> ShouldExecuteRebalance(
 **Execution Context**: Background / ThreadPool
 
 **Responsibilities**: 
-- Evaluate if rebalance is needed
-- Check NoRebalanceRange
-- Compute DesiredCacheRange
+- **THE authority** for rebalance necessity determination
+- Evaluate if rebalance is needed through multi-stage validation
+- Stage 1: Check NoRebalanceRange (fast path rejection)
+- Stage 3: Compute DesiredCacheRange (execution parameters)
+- Produce analytical decision (execute or skip)
 
 **Invariants Enforced**:
-- 24: Decision path is purely analytical
-- 25: Never mutates cache state
-- 26: No rebalance if inside NoRebalanceRange
-- 27: No rebalance if DesiredCacheRange == CurrentCacheRange
+- D.25: Decision path is purely analytical (CPU-only, no I/O)
+- D.26: Never mutates cache state
+- D.27: No rebalance if inside NoRebalanceRange (Stage 1 validation)
+- D.28: No rebalance if DesiredCacheRange == CurrentCacheRange (Stage 3 validation)
+- D.29: Rebalance executes ONLY if ALL stages confirm necessity
 
 ---
 
