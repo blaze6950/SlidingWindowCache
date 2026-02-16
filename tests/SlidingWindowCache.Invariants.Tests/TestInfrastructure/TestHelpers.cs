@@ -90,118 +90,45 @@ public static class TestHelpers
         {
             // For closed ranges [start, end], data should be sequential from start
             case { IsStartInclusive: true, IsEndInclusive: true }:
+            {
+                for (var i = 0; i < span.Length; i++)
                 {
-                    for (var i = 0; i < span.Length; i++)
-                    {
-                        Assert.Equal(start + i, span[i]);
-                    }
-
-                    break;
+                    Assert.Equal(start + i, span[i]);
                 }
+
+                break;
+            }
             case { IsStartInclusive: true, IsEndInclusive: false }:
+            {
+                // [start, end) - start inclusive, end exclusive
+                for (var i = 0; i < span.Length; i++)
                 {
-                    // [start, end) - start inclusive, end exclusive
-                    for (var i = 0; i < span.Length; i++)
-                    {
-                        Assert.Equal(start + i, span[i]);
-                    }
-
-                    break;
+                    Assert.Equal(start + i, span[i]);
                 }
+
+                break;
+            }
             case { IsStartInclusive: false, IsEndInclusive: true }:
+            {
+                // (start, end] - start exclusive, end inclusive
+                for (var i = 0; i < span.Length; i++)
                 {
-                    // (start, end] - start exclusive, end inclusive
-                    for (var i = 0; i < span.Length; i++)
-                    {
-                        Assert.Equal(start + 1 + i, span[i]);
-                    }
-
-                    break;
+                    Assert.Equal(start + 1 + i, span[i]);
                 }
+
+                break;
+            }
             default:
+            {
+                // (start, end) - both exclusive
+                for (var i = 0; i < span.Length; i++)
                 {
-                    // (start, end) - both exclusive
-                    for (var i = 0; i < span.Length; i++)
-                    {
-                        Assert.Equal(start + 1 + i, span[i]);
-                    }
-
-                    break;
+                    Assert.Equal(start + 1 + i, span[i]);
                 }
-        }
-    }
 
-    /// <summary>
-    /// Waits for background rebalance to settle by polling instrumentation counters until the rebalance
-    /// lifecycle stabilizes and counters remain unchanged for a stability window.
-    /// </summary>
-    /// <remarks>
-    /// <para>
-    /// This method eliminates test flakiness caused by timing dependencies and scheduler randomness
-    /// by actively monitoring the rebalance lifecycle through instrumentation counters rather than
-    /// relying on hardcoded delays.
-    /// </para>
-    /// <para><strong>Algorithm:</strong></para>
-    /// <list type="number">
-    /// <item>
-    /// <description>Poll counters every <paramref name="pollingIntervalMs"/> milliseconds.</description>
-    /// </item>
-    /// <item>
-    /// <description>Check if rebalance lifecycle is complete:
-    /// <c>RebalanceExecutionStarted == RebalanceExecutionCompleted + RebalanceExecutionCancelled</c></description>
-    /// </item>
-    /// <item>
-    /// <description>Once lifecycle is complete, verify counters remain stable (unchanged) for
-    /// <paramref name="stabilityWindowMs"/> milliseconds to ensure no new rebalance starts.</description>
-    /// </item>
-    /// <item>
-    /// <description>If lifecycle doesn't complete within <paramref name="maxTimeoutMs"/>, throw
-    /// <see cref="TimeoutException"/> with diagnostic counter snapshot.</description>
-    /// </item>
-    /// </list>
-    /// <para>
-    /// <strong>Edge case:</strong> If no rebalance was started (all counters are zero), the method
-    /// returns immediately as the system is already "settled".
-    /// </para>
-    /// </remarks>
-    /// <param name="pollingIntervalMs">Interval between counter polls in milliseconds (default: 10ms).</param>
-    /// <param name="stabilityWindowMs">Duration counters must remain stable in milliseconds (default: 100ms).</param>
-    /// <param name="maxTimeoutMs">Maximum wait time before throwing TimeoutException (default: 5000ms).</param>
-    /// <exception cref="TimeoutException">Thrown when rebalance doesn't settle within <paramref name="maxTimeoutMs"/>.</exception>
-    /// <summary>
-    /// Waits for any pending background rebalance operations to complete.
-    /// Uses deterministic Task lifecycle tracking instead of counter polling.
-    /// </summary>
-    /// <param name="cache">The cache instance to wait for. If null, returns immediately (for cleanup scenarios).</param>
-    /// <param name="timeout">Maximum time to wait. Defaults to 30 seconds.</param>
-    /// <returns>A task that completes when background rebalance operations have finished.</returns>
-    /// <remarks>
-    /// <para><strong>Deterministic Synchronization:</strong></para>
-    /// <para>
-    /// This method uses the cache's WaitForIdleAsync() API which implements an observe-and-stabilize
-    /// pattern based on Task lifecycle tracking, providing race-free synchronization without
-    /// relying on instrumentation counters or polling.
-    /// </para>
-    /// <para>
-    /// The method delegates to RebalanceScheduler's Task tracking mechanism, which ensures
-    /// that no rebalance execution is running when the wait completes, even under concurrent
-    /// intent cancellation and rescheduling.
-    /// </para>
-    /// </remarks>
-    public static async Task WaitForRebalanceToSettleAsync(
-        WindowCache<int, int, IntegerFixedStepDomain>? cache = null,
-        TimeSpan? timeout = null)
-    {
-        if (cache == null)
-        {
-            // No cache instance - used in test cleanup scenarios
-            // Wait a short period to allow any lingering background work to complete
-            await Task.Delay(100);
-            return;
+                break;
+            }
         }
-
-        // Delegate to cache's deterministic idle synchronization
-        await cache.WaitForIdleAsync(timeout);
     }
 
     /// <summary>
@@ -315,7 +242,7 @@ public static class TestHelpers
         Range<int> range)
     {
         var data = await cache.GetDataAsync(range, CancellationToken.None);
-        await WaitForRebalanceToSettleAsync(cache);
+        await cache.WaitForIdleAsync();
         return data;
     }
 
@@ -372,12 +299,12 @@ public static class TestHelpers
     /// <item>
     /// <description><strong>Intent-level cancellation</strong>: When a new request arrives while the previous
     /// rebalance is still in debounce delay (before execution starts). This increments
-    /// <see cref="CacheInstrumentationCounters.RebalanceIntentCancelled"/>.</description>
+    /// <see cref="EventCounterCacheDiagnostics.RebalanceIntentCancelled"/>.</description>
     /// </item>
     /// <item>
     /// <description><strong>Execution-level cancellation</strong>: When a new request arrives after the debounce
     /// delay completed and execution has started. This increments
-    /// <see cref="CacheInstrumentationCounters.RebalanceExecutionCancelled"/>.</description>
+    /// <see cref="EventCounterCacheDiagnostics.RebalanceExecutionCancelled"/>.</description>
     /// </item>
     /// </list>
     /// <para>
@@ -386,6 +313,9 @@ public static class TestHelpers
     /// specific lifecycle stage where it happened.
     /// </para>
     /// </remarks>
+    /// <param name="cacheDiagnostics">
+    /// The diagnostics instance to check for cancellation counts. The method will sum both intent and execution cancellations to determine if the expected number of cancellations occurred.
+    /// </param>
     /// <param name="minExpected">Minimum number of total cancellations expected (default: 1).</param>
     public static void AssertRebalancePathCancelled(EventCounterCacheDiagnostics cacheDiagnostics, int minExpected = 1)
     {

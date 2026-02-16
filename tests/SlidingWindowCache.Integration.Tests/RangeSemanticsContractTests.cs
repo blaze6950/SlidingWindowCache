@@ -214,7 +214,7 @@ public sealed class RangeSemanticsContractTests : IAsyncDisposable
         var data1 = await cache.GetDataAsync(range1, CancellationToken.None);
 
         // Wait for background rebalance to complete
-        await Task.Delay(200);
+        await cache.WaitForIdleAsync();
 
         // Second request should hit expanded cache
         var range2 = Intervals.NET.Factories.Range.Closed<int>(105, 115);

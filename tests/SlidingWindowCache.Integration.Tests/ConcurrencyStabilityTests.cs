@@ -22,12 +22,13 @@ public sealed class ConcurrencyStabilityTests : IAsyncDisposable
     private readonly IntegerFixedStepDomain _domain;
     private readonly SpyDataSource _dataSource;
     private WindowCache<int, int, IntegerFixedStepDomain>? _cache;
-    private EventCounterCacheDiagnostics _cacheDiagnostics;
+    private readonly EventCounterCacheDiagnostics _cacheDiagnostics;
 
     public ConcurrencyStabilityTests()
     {
         _domain = new IntegerFixedStepDomain();
         _dataSource = new SpyDataSource();
+        _cacheDiagnostics = new EventCounterCacheDiagnostics();
     }
 
     /// <summary>
@@ -42,7 +43,6 @@ public sealed class ConcurrencyStabilityTests : IAsyncDisposable
 
     private WindowCache<int, int, IntegerFixedStepDomain> CreateCache(WindowCacheOptions? options = null)
     {
-        _cacheDiagnostics = new EventCounterCacheDiagnostics();
         return _cache = new WindowCache<int, int, IntegerFixedStepDomain>(
             _dataSource,
             _domain,
@@ -81,9 +81,9 @@ public sealed class ConcurrencyStabilityTests : IAsyncDisposable
         // ASSERT - All requests completed successfully
         Assert.Equal(concurrentRequests, results.Length);
 
-        for (var i = 0; i < results.Length; i++)
+        foreach (var t in results)
         {
-            Assert.Equal(21, results[i].Length); // Each range has 21 elements
+            Assert.Equal(21, t.Length); // Each range has 21 elements
         }
 
         // ASSERT - IDataSource was called and handled concurrent requests
@@ -91,10 +91,8 @@ public sealed class ConcurrencyStabilityTests : IAsyncDisposable
 
         // Verify all requested ranges are valid
         var allRanges = _dataSource.GetAllRequestedRanges();
-        Assert.All(allRanges, range =>
-        {
-            Assert.True((int)range.Start <= (int)range.End, "All concurrent ranges should be valid");
-        });
+        Assert.All(allRanges,
+            range => { Assert.True((int)range.Start <= (int)range.End, "All concurrent ranges should be valid"); });
     }
 
     [Fact]
@@ -304,9 +302,9 @@ public sealed class ConcurrencyStabilityTests : IAsyncDisposable
             {
                 _ = Task.Run(async () =>
                 {
-                    await Task.Delay(5);
-                    cts.Cancel();
-                });
+                    await Task.Delay(5, CancellationToken.None);
+                    await cts.CancelAsync();
+                }, CancellationToken.None);
             }
         }
 
@@ -370,7 +368,7 @@ public sealed class ConcurrencyStabilityTests : IAsyncDisposable
 
         // Warm up cache
         await cache.GetDataAsync(baseRange, CancellationToken.None);
-        await Task.Delay(100);
+        await cache.WaitForIdleAsync();
 
         var initialFetchCount = _dataSource.TotalFetchCount;
 
@@ -405,10 +403,11 @@ public sealed class ConcurrencyStabilityTests : IAsyncDisposable
 
         // Verify no malformed ranges during concurrent access
         var allRanges = _dataSource.GetAllRequestedRanges();
-        Assert.All(allRanges, range =>
-        {
-            Assert.True((int)range.Start <= (int)range.End, "No data races should produce invalid ranges");
-        });
+        Assert.All(allRanges,
+            range =>
+            {
+                Assert.True((int)range.Start <= (int)range.End, "No data races should produce invalid ranges");
+            });
     }
 
     #endregion
