@@ -1,0 +1,696 @@
+﻿# Cache Diagnostics - Instrumentation and Observability
+
+## Overview
+
+The Sliding Window Cache provides optional diagnostics instrumentation for monitoring cache behavior, measuring performance, validating system invariants, and understanding operational characteristics. The diagnostics system is designed as a **zero-cost abstraction** - when not used, it adds absolutely no runtime overhead.
+
+---
+
+## Purpose and Use Cases
+
+### Primary Use Cases
+
+1. **Testing and Validation**
+   - Verify cache behavior matches expected patterns
+   - Validate system invariants during test execution
+   - Assert specific cache scenarios (hit/miss patterns, rebalance lifecycle)
+   - Enable deterministic testing with observable state
+
+2. **Performance Monitoring**
+   - Track cache hit/miss ratios in production or staging
+   - Measure rebalance frequency and patterns
+   - Identify access pattern inefficiencies
+   - Quantify data source interaction costs
+
+3. **Debugging and Development**
+   - Understand cache lifecycle events during development
+   - Trace User Path vs. Rebalance Execution behavior
+   - Identify unexpected cancellation patterns
+   - Verify optimization effectiveness (skip conditions)
+
+4. **Production Observability** (Optional)
+   - Export metrics to monitoring systems
+   - Track cache efficiency over time
+   - Correlate cache behavior with application performance
+   - Identify degradation patterns
+
+---
+
+## Architecture
+
+### Interface: `ICacheDiagnostics`
+
+The diagnostics system is built around the `ICacheDiagnostics` interface, which defines 15 event recording methods corresponding to key cache behavioral events:
+
+```csharp
+public interface ICacheDiagnostics
+{
+    // User Path Events
+    void UserRequestServed();
+    void CacheExpanded();
+    void CacheReplaced();
+    void UserRequestFullCacheHit();
+    void UserRequestPartialCacheHit();
+    void UserRequestFullCacheMiss();
+    
+    // Data Source Access Events
+    void DataSourceFetchSingleRange();
+    void DataSourceFetchMissingSegments();
+    
+    // Rebalance Intent Lifecycle Events
+    void RebalanceIntentPublished();
+    void RebalanceIntentCancelled();
+    
+    // Rebalance Execution Lifecycle Events
+    void RebalanceExecutionStarted();
+    void RebalanceExecutionCompleted();
+    void RebalanceExecutionCancelled();
+    
+    // Rebalance Skip Optimization Events
+    void RebalanceSkippedNoRebalanceRange();
+    void RebalanceSkippedSameRange();
+}
+```
+
+### Implementations
+
+#### `EventCounterCacheDiagnostics` - Default Implementation
+
+Thread-safe counter-based implementation that tracks all events using `Interlocked.Increment` for atomicity:
+
+```csharp
+var diagnostics = new EventCounterCacheDiagnostics();
+
+// Pass to cache constructor
+var cache = new WindowCache<int, string, IntegerFixedStepDomain>(
+    dataSource: myDataSource,
+    domain: new IntegerFixedStepDomain(),
+    options: options,
+    cacheDiagnostics: diagnostics
+);
+
+// Read counters
+Console.WriteLine($"Cache hits: {diagnostics.UserRequestFullCacheHit}");
+Console.WriteLine($"Rebalances: {diagnostics.RebalanceExecutionCompleted}");
+```
+
+**Features:**
+- ✅ Thread-safe (uses `Interlocked.Increment`)
+- ✅ Low overhead (integer increment per event)
+- ✅ Read-only properties for all 16 counters (15 counters + 1 exception event)
+- ✅ `Reset()` method for test isolation
+- ✅ Instance-based (multiple caches can have separate diagnostics)
+- ⚠️ **Warning**: Default implementation only writes RebalanceExecutionFailed to Debug output
+
+**Use for:**
+- Testing and validation
+- Development and debugging
+- Production monitoring (acceptable overhead)
+
+**⚠️ CRITICAL: Production Usage Requirement**
+
+The default `EventCounterCacheDiagnostics` implementation of `RebalanceExecutionFailed` only writes to Debug output. **For production use, you MUST create a custom implementation that logs to your logging infrastructure.**
+
+```csharp
+public class ProductionCacheDiagnostics : ICacheDiagnostics
+{
+    private readonly ILogger<ProductionCacheDiagnostics> _logger;
+    private int _userRequestServed;
+    // ...other counters...
+    
+    public ProductionCacheDiagnostics(ILogger<ProductionCacheDiagnostics> logger)
+    {
+        _logger = logger;
+    }
+    
+    public void RebalanceExecutionFailed(Exception ex)
+    {
+        // CRITICAL: Always log rebalance failures with full context
+        _logger.LogError(ex, 
+            "Cache rebalance execution failed. Cache may not be optimally sized. " +
+            "Subsequent user requests will still be served but rebalancing has stopped.");
+    }
+    
+    // ...implement other diagnostic methods...
+}
+```
+
+**Why this is critical:**
+
+Rebalance operations run in fire-and-forget background tasks. When exceptions occur:
+1. The exception is caught and recorded via `RebalanceExecutionFailed`
+2. The exception is swallowed to prevent application crashes
+3. Without logging, failures are **completely silent**
+
+Ignoring this event means:
+- ❌ Data source errors go unnoticed
+- ❌ Cache stops rebalancing with no indication
+- ❌ Performance degrades silently
+- ❌ No diagnostics for troubleshooting
+
+**Recommended production implementation:**
+- Always log with full exception details (message, stack trace, inner exceptions)
+- Include structured context (cache instance ID, requested range if available)
+- Consider alerting for repeated failures (circuit breaker pattern)
+- Track failure rate metrics for monitoring dashboards
+
+#### `NoOpDiagnostics` - Zero-Cost Implementation
+
+Empty implementation with no-op methods that the JIT can optimize away completely:
+
+```csharp
+// Automatically used when cacheDiagnostics parameter is omitted
+var cache = new WindowCache<int, string, IntegerFixedStepDomain>(
+    dataSource: myDataSource,
+    domain: new IntegerFixedStepDomain(),
+    options: options
+    // cacheDiagnostics: null (default) -> uses NoOpDiagnostics
+);
+```
+
+**Features:**
+- ✅ **Absolute zero overhead** - methods are empty and get inlined/eliminated
+- ✅ No memory allocations
+- ✅ No performance impact whatsoever
+- ✅ Default when diagnostics not provided
+
+**Use for:**
+- Production deployments where diagnostics are not needed
+- Performance-critical scenarios
+- When observability is handled externally
+
+---
+
+## Diagnostic Events Reference
+
+### User Path Events
+
+#### `UserRequestServed()`
+**Tracks:** Completion of user request (data returned and intent published)  
+**Location:** `UserRequestHandler.HandleRequestAsync` (final step)  
+**Scenarios:** All user scenarios (U1-U5): cold start, full hit, partial hit, full miss/jump  
+**Interpretation:** Total number of user requests successfully served
+
+**Example Usage:**
+```csharp
+await cache.GetDataAsync(Range.Closed(100, 200), ct);
+Assert.Equal(1, diagnostics.UserRequestServed);
+```
+
+---
+
+#### `CacheExpanded()`
+**Tracks:** Cache expansion during partial cache hit  
+**Location:** `CacheDataExtensionService.CalculateMissingRanges` (intersection path)  
+**Scenarios:** User Scenario U4 (partial cache hit)  
+**Invariant:** Invariant 9a (Cache Contiguity Rule - preserves contiguity)  
+**Interpretation:** Number of times cache grew while maintaining contiguity
+
+**Example Usage:**
+```csharp
+// Initial request: [100, 200]
+await cache.GetDataAsync(Range.Closed(100, 200), ct);
+
+// Overlapping request: [150, 250] - triggers expansion
+await cache.GetDataAsync(Range.Closed(150, 250), ct);
+
+Assert.Equal(1, diagnostics.CacheExpanded);
+```
+
+---
+
+#### `CacheReplaced()`
+**Tracks:** Cache replacement during non-intersecting jump  
+**Location:** `CacheDataExtensionService.CalculateMissingRanges` (no intersection path)  
+**Scenarios:** User Scenario U5 (full cache miss - jump)  
+**Invariant:** Invariant 9a (Cache Contiguity Rule - prevents gaps)  
+**Interpretation:** Number of times cache was fully replaced to maintain contiguity
+
+**Example Usage:**
+```csharp
+// Initial request: [100, 200]
+await cache.GetDataAsync(Range.Closed(100, 200), ct);
+
+// Non-intersecting request: [500, 600] - triggers replacement
+await cache.GetDataAsync(Range.Closed(500, 600), ct);
+
+Assert.Equal(1, diagnostics.CacheReplaced);
+```
+
+---
+
+#### `UserRequestFullCacheHit()`
+**Tracks:** Request served entirely from cache (no data source access)  
+**Location:** `UserRequestHandler.HandleRequestAsync` (Scenario 2)  
+**Scenarios:** User Scenarios U2, U3 (full cache hit)  
+**Interpretation:** Optimal performance - requested range fully contained in cache
+
+**Example Usage:**
+```csharp
+// Request 1: [100, 200] - cache miss, cache becomes [100, 200]
+await cache.GetDataAsync(Range.Closed(100, 200), ct);
+
+// Request 2: [120, 180] - fully within [100, 200]
+await cache.GetDataAsync(Range.Closed(120, 180), ct);
+
+Assert.Equal(1, diagnostics.UserRequestFullCacheHit);
+```
+
+---
+
+#### `UserRequestPartialCacheHit()`
+**Tracks:** Request with partial cache overlap (fetch missing segments)  
+**Location:** `UserRequestHandler.HandleRequestAsync` (Scenario 3)  
+**Scenarios:** User Scenario U4 (partial cache hit)  
+**Interpretation:** Efficient cache extension - some data reused, missing parts fetched
+
+**Example Usage:**
+```csharp
+// Request 1: [100, 200]
+await cache.GetDataAsync(Range.Closed(100, 200), ct);
+
+// Request 2: [150, 250] - overlaps with [100, 200]
+await cache.GetDataAsync(Range.Closed(150, 250), ct);
+
+Assert.Equal(1, diagnostics.UserRequestPartialCacheHit);
+```
+
+---
+
+#### `UserRequestFullCacheMiss()`
+**Tracks:** Request requiring complete fetch from data source  
+**Location:** `UserRequestHandler.HandleRequestAsync` (Scenarios 1 and 4)  
+**Scenarios:** U1 (cold start), U5 (non-intersecting jump)  
+**Interpretation:** Most expensive path - no cache reuse
+
+**Example Usage:**
+```csharp
+// Cold start - no cache
+await cache.GetDataAsync(Range.Closed(100, 200), ct);
+Assert.Equal(1, diagnostics.UserRequestFullCacheMiss);
+
+// Jump to non-intersecting range
+await cache.GetDataAsync(Range.Closed(500, 600), ct);
+Assert.Equal(2, diagnostics.UserRequestFullCacheMiss);
+```
+
+---
+
+### Data Source Access Events
+
+#### `DataSourceFetchSingleRange()`
+**Tracks:** Single contiguous range fetch from `IDataSource`  
+**Location:** `UserRequestHandler.HandleRequestAsync` (cold start or jump)  
+**API Called:** `IDataSource.FetchAsync(Range<TRange>, CancellationToken)`  
+**Interpretation:** Complete range fetched as single operation
+
+**Example Usage:**
+```csharp
+// Cold start or jump - fetches entire range as one operation
+await cache.GetDataAsync(Range.Closed(100, 200), ct);
+Assert.Equal(1, diagnostics.DataSourceFetchSingleRange);
+```
+
+---
+
+#### `DataSourceFetchMissingSegments()`
+**Tracks:** Missing segments fetch (gap filling optimization)  
+**Location:** `CacheDataExtensionService.ExtendCacheAsync`  
+**API Called:** `IDataSource.FetchAsync(IEnumerable<Range<TRange>>, CancellationToken)`  
+**Interpretation:** Optimized fetch of only missing data segments
+
+**Example Usage:**
+```csharp
+// Request 1: [100, 200]
+await cache.GetDataAsync(Range.Closed(100, 200), ct);
+
+// Request 2: [150, 250] - fetches only [201, 250]
+await cache.GetDataAsync(Range.Closed(150, 250), ct);
+
+Assert.Equal(1, diagnostics.DataSourceFetchMissingSegments);
+```
+
+---
+
+### Rebalance Intent Lifecycle Events
+
+#### `RebalanceIntentPublished()`
+**Tracks:** Rebalance intent publication by User Path  
+**Location:** `IntentController.PublishIntent` (after scheduler receives intent)  
+**Invariants:** A.3 (User Path is sole source of intent), 24e (Intent contains delivered data)  
+**Note:** Intent publication does NOT guarantee execution (opportunistic)
+
+**Example Usage:**
+```csharp
+await cache.GetDataAsync(Range.Closed(100, 200), ct);
+
+// Every user request publishes exactly one intent
+Assert.Equal(1, diagnostics.RebalanceIntentPublished);
+```
+
+---
+
+#### `RebalanceIntentCancelled()`
+**Tracks:** Intent cancellation before or during execution  
+**Location:** `RebalanceScheduler` (three cancellation points)  
+**Invariants:** A.0 (User Path priority), A.0a (User cancels rebalance), C.20 (Obsolete intent doesn't start)  
+**Interpretation:** Single-flight execution - new request cancels previous intent
+
+**Example Usage:**
+```csharp
+var options = new WindowCacheOptions(debounceDelay: TimeSpan.FromSeconds(1));
+var cache = TestHelpers.CreateCache(domain, diagnostics, options);
+
+// Request 1 - publishes intent, starts debounce delay
+var task1 = cache.GetDataAsync(Range.Closed(100, 200), ct);
+
+// Request 2 (before debounce completes) - cancels previous intent
+var task2 = cache.GetDataAsync(Range.Closed(300, 400), ct);
+
+await Task.WhenAll(task1, task2);
+await cache.WaitForIdleAsync();
+
+Assert.True(diagnostics.RebalanceIntentCancelled >= 1);
+```
+
+---
+
+### Rebalance Execution Lifecycle Events
+
+#### `RebalanceExecutionStarted()`
+**Tracks:** Rebalance execution start after decision approval  
+**Location:** `RebalanceScheduler.ExecutePipelineAsync` (after DecisionEngine approval)  
+**Scenarios:** Decision Scenario D3 (rebalance required)  
+**Invariant:** 28 (Rebalance triggered only if confirmed necessary)
+
+**Example Usage:**
+```csharp
+await cache.GetDataAsync(Range.Closed(100, 200), ct);
+await cache.WaitForIdleAsync();
+
+Assert.Equal(1, diagnostics.RebalanceExecutionStarted);
+```
+
+---
+
+#### `RebalanceExecutionCompleted()`
+**Tracks:** Successful rebalance completion  
+**Location:** `RebalanceExecutor.ExecuteAsync` (after UpdateCacheState)  
+**Scenarios:** Rebalance Scenarios R1, R2 (build from scratch, expand cache)  
+**Invariants:** 34 (Only Rebalance writes to cache), 35 (Atomic state update)
+
+**Example Usage:**
+```csharp
+await cache.GetDataAsync(Range.Closed(100, 200), ct);
+await cache.WaitForIdleAsync();
+
+Assert.Equal(1, diagnostics.RebalanceExecutionCompleted);
+```
+
+---
+
+#### `RebalanceExecutionCancelled()`
+**Tracks:** Rebalance cancellation mid-flight  
+**Location:** `RebalanceScheduler.ExecutePipelineAsync` (catch OperationCanceledException)  
+**Invariant:** 34a (Rebalance yields to User Path immediately)  
+**Interpretation:** User Path priority enforcement - rebalance interrupted
+
+**Example Usage:**
+```csharp
+// Long-running rebalance scenario
+await cache.GetDataAsync(Range.Closed(100, 200), ct);
+
+// New request while rebalance is executing
+await cache.GetDataAsync(Range.Closed(300, 400), ct);
+await cache.WaitForIdleAsync();
+
+// First rebalance was cancelled
+Assert.True(diagnostics.RebalanceExecutionCancelled >= 1);
+```
+
+---
+
+#### `RebalanceExecutionFailed(Exception ex)` ⚠️ CRITICAL
+**Tracks:** Rebalance execution failure due to exception  
+**Location:** `RebalanceScheduler.ExecutePipelineAsync` (catch Exception after executor call)  
+**Interpretation:** **CRITICAL ERROR** - background rebalance operation failed
+
+**⚠️ WARNING: This event MUST be handled in production applications**
+
+Rebalance operations execute in fire-and-forget background tasks. When an exception occurs:
+1. The exception is caught and this event is recorded
+2. The exception is silently swallowed to prevent application crashes
+3. The cache continues serving user requests but rebalancing stops
+
+**Consequences of ignoring this event:**
+- ❌ Silent failures in background operations
+- ❌ Cache stops rebalancing without any indication
+- ❌ Performance degrades with no diagnostics
+- ❌ Data source errors go completely unnoticed
+- ❌ Impossible to troubleshoot production issues
+
+**Minimum requirement: Always log**
+
+```csharp
+public void RebalanceExecutionFailed(Exception ex)
+{
+    _logger.LogError(ex, 
+        "Cache rebalance execution failed. Cache will continue serving user requests " +
+        "but rebalancing has stopped. Investigate data source health and cache configuration.");
+}
+```
+
+**Recommended production implementation:**
+
+```csharp
+public class RobustCacheDiagnostics : ICacheDiagnostics
+{
+    private readonly ILogger _logger;
+    private readonly IMetrics _metrics;
+    private int _consecutiveFailures;
+    
+    public void RebalanceExecutionFailed(Exception ex)
+    {
+        // 1. Always log with full context
+        _logger.LogError(ex, 
+            "Cache rebalance execution failed. ConsecutiveFailures: {Failures}",
+            Interlocked.Increment(ref _consecutiveFailures));
+        
+        // 2. Track metrics for monitoring
+        _metrics.Counter("cache.rebalance.failures", 1);
+        
+        // 3. Alert on repeated failures (circuit breaker)
+        if (_consecutiveFailures >= 5)
+        {
+            _logger.LogCritical(
+                "Cache rebalancing has failed {Failures} times consecutively. " +
+                "Consider investigating data source health or disabling cache.",
+                _consecutiveFailures);
+        }
+    }
+    
+    public void RebalanceExecutionCompleted()
+    {
+        // Reset failure counter on success
+        Interlocked.Exchange(ref _consecutiveFailures, 0);
+    }
+    
+    // ...other methods...
+}
+```
+
+**Common failure scenarios:**
+- Data source timeouts or connectivity issues
+- Data source throws exceptions for specific ranges
+- Memory pressure during large cache expansions
+- Serialization/deserialization failures
+- Configuration errors (invalid ranges, domain issues)
+
+**Example Usage (Testing):**
+```csharp
+// Simulate data source failure
+var faultyDataSource = new FaultyDataSource();
+var cache = new WindowCache<int, string, IntegerFixedStepDomain>(
+    dataSource: faultyDataSource,
+    domain: new IntegerFixedStepDomain(),
+    options: options,
+    cacheDiagnostics: diagnostics
+);
+
+await cache.GetDataAsync(Range.Closed(100, 200), ct);
+await cache.WaitForIdleAsync();
+
+// Verify failure was recorded
+Assert.Equal(1, diagnostics.RebalanceExecutionFailed);
+```
+
+---
+
+### Rebalance Skip Optimization Events
+
+#### `RebalanceSkippedNoRebalanceRange()`
+**Tracks:** Rebalance skipped due to NoRebalanceRange policy  
+**Location:** `RebalanceScheduler.ExecutePipelineAsync` (DecisionEngine returns ShouldExecute=false)  
+**Scenarios:** Decision Scenario D1 (inside no-rebalance threshold)  
+**Invariants:** D.26 (No rebalance if inside NoRebalanceRange), D.27 (Policy-based skip)
+
+**Example Usage:**
+```csharp
+var options = new WindowCacheOptions(
+    leftThreshold: 0.3,
+    rightThreshold: 0.3
+);
+
+// Request 1 establishes cache and NoRebalanceRange
+await cache.GetDataAsync(Range.Closed(100, 200), ct);
+await cache.WaitForIdleAsync();
+
+// Request 2 inside NoRebalanceRange - skips rebalance
+await cache.GetDataAsync(Range.Closed(120, 180), ct);
+await cache.WaitForIdleAsync();
+
+Assert.True(diagnostics.RebalanceSkippedNoRebalanceRange >= 1);
+```
+
+---
+
+#### `RebalanceSkippedSameRange()`
+**Tracks:** Rebalance skipped because ranges already match  
+**Location:** `RebalanceExecutor.ExecuteAsync` (before expensive I/O)  
+**Scenarios:** Decision Scenario D2 (DesiredCacheRange == CurrentCacheRange)  
+**Invariants:** D.27 (No rebalance if same range), D.28 (Same-range optimization)
+
+**Example Usage:**
+```csharp
+// Delivered data range already matches desired range
+await cache.GetDataAsync(Range.Closed(100, 200), ct);
+await cache.WaitForIdleAsync();
+
+// Rebalance started but detected same-range condition
+Assert.True(diagnostics.RebalanceSkippedSameRange >= 0); // May or may not occur
+```
+
+---
+
+## Testing Patterns
+
+### Test Isolation with Reset()
+
+```csharp
+[Fact]
+public async Task Test_CacheHitPattern()
+{
+    var diagnostics = new EventCounterCacheDiagnostics();
+    var cache = CreateCache(diagnostics);
+    
+    // Setup
+    await cache.GetDataAsync(Range.Closed(100, 200), ct);
+    await cache.WaitForIdleAsync();
+    
+    // Reset to isolate test scenario
+    diagnostics.Reset();
+    
+    // Test
+    await cache.GetDataAsync(Range.Closed(120, 180), ct);
+    
+    // Assert only test scenario events
+    Assert.Equal(1, diagnostics.UserRequestFullCacheHit);
+    Assert.Equal(0, diagnostics.UserRequestPartialCacheHit);
+    Assert.Equal(0, diagnostics.UserRequestFullCacheMiss);
+}
+```
+
+---
+
+### Invariant Validation
+
+```csharp
+public static void AssertRebalanceLifecycleIntegrity(EventCounterCacheDiagnostics d)
+{
+    // Published >= Started (some intents may be cancelled before execution)
+    Assert.True(d.RebalanceIntentPublished >= d.RebalanceExecutionStarted);
+    
+    // Started == Completed + Cancelled (every started execution completes or is cancelled)
+    Assert.Equal(d.RebalanceExecutionStarted, 
+                 d.RebalanceExecutionCompleted + d.RebalanceExecutionCancelled);
+}
+```
+
+---
+
+### User Path Scenario Verification
+
+```csharp
+public static void AssertPartialCacheHit(EventCounterCacheDiagnostics d, int expectedCount = 1)
+{
+    Assert.Equal(expectedCount, d.UserRequestPartialCacheHit);
+    Assert.Equal(expectedCount, d.CacheExpanded);
+    Assert.Equal(expectedCount, d.DataSourceFetchMissingSegments);
+}
+```
+
+---
+
+## Performance Considerations
+
+### Runtime Overhead
+
+**`EventCounterCacheDiagnostics` (when enabled):**
+- ~1-5 nanoseconds per event (single `Interlocked.Increment`)
+- Negligible compared to cache operations (microseconds to milliseconds)
+- Thread-safe with no locks
+- No allocations
+
+**`NoOpDiagnostics` (default):**
+- **Absolute zero overhead** - methods are inlined and eliminated by JIT
+- No memory footprint
+- No performance impact
+
+### Memory Overhead
+
+- `EventCounterCacheDiagnostics`: 60 bytes (15 integers)
+- `NoOpDiagnostics`: 0 bytes (no state)
+
+### Recommendation
+
+- **Development/Testing**: Always use `EventCounterCacheDiagnostics`
+- **Production**: Use `EventCounterCacheDiagnostics` if monitoring is needed, omit otherwise
+- **Performance-critical paths**: Omit diagnostics entirely (uses `NoOpDiagnostics`)
+
+---
+
+## Custom Implementations
+
+You can implement `ICacheDiagnostics` for custom observability scenarios:
+
+```csharp
+public class PrometheusMetricsDiagnostics : ICacheDiagnostics
+{
+    private readonly Counter _requestsServed;
+    private readonly Counter _cacheHits;
+    private readonly Counter _cacheMisses;
+    
+    public PrometheusMetricsDiagnostics(IMetricFactory metricFactory)
+    {
+        _requestsServed = metricFactory.CreateCounter("cache_requests_total");
+        _cacheHits = metricFactory.CreateCounter("cache_hits_total");
+        _cacheMisses = metricFactory.CreateCounter("cache_misses_total");
+    }
+    
+    public void UserRequestServed() => _requestsServed.Inc();
+    public void UserRequestFullCacheHit() => _cacheHits.Inc();
+    public void UserRequestPartialCacheHit() => _cacheHits.Inc();
+    public void UserRequestFullCacheMiss() => _cacheMisses.Inc();
+    
+    // ... implement other methods
+}
+```
+
+---
+
+## See Also
+
+- **[Invariants](invariants.md)** - System invariants tracked by diagnostics
+- **[Scenario Model](scenario-model.md)** - User/Decision/Rebalance scenarios referenced in event descriptions
+- **[Invariant Test Suite](../tests/SlidingWindowCache.Invariants.Tests/README.md)** - Examples of diagnostic usage in tests
+- **[Component Map](component-map.md)** - Component locations where events are recorded
