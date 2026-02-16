@@ -67,6 +67,8 @@ internal sealed class CacheDataExtensionService<TRange, TData, TDomain>
     /// <para><strong>Operation:</strong> Extends cache to cover requested range (NO trimming of existing data).</para>
     /// <para><strong>Use case:</strong> User requests (GetDataAsync) where we want to preserve all cached data for future rebalancing.</para>
     /// <para><strong>Optimization:</strong> Only fetches data not already in cache (partial cache hit optimization).</para>
+    /// <para><strong>Note:</strong> This is an internal component that does not perform input validation or short-circuit checks. 
+    /// All parameters are assumed to be pre-validated by the caller. Duplicating validation here would be unnecessary overhead.</para>
     /// <para><strong>Example:</strong></para>
     /// <code>
     /// Cache: [100, 200], Requested: [150, 250]
