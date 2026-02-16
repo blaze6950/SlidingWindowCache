@@ -182,14 +182,20 @@ internal sealed class UserRequestHandler<TRange, TData, TDomain>
         }
         finally
         {
-            // Create new Intent
-            var intent = new Intent<TRange, TData, TDomain>(requestedRange, assembledData!);
+            // If assembledData is NULL, it means an exception was thrown during data retrieval (either from cache or data source).
+            // Publishing intent doesn't make sense, the possibly redundant rebalance triggered by this failure will simply fail again during execution or next user request.
+            // So, exception should be catched and handled before proceeding to publish intent.
+            if (assembledData is not null)
+            {
+                // Create new Intent
+                var intent = new Intent<TRange, TData, TDomain>(requestedRange, assembledData);
 
-            // Publish rebalance intent with assembled data range (fire-and-forget)
-            // Rebalance Execution will use this as the authoritative source
-            _intentManager.PublishIntent(intent);
+                // Publish rebalance intent with assembled data range (fire-and-forget)
+                // Rebalance Execution will use this as the authoritative source
+                _intentManager.PublishIntent(intent);
 
-            _cacheDiagnostics.UserRequestServed();
+                _cacheDiagnostics.UserRequestServed();
+            }
         }
     }
 }
