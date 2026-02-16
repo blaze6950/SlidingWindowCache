@@ -414,12 +414,6 @@ For detailed architectural documentation, see:
 ### Testing Infrastructure
 
 - **[Invariant Test Suite README](tests/SlidingWindowCache.Invariants.Tests/README.md)** - Comprehensive invariant test suite with deterministic synchronization
-- **[Integration Test Suite README](tests/SlidingWindowCache.Integration.Tests/README.md)** - External contract validation and robustness tests
-  - **DataSourceRangePropagationTests** - Validates exact ranges propagated to IDataSource with boundary semantics
-  - **CacheDataSourceInteractionTests** - Tests cache ↔ DataSource interaction contracts
-  - **RangeSemanticsContractTests** - Validates range behavior assumptions
-  - **RandomRangeRobustnessTests** - Property-based testing with 850+ randomized scenarios
-  - **ConcurrencyStabilityTests** - Concurrent load and stability validation
 - **[Benchmark Suite README](benchmarks/SlidingWindowCache.Benchmarks/README.md)** - BenchmarkDotNet performance benchmarks
   - **RebalanceFlowBenchmarks** - Behavior-driven rebalance cost analysis (Fixed/Growing/Shrinking span patterns)
   - **UserFlowBenchmarks** - User-facing API latency (Full hit, Partial hit, Full miss scenarios)
