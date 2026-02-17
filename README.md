@@ -549,8 +549,9 @@ For detailed architectural documentation, see:
 
 ### Key Architectural Principles
 
-1. **Single-Writer Architecture**: Only Rebalance Execution writes to cache state; User Path is read-only. This
-   eliminates race conditions through architectural constraints rather than locks.
+1. **Single-Writer Architecture**: Only Rebalance Execution writes to cache state; User Path is read-only. Multiple
+   rebalance executions are serialized via `SemaphoreSlim` to guarantee only one execution writes to cache at a time.
+   This eliminates race conditions and data corruption through architectural constraints and execution serialization.
    See [Concurrency Model](docs/concurrency-model.md).
 
 2. **Decision-Driven Execution**: Rebalance necessity determined by synchronous CPU-only analytical validation in user
@@ -581,9 +582,9 @@ For detailed architectural documentation, see:
    pending rebalance is cancelled and rescheduled. Cancellation is mechanical coordination (prevents concurrent
    executions), not a decision mechanism. See [Cache State Machine](docs/cache-state-machine.md).
 
-8. **Lock-Free Concurrency**: Intent management uses `Volatile.Read/Write` for safe memory visibility - no locks, no
-   race conditions, guaranteed progress. Thread-safety achieved through architectural constraints (single-writer) and
-   atomic reference operations.
+8. **Lock-Free Concurrency**: Intent management uses `Volatile.Read/Write` and `Interlocked.Exchange` for atomic
+   operations - no locks, no race conditions, guaranteed progress. Execution serialization via `SemaphoreSlim` ensures
+   single-writer semantics. Thread-safety achieved through architectural constraints and atomic operations.
    See [Concurrency Model - Lock-Free Implementation](docs/concurrency-model.md#lock-free-implementation).
 
 ---

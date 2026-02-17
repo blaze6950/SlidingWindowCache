@@ -1144,7 +1144,7 @@ internal readonly struct RebalanceDecision<TRange>
 internal sealed class RebalanceExecutor<TRange, TData, TDomain>
 ```
 
-**File**: `src/SlidingWindowCache/CacheRebalance/Executor/RebalanceExecutor.cs`
+**File**: `src/SlidingWindowCache/Core/Rebalance/Execution/RebalanceExecutor.cs`
 
 **Type**: Class (sealed)
 
@@ -1153,51 +1153,69 @@ internal sealed class RebalanceExecutor<TRange, TData, TDomain>
 **Fields** (all readonly):
 - `CacheState<TRange, TData, TDomain> _state`
 - `CacheDataExtensionService<TRange, TData, TDomain> _cacheExtensionService`
-- `ThresholdRebalancePolicy<TRange, TDomain> _rebalancePolicy`
+- `ICacheDiagnostics _cacheDiagnostics`
+- `SemaphoreSlim _executionSemaphore` (initialized to `new SemaphoreSlim(1, 1)`)
+
+**Concurrency Model**:
+- Uses `SemaphoreSlim(1, 1)` to serialize execution - ensures only one rebalance can write to cache state at a time
+- Semaphore acquired at start of `ExecuteAsync()`, before any I/O operations
+- Released in `finally` block to guarantee release even on cancellation or exception
+- Works with `CancellationToken` - operations can be cancelled while waiting for semaphore
+- WebAssembly-compatible, async, zero User Path blocking
 
 **Key Method**:
 ```csharp
-public async Task ExecuteAsync(Range<TRange> desiredRange, CancellationToken cancellationToken)
+public async Task ExecuteAsync(
+    Intent<TRange, TData, TDomain> intent,
+    Range<TRange> desiredRange,
+    Range<TRange>? desiredNoRebalanceRange,
+    CancellationToken cancellationToken)
 {
-    // Get current cache snapshot
-    var rangeData = _state.Cache.ToRangeData();
+    // Acquire semaphore to serialize execution
+    await _executionSemaphore.WaitAsync(cancellationToken).ConfigureAwait(false);
     
-    // Check if already at desired state (Decision Path D2)
-    if (rangeData.Range == desiredRange)
-        return;
-    
-    // Cancellation check before I/O
-    cancellationToken.ThrowIfCancellationRequested();
-    
-    // Phase 1: Extend cache to cover desired range
-    var extended = await _cacheFetcher.ExtendCacheAsync(rangeData, desiredRange, cancellationToken);
-    
-    // Cancellation check after I/O
-    cancellationToken.ThrowIfCancellationRequested();
-    
-    // Phase 2: Trim to desired range
-    var rebalanced = extended[desiredRange];
-    
-    // Cancellation check before mutation
-    cancellationToken.ThrowIfCancellationRequested();
-    
-    // Phase 3: Update cache (atomic mutation)
-    _state.Cache.Rematerialize(rebalanced);
-    
-    // Phase 4: Update no-rebalance range
-    _state.NoRebalanceRange = _rebalancePolicy.GetNoRebalanceRange(_state.Cache.Range);
+    try
+    {
+        // Get delivered data from intent
+        var baseRangeData = intent.AvailableRangeData;
+        
+        // Cancellation check after acquiring semaphore
+        cancellationToken.ThrowIfCancellationRequested();
+        
+        // Phase 1: Extend to cover desired range
+        var extended = await _cacheExtensionService.ExtendCacheAsync(
+            baseRangeData, desiredRange, cancellationToken).ConfigureAwait(false);
+        
+        // Cancellation check after I/O
+        cancellationToken.ThrowIfCancellationRequested();
+        
+        // Phase 2: Trim to desired range
+        baseRangeData = extended[desiredRange];
+        
+        // Cancellation check before mutation
+        cancellationToken.ThrowIfCancellationRequested();
+        
+        // Phase 3: Update cache state atomically
+        UpdateCacheState(baseRangeData, intent.RequestedRange, desiredNoRebalanceRange);
+    }
+    finally
+    {
+        // Always release semaphore
+        _executionSemaphore.Release();
+    }
 }
 ```
 
 **Reads from**:
-- ⊳ `_state.Cache` (ToRangeData, Range)
+- ⊳ `intent.AvailableRangeData` (delivered data from User Path)
 
 **Writes to**:
 - ⊲ `_state.Cache` (via Rematerialize - normalizes to DesiredCacheRange)
+- ⊲ `_state.LastRequested`
 - ⊲ `_state.NoRebalanceRange`
 
 **Uses**:
-- ◇ `_cacheFetcher.ExtendCacheAsync()` (fetch missing data)
+- ◇ `_cacheExtensionService.ExtendCacheAsync()` (fetch missing data)
 - ◇ `_rebalancePolicy.GetNoRebalanceRange()` (compute new threshold zone)
 
 **Characteristics**:
@@ -1667,17 +1685,19 @@ The Sliding Window Cache follows a **single consumer model** as documented in `d
    - One access trajectory
    - One temporal sequence of requests
 
-2. **No Synchronization Primitives**
+2. **Execution Serialization**
+   - ✅ Uses `SemaphoreSlim(1, 1)` in `RebalanceExecutor` for execution serialization
    - ❌ No locks (`lock`, `Monitor`)
-   - ❌ No semaphores (`SemaphoreSlim`)
    - ❌ No concurrent collections
-   - ✅ Only `CancellationToken` for coordination
+   - ✅ `CancellationToken` for coordination and signaling
+   - ✅ `Interlocked.Exchange` for atomic pending rebalance cancellation
 
 3. **Coordination Mechanism**
    - **Single-Writer Architecture** - User Path is read-only, only Rebalance Execution writes to CacheState
    - **Validation-driven cancellation** - DecisionEngine confirms necessity, then triggers cancellation of pending rebalance
    - **Atomic updates** - `Rematerialize()` performs atomic array/List reference swaps
-   - **No locks needed** - Single-writer eliminates write-write races, reference reads are atomic
+   - **Execution serialization** - `SemaphoreSlim` ensures only one rebalance writes to cache at a time
+   - **Atomic cancellation** - `Interlocked.Exchange` prevents race conditions during pending rebalance cancellation
 
 ### Thread Contexts
 

@@ -79,10 +79,30 @@ internal sealed class PendingRebalance<TRange>
     /// This method provides a more DDD-aligned approach where the domain object
     /// encapsulates its own behavior (cancellation) rather than requiring external
     /// management through the IntentController.
+    /// Safe to call multiple times - subsequent calls are no-ops.
     /// </remarks>
     public void Cancel()
     {
-        _cts?.Cancel();
-        _cts?.Dispose();
+        if (_cts == null) return;
+        
+        try
+        {
+            _cts.Cancel();
+        }
+        catch (ObjectDisposedException)
+        {
+            // Already disposed - safe to ignore
+        }
+        finally
+        {
+            try
+            {
+                _cts.Dispose();
+            }
+            catch (ObjectDisposedException)
+            {
+                // Already disposed - safe to ignore
+            }
+        }
     }
 }

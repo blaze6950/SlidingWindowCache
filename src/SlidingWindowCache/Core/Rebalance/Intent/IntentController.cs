@@ -173,14 +173,16 @@ internal sealed class IntentController<TRange, TData, TDomain>
             return;
         }
 
-        // Step 3: Cancel pending rebalance (mechanical safeguard for state transition)
-        // Use DDD-style cancellation through PendingRebalance domain object
+        // Step 3: Atomically cancel pending rebalance (race-free coordination)
+        // Use Interlocked.Exchange to atomically read and clear _pendingRebalance in single operation
+        // This prevents race where two threads could both call Cancel() on same PendingRebalance
         // This is NOT a blind cancellation - it only happens when DecisionEngine validated necessity
-        var oldPending = Volatile.Read(ref _pendingRebalance);
+        var oldPending = Interlocked.Exchange(ref _pendingRebalance, null);
         oldPending?.Cancel();
 
         // Step 4: Delegate to scheduler and capture returned PendingRebalance
         // Scheduler fully owns execution infrastructure (CTS, Task, debounce, exceptions)
+        // New rebalance scheduled AFTER old one is cancelled to ensure proper semaphore acquisition ordering
         var newPending = _scheduler.ScheduleRebalance(intent, decision);
 
         // Step 5: Update pending rebalance snapshot for next Stage 2 validation

@@ -49,6 +49,35 @@ User Path safely reads cache state without locks because:
 
 **Key Insight:** Thread-safety is achieved through **architectural constraints** (single-writer) and **coordination** (cancellation), not through locks or volatile keywords on CacheState fields.
 
+### Execution Serialization
+
+While the single-writer architecture eliminates write-write races between User Path and Rebalance Execution, multiple rebalance operations can be scheduled concurrently. To guarantee that only one rebalance execution writes to cache state at a time, `RebalanceExecutor` uses a `SemaphoreSlim(1, 1)` for mutual exclusion.
+
+**Serialization Mechanism:**
+
+- **`SemaphoreSlim`**: Ensures only one rebalance execution can proceed through cache mutation at a time
+- **Cancellation Token**: Provides early exit signaling - operations can be cancelled while waiting for the semaphore
+- **Ordering**: New rebalance scheduled AFTER old one is cancelled, ensuring proper semaphore acquisition order
+- **Atomic cancellation**: `Interlocked.Exchange` prevents race where multiple threads call `Cancel()` on same `PendingRebalance`
+
+**Why Both CTS and SemaphoreSlim:**
+
+- **CTS**: Lightweight signaling mechanism for cooperative cancellation (intent obsolescence, user cancellation)
+- **SemaphoreSlim**: Mutual exclusion for cache writes (prevents concurrent execution)
+- Together: CTS signals "don't do this work anymore", semaphore enforces "only one at a time"
+
+**Design Properties:**
+
+- ✅ **WebAssembly compatible** - async, no blocking threads
+- ✅ **Zero User Path blocking** - User Path never acquires semaphore, only rebalance execution does
+- ✅ **Production-grade** - prevents data corruption from parallel cache writes
+- ✅ **Lightweight** - semaphore rarely contended (rebalance is rare operation)
+- ✅ **Cancellation-friendly** - `WaitAsync(cancellationToken)` exits cleanly if cancelled
+
+**Acquisition Point:**
+
+The semaphore is acquired at the start of `RebalanceExecutor.ExecuteAsync()`, before any I/O operations. This prevents queue buildup while allowing cancellation to propagate immediately. If cancelled during wait, the operation exits without acquiring the semaphore.
+
 ### Rebalance Validation vs Cancellation
 
 **Key Distinction:**

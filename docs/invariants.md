@@ -131,6 +131,7 @@ deterministic, race-free synchronization without polling or timing dependencies.
 - *Test verifies*: Cancellation counter increments when new request arrives and rebalance validation requires rescheduling
 - *Clarification*: Cancellation is a mechanical coordination tool (single-writer architecture), not a decision mechanism. Rebalance necessity is determined by the Rebalance Decision Engine through analytical validation (NoRebalanceRange containment, DesiredRange vs CurrentRange comparison). User requests do NOT automatically trigger cancellation; validated rebalance necessity triggers cancellation + rescheduling.
 - *Note*: Cancellation prevents concurrent rebalance executions, not duplicate decision-making
+- *Implementation*: Uses `Interlocked.Exchange` for atomic read-and-clear of pending rebalance, preventing race where multiple threads could call `Cancel()` on same `PendingRebalance`
 
 ### A.2 User-Facing Guarantees
 
