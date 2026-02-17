@@ -27,7 +27,8 @@ public class NoOpDiagnosticsTests
             diagnostics.RebalanceExecutionStarted();
             diagnostics.RebalanceIntentCancelled();
             diagnostics.RebalanceIntentPublished();
-            diagnostics.RebalanceSkippedNoRebalanceRange();
+            diagnostics.RebalanceSkippedCurrentNoRebalanceRange();
+            diagnostics.RebalanceSkippedPendingNoRebalanceRange();
             diagnostics.RebalanceSkippedSameRange();
             diagnostics.RebalanceExecutionFailed(testException);
             diagnostics.UserRequestFullCacheHit();

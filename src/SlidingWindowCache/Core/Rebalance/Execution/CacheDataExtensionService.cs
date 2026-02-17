@@ -91,7 +91,8 @@ internal sealed class CacheDataExtensionService<TRange, TData, TDomain>
         var missingRanges = CalculateMissingRanges(currentCache.Range, requested);
 
         // Step 2: Fetch the missing data from data source
-        var fetchedResults = await _dataSource.FetchAsync(missingRanges, ct);
+        var fetchedResults = await _dataSource.FetchAsync(missingRanges, ct)
+            .ConfigureAwait(false);
 
         // Step 3: Union fetched data with current cache
         return UnionAll(currentCache, fetchedResults, _domain);

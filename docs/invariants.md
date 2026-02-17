@@ -1,4 +1,4 @@
-# Sliding Window Cache — System Invariants (Classified)
+# Sliding Window Cache — System Invariants
 
 ---
 
@@ -126,10 +126,12 @@ deterministic, race-free synchronization without polling or timing dependencies.
 - *Enforced by*: Component ownership, cancellation protocol
 - *Architecture*: User Path cancels rebalance; rebalance checks cancellation
 
-**A.0a** 🟢 **[Behavioral — Test: `Invariant_A_0a_UserRequestCancelsRebalance`]** Every User Request **MUST cancel** any ongoing or pending Rebalance Execution to ensure rebalance doesn't interfere with User Path data assembly.
+**A.0a** 🟢 **[Behavioral — Test: `Invariant_A_0a_UserRequestCancelsRebalance`]** A User Request **MAY cancel** an ongoing or pending Rebalance Execution **ONLY when a new rebalance is validated as necessary** by the multi-stage decision pipeline.
 - *Observable via*: DEBUG instrumentation counters tracking cancellation
-- *Test verifies*: Cancellation counter increments when new request arrives
-- *Note*: Cancellation ensures User Path priority, not mutation safety (User Path is read-only)
+- *Test verifies*: Cancellation counter increments when new request arrives and rebalance validation requires rescheduling
+- *Clarification*: Cancellation is a mechanical coordination tool (single-writer architecture), not a decision mechanism. Rebalance necessity is determined by the Rebalance Decision Engine through analytical validation (NoRebalanceRange containment, DesiredRange vs CurrentRange comparison). User requests do NOT automatically trigger cancellation; validated rebalance necessity triggers cancellation + rescheduling.
+- *Note*: Cancellation prevents concurrent rebalance executions, not duplicate decision-making
+- *Implementation*: Uses `Interlocked.Exchange` for atomic read-and-clear of pending rebalance, preventing race where multiple threads could call `Cancel()` on same `PendingRebalance`
 
 ### A.2 User-Facing Guarantees
 
@@ -146,7 +148,7 @@ deterministic, race-free synchronization without polling or timing dependencies.
 - *Architecture*: Encapsulation prevents other components from publishing intents
 
 **A.4** 🔵 **[Architectural]** Rebalance execution is **always performed asynchronously** relative to the User Path.
-- *Enforced by*: `Task.Run()` in `RebalanceScheduler`, fire-and-forget pattern
+- *Enforced by*: Background task scheduling in `RebalanceScheduler`, fire-and-forget pattern
 - *Architecture*: User Path returns immediately after publishing intent
 
 **A.5** 🔵 **[Architectural]** The User Path performs **only the work necessary to return data to the user**.
@@ -217,13 +219,14 @@ deterministic, race-free synchronization without polling or timing dependencies.
 
 ## C. Rebalance Intent & Temporal Invariants
 
-**C.17** 🟢 **[Behavioral — Test: `Invariant_C17_AtMostOneActiveIntent`]** At any point in time, there is **at most one active rebalance intent**.
-- *Observable via*: DEBUG counters showing intent published/cancelled
-- *Test verifies*: Multiple rapid requests show N published, N-1 cancelled
+**C.17** 🔵 **[Architectural]** At most one rebalance intent may be active at any time.
+- *Enforced by*: Single-writer architecture, cancellation coordination in IntentController
+- *Architecture*: IntentController cancels previous pending rebalance before scheduling new one
+- *Note*: This is a structural constraint enforced by component design, not a behavioral guarantee testable via public API
 
-**C.18** 🟢 **[Behavioral — Test: `Invariant_C18_PreviousIntentBecomesObsolete`]** Any previously created rebalance intent is **considered obsolete** after a new intent is generated.
-- *Observable via*: DEBUG counters tracking intent lifecycle
-- *Test verifies*: Old intent cancelled when new one published
+**C.18** 🟡 **[Conceptual]** Previously created intents may become **logically superseded** when a new intent is published, but rebalance execution relevance is determined by the **multi-stage rebalance validation logic**.
+- *Design intent*: Obsolescence ≠ cancellation; obsolescence ≠ guaranteed execution prevention
+- *Clarification*: Intents are access signals, not commands. An intent represents "user accessed this range," not "must execute rebalance." Execution decisions are governed by the Rebalance Decision Engine's analytical validation (Stage 1: Current Cache NoRebalanceRange check, Stage 2: Pending Desired Cache NoRebalanceRange check if applicable, Stage 3: DesiredCacheRange vs CurrentCacheRange equality check). Previously created intents may be superseded or cancelled, but the decision to execute is always based on current validation state, not intent age. Cancellation occurs ONLY when Decision Engine validation confirms a new rebalance is necessary.
 
 **C.19** 🔵 **[Architectural]** Any rebalance execution can be **cancelled or have its results ignored**.
 - *Enforced by*: `CancellationToken` passed through execution pipeline
@@ -266,6 +269,67 @@ deterministic, race-free synchronization without polling or timing dependencies.
 
 ## D. Rebalance Decision Path Invariants
 
+### D.0 Rebalance Decision Model Overview
+
+The system uses a **multi-stage rebalance decision pipeline**, not a cancellation policy. Rebalance necessity is determined entirely in the User Path context via CPU-only analytical validation performed by the Rebalance Decision Engine.
+
+#### Key Conceptual Distinctions
+
+**Rebalance Decision vs Cancellation:**
+- **Rebalance Decision** = Analytical validation determining if rebalance is necessary (decision mechanism)
+- **Cancellation** = Mechanical coordination tool ensuring single-writer architecture (coordination mechanism)
+- Cancellation is NOT a decision mechanism; it prevents concurrent executions, not duplicate decision-making
+
+**Intent Semantics:**
+- Intent represents **observed access**, not mandatory work
+- Intent = "user accessed this range" (signal), NOT "must execute rebalance" (command)
+- Rebalance may be skipped because:
+  - NoRebalanceRange containment (Stage 1 validation)
+  - Pending rebalance already covers range (Stage 2 validation, anti-thrashing)
+  - Desired == Current range (Stage 3 validation)
+  - Intent superseded or cancelled before execution begins
+
+#### Multi-Stage Decision Pipeline
+
+The Rebalance Decision Engine validates rebalance necessity through three sequential stages:
+
+**Stage 1 — Current Cache NoRebalanceRange Validation**
+- **Purpose**: Fast-path check against current cache state
+- **Logic**: If RequestedRange ⊆ NoRebalanceRange(CurrentCacheRange), skip rebalance
+- **Rationale**: Current cache already provides sufficient buffer around request
+- **Performance**: O(1) range containment check, no computation needed
+
+**Stage 2 — Pending Desired Cache NoRebalanceRange Validation** (if pending rebalance exists)
+- **Purpose**: Anti-thrashing mechanism preventing oscillation
+- **Logic**: If RequestedRange ⊆ NoRebalanceRange(PendingDesiredCacheRange), skip rebalance
+- **Rationale**: Pending rebalance execution will satisfy this request when it completes
+- **Note**: This stage is conceptually part of the decision model but may be implemented as cancellation optimization in current architecture
+
+**Stage 3 — DesiredCacheRange vs CurrentCacheRange Equality Check**
+- **Purpose**: Avoid no-op rebalance operations
+- **Logic**: Compute DesiredCacheRange from RequestedRange + config; if DesiredCacheRange == CurrentCacheRange, skip rebalance
+- **Rationale**: Cache is already in optimal configuration for this request
+- **Performance**: Requires computing desired range but avoids I/O
+
+#### Decision Authority
+
+- **Rebalance Decision Engine** = Sole authority for rebalance necessity determination
+- **User Path** = Read-only with respect to cache state; publishes intents with delivered data
+- **Cancellation** = Coordination tool for single-writer architecture, NOT decision mechanism
+- **Rebalance Execution** = Mechanically simple; assumes decision layer already validated necessity
+
+#### System Stability Principle
+
+The system prioritizes **decision correctness and work avoidance** over aggressive rebalance responsiveness.
+
+**Meaning:**
+- Avoid thrashing (redundant rebalance operations)
+- Avoid redundant I/O (fetching data already in cache or pending)
+- Avoid oscillating cache geometry (constantly resizing based on rapid access pattern changes)
+- Accept temporary cache inefficiency if background rebalance will correct it
+
+**Trade-off:** Slight delay in cache optimization vs. system stability and resource efficiency
+
 **D.25** 🔵 **[Architectural]** The Rebalance Decision Path is **purely analytical** and has **no side effects**.
 - *Enforced by*: `RebalanceDecisionEngine` is stateless, uses value types
 - *Architecture*: Pure function: inputs → decision (no I/O, no mutations)
@@ -283,9 +347,14 @@ deterministic, race-free synchronization without polling or timing dependencies.
 - *Test verifies*: Repeated request with same range increments skip counter
 - *Implementation*: Early exit in `RebalanceExecutor.ExecuteAsync` before I/O operations
 
-**D.29** 🔵 **[Architectural]** Rebalance execution is triggered **only if the Decision Path confirms necessity**.
+**D.29** 🔵 **[Architectural]** Rebalance execution is triggered **only if ALL stages of the multi-stage decision pipeline confirm necessity**.
 - *Enforced by*: `RebalanceScheduler` checks decision before calling executor
 - *Architecture*: Decision result gates execution
+- *Decision Pipeline Stages*:
+  1. **Stage 1 — Current Cache NoRebalanceRange Validation**: If RequestedRange is contained within the NoRebalanceRange computed from CurrentCacheRange, skip rebalance (fast path)
+  2. **Stage 2 — Pending Desired Cache NoRebalanceRange Validation** (if pending rebalance exists): Validate against the NoRebalanceRange computed from the pending DesiredCacheRange to prevent thrashing/oscillation
+  3. **Stage 3 — DesiredCacheRange vs CurrentCacheRange Equality Check**: If computed DesiredCacheRange equals CurrentCacheRange, skip rebalance (no change needed)
+- *Critical Principle*: Rebalance executes ONLY if ALL stages pass validation. This multi-stage approach prevents unnecessary I/O, cache thrashing, and oscillating cache geometry while ensuring the system converges to optimal configuration.
 
 ---
 
@@ -317,11 +386,15 @@ deterministic, race-free synchronization without polling or timing dependencies.
 
 ### F.1 Execution Control & Cancellation
 
-**F.35** 🟢 **[Behavioral — Test: `Invariant_F35_RebalanceExecutionSupportsCancellation`]** Rebalance Execution **MUST support cancellation** at all stages (before I/O, during I/O, before mutations).
-- *Observable via*: DEBUG counters showing execution cancelled, lifecycle tracking (Started == Completed + Cancelled)
-- *Test verifies*: Rapid requests cancel pending rebalance, execution lifecycle properly tracked
+**F.35** 🟢 **[Behavioral — Test: `Invariant_F35_G46_RebalanceCancellationBehavior`]** Rebalance Execution **MUST be cancellation-safe** at all stages (before I/O, during I/O, before mutations).
+- *Observable via*: Lifecycle tracking integrity (Started == Completed + Cancelled), system stability under concurrent requests
+- *Test verifies*: 
+  - Deterministic termination: Every started execution reaches terminal state
+  - No partial mutations: Cache consistency maintained after cancellation
+  - Lifecycle integrity: Accounting remains correct under cancellation
 - *Implementation details*: `ThrowIfCancellationRequested()` at multiple checkpoints in execution pipeline
-- *Related*: C.24d (execution skipped due to cancellation), A.0a (User Path triggers cancellation), G.46 (high-level guarantee)
+- *Note*: Cancellation is triggered by scheduling decisions (Decision Engine validation), not automatically by user requests
+- *Related*: C.24d (execution skipped due to cancellation), A.0a (User Path priority via validation-driven cancellation), G.46 (high-level guarantee)
 
 **F.35a** 🔵 **[Architectural]** Rebalance Execution **MUST yield** to User Path requests immediately upon cancellation.
 - *Enforced by*: `ThrowIfCancellationRequested()` at multiple checkpoints
@@ -392,14 +465,15 @@ deterministic, race-free synchronization without polling or timing dependencies.
 
 **G.46** 🟢 **[Behavioral — Tests: `Invariant_G46_UserCancellationDuringFetch`, `Invariant_G46_RebalanceCancellation`]** Cancellation **must be supported** for all scenarios:
 1. **User-facing cancellation**: User-provided CancellationToken propagates through User Path to IDataSource.FetchAsync()
-2. **Background rebalance cancellation**: New user requests cancel pending/ongoing rebalance execution
+2. **Background rebalance cancellation**: System supports cancellation of pending/ongoing rebalance execution
 - *Observable via*: 
   - User cancellation: OperationCanceledException thrown during IDataSource fetch
-  - Rebalance cancellation: DEBUG counters showing intent/execution cancelled
+  - Rebalance cancellation: System stability and lifecycle integrity under concurrent requests
 - *Test verifies*: 
   - `Invariant_G46_UserCancellationDuringFetch`: Cancelling during IDataSource fetch throws OperationCanceledException
-  - `Invariant_G46_RebalanceCancellation`: Background rebalance supports cancellation (high-level guarantee)
-- *Related*: F.35 (detailed rebalance execution cancellation mechanics), A.0a (User Path priority via cancellation)
+  - `Invariant_G46_RebalanceCancellation`: Background rebalance supports cancellation mechanism (high-level guarantee)
+- *Important*: System does NOT guarantee cancellation on new requests. Cancellation MAY occur depending on Decision Engine scheduling validation. Focus is on system stability and cache consistency, not deterministic cancellation behavior.
+- *Related*: F.35 (detailed rebalance execution cancellation mechanics), A.0a (User Path priority via validation-driven cancellation)
 
 ---
 

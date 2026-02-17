@@ -1,6 +1,7 @@
 ﻿using Intervals.NET;
 using Intervals.NET.Data;
 using Intervals.NET.Domain.Abstractions;
+using SlidingWindowCache.Core.Rebalance.Decision;
 using SlidingWindowCache.Core.Rebalance.Intent;
 using SlidingWindowCache.Core.State;
 using SlidingWindowCache.Infrastructure.Instrumentation;
@@ -18,6 +19,10 @@ namespace SlidingWindowCache.Core.Rebalance.Execution;
 /// <para><strong>Execution Context:</strong> Background / ThreadPool</para>
 /// <para><strong>Characteristics:</strong> Asynchronous, cancellable, heavyweight</para>
 /// <para><strong>Responsibility:</strong> Cache normalization (expand, trim, recompute NoRebalanceRange)</para>
+/// <para><strong>Execution Serialization:</strong> Uses <see cref="SemaphoreSlim"/> to ensure only one rebalance 
+/// execution can write to cache state at a time. This guarantees single-writer semantics even when multiple 
+/// rebalance operations are scheduled concurrently. CancellationToken provides early exit signaling, while the 
+/// semaphore provides mutual exclusion for cache mutations. WebAssembly-compatible, async, and lightweight.</para>
 /// </remarks>
 internal sealed class RebalanceExecutor<TRange, TData, TDomain>
     where TRange : IComparable<TRange>
@@ -25,19 +30,17 @@ internal sealed class RebalanceExecutor<TRange, TData, TDomain>
 {
     private readonly CacheState<TRange, TData, TDomain> _state;
     private readonly CacheDataExtensionService<TRange, TData, TDomain> _cacheExtensionService;
-    private readonly ThresholdRebalancePolicy<TRange, TDomain> _rebalancePolicy;
     private readonly ICacheDiagnostics _cacheDiagnostics;
+    private readonly SemaphoreSlim _executionSemaphore = new SemaphoreSlim(1, 1);
 
     public RebalanceExecutor(
         CacheState<TRange, TData, TDomain> state,
         CacheDataExtensionService<TRange, TData, TDomain> cacheExtensionService,
-        ThresholdRebalancePolicy<TRange, TDomain> rebalancePolicy,
         ICacheDiagnostics cacheDiagnostics
     )
     {
         _state = state;
         _cacheExtensionService = cacheExtensionService;
-        _rebalancePolicy = rebalancePolicy;
         _cacheDiagnostics = cacheDiagnostics;
     }
 
@@ -47,6 +50,7 @@ internal sealed class RebalanceExecutor<TRange, TData, TDomain>
     /// </summary>
     /// <param name="intent">The intent with data that was actually assembled in UserPath and the requested range.</param>
     /// <param name="desiredRange">The target cache range to normalize to.</param>
+    /// <param name="desiredNoRebalanceRange">The no-rebalance range for the target cache state.</param>
     /// <param name="cancellationToken">Cancellation token to support cancellation at all stages.</param>
     /// <returns>A task representing the asynchronous rebalance operation.</returns>
     /// <remarks>
@@ -62,49 +66,60 @@ internal sealed class RebalanceExecutor<TRange, TData, TDomain>
     /// The delivered data from the intent is used as the authoritative base source,
     /// avoiding duplicate fetches and ensuring consistency with what the user received.
     /// </para>
+    /// <para>
+    /// This executor is intentionally simple - no analytical decisions, no necessity checks.
+    /// Decision logic has been validated by DecisionEngine before invocation.
+    /// </para>
+    /// <para><strong>Serialization:</strong> Uses semaphore to ensure only one execution can write to cache at a time.
+    /// Semaphore is acquired before I/O operations to prevent queue buildup while allowing cancellation to propagate.
+    /// If cancelled during wait, the operation exits cleanly without acquiring the semaphore.</para>
     /// </remarks>
     public async Task ExecuteAsync(
         Intent<TRange, TData, TDomain> intent,
         Range<TRange> desiredRange,
+        Range<TRange>? desiredNoRebalanceRange,
         CancellationToken cancellationToken)
     {
         // Use delivered data as the base - this is what the user received
         var baseRangeData = intent.AvailableRangeData;
 
-        // Check if desired range equals delivered data range (Decision Path D2)
-        // This is a final check before expensive I/O operations
-        if (baseRangeData.Range == desiredRange)
+        // Acquire semaphore to serialize execution - ensures only one rebalance writes to cache at a time
+        // This prevents race conditions even when multiple rebalance operations are scheduled concurrently
+        await _executionSemaphore.WaitAsync(cancellationToken).ConfigureAwait(false);
+
+        try
         {
-            _cacheDiagnostics.RebalanceSkippedSameRange();
-            // Even though ranges match, we still need to update cache state since
-            // User Path no longer writes to cache. Use delivered data directly.
-            UpdateCacheState(baseRangeData, intent.RequestedRange);
-            return;
+            // Cancellation check after acquiring semaphore but before expensive I/O
+            // Satisfies Invariant 34a: "Rebalance Execution MUST yield to User Path requests immediately"
+            cancellationToken.ThrowIfCancellationRequested();
+
+            // Phase 1: Extend delivered data to cover desired range (fetch only truly missing data)
+            // Use delivered data as base instead of current cache to ensure consistency
+            var extended = await _cacheExtensionService.ExtendCacheAsync(baseRangeData, desiredRange, cancellationToken)
+                .ConfigureAwait(false);
+
+            // Cancellation check after I/O but before mutation
+            // If User Path cancelled us, don't apply the rebalance result
+            cancellationToken.ThrowIfCancellationRequested();
+
+            // Phase 2: Trim to desired range (rebalancing-specific: discard data outside desired range)
+            baseRangeData = extended[desiredRange];
+
+            // Final cancellation check before applying mutation
+            // Ensures we don't apply obsolete rebalance results
+            cancellationToken.ThrowIfCancellationRequested();
+
+            // Phase 3: Apply cache state mutations
+            UpdateCacheState(baseRangeData, intent.RequestedRange, desiredNoRebalanceRange);
+
+            _cacheDiagnostics.RebalanceExecutionCompleted();
         }
-
-        // Cancellation check after decision but before expensive I/O
-        // Satisfies Invariant 34a: "Rebalance Execution MUST yield to User Path requests immediately"
-        cancellationToken.ThrowIfCancellationRequested();
-
-        // Phase 1: Extend delivered data to cover desired range (fetch only truly missing data)
-        // Use delivered data as base instead of current cache to ensure consistency
-        var extended = await _cacheExtensionService.ExtendCacheAsync(baseRangeData, desiredRange, cancellationToken);
-
-        // Cancellation check after I/O but before mutation
-        // If User Path cancelled us, don't apply the rebalance result
-        cancellationToken.ThrowIfCancellationRequested();
-
-        // Phase 2: Trim to desired range (rebalancing-specific: discard data outside desired range)
-        baseRangeData = extended[desiredRange];
-
-        // Final cancellation check before applying mutation
-        // Ensures we don't apply obsolete rebalance results
-        cancellationToken.ThrowIfCancellationRequested();
-
-        // Phase 3: Apply cache state mutations
-        UpdateCacheState(baseRangeData, intent.RequestedRange);
-
-        _cacheDiagnostics.RebalanceExecutionCompleted();
+        finally
+        {
+            // Always release semaphore, even if cancelled or exception occurred
+            // This ensures subsequent rebalance operations can proceed
+            _executionSemaphore.Release();
+        }
     }
 
     /// <summary>
@@ -113,7 +128,11 @@ internal sealed class RebalanceExecutor<TRange, TData, TDomain>
     /// </summary>
     /// <param name="normalizedData">The normalized data to write to cache.</param>
     /// <param name="requestedRange">The original range requested by the user, used to update LastRequested field.</param>
-    private void UpdateCacheState(RangeData<TRange, TData, TDomain> normalizedData, Range<TRange> requestedRange)
+    /// <param name="desiredNoRebalanceRange">The pre-computed no-rebalance range for the target state.</param>
+    private void UpdateCacheState(
+        RangeData<TRange, TData, TDomain> normalizedData,
+        Range<TRange> requestedRange,
+        Range<TRange>? desiredNoRebalanceRange)
     {
         // Phase 1: Update the cache with the rebalanced data (atomic mutation)
         // SINGLE-WRITER: This is the ONLY place where cache state is written
@@ -123,8 +142,8 @@ internal sealed class RebalanceExecutor<TRange, TData, TDomain>
         // SINGLE-WRITER: Only Rebalance Execution writes to LastRequested
         _state.LastRequested = requestedRange;
 
-        // Phase 3: Update the no-rebalance range to prevent unnecessary rebalancing
+        // Phase 3: Update the no-rebalance range using pre-computed value from DecisionEngine
         // SINGLE-WRITER: Only Rebalance Execution writes to NoRebalanceRange
-        _state.NoRebalanceRange = _rebalancePolicy.GetNoRebalanceRange(_state.Cache.Range);
+        _state.NoRebalanceRange = desiredNoRebalanceRange;
     }
 }

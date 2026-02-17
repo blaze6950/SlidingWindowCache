@@ -42,6 +42,7 @@ public class RebalanceExceptionHandlingTests : IDisposable
                     // First call (user request) succeeds
                     return GenerateTestData(range);
                 }
+
                 // Second call (rebalance) fails
                 throw new InvalidOperationException("Simulated data source failure during rebalance");
             }
@@ -51,7 +52,7 @@ public class RebalanceExceptionHandlingTests : IDisposable
             leftCacheSize: 1.0,
             rightCacheSize: 1.0,
             readMode: UserCacheReadMode.Snapshot,
-            leftThreshold: 0.0,  // Trigger rebalance immediately
+            leftThreshold: 0.0, // Trigger rebalance immediately
             rightThreshold: 0.0,
             debounceDelay: TimeSpan.FromMilliseconds(10)
         );
@@ -64,7 +65,8 @@ public class RebalanceExceptionHandlingTests : IDisposable
         );
 
         // Act: Make a request that will trigger a rebalance
-        var data = await cache.GetDataAsync(Intervals.NET.Factories.Range.Closed<int>(100, 110), CancellationToken.None);
+        var data = await cache.GetDataAsync(Intervals.NET.Factories.Range.Closed<int>(100, 110),
+            CancellationToken.None);
 
         // Wait for background rebalance to fail
         await cache.WaitForIdleAsync(TimeSpan.FromSeconds(5));
@@ -73,8 +75,8 @@ public class RebalanceExceptionHandlingTests : IDisposable
         Assert.Equal(1, _diagnostics.UserRequestServed);
         Assert.Equal(1, _diagnostics.RebalanceIntentPublished);
         Assert.Equal(1, _diagnostics.RebalanceExecutionStarted);
-        Assert.Equal(1, _diagnostics.RebalanceExecutionFailed);  // ⚠️ This is the critical event
-        Assert.Equal(0, _diagnostics.RebalanceExecutionCompleted);  // Should not complete
+        Assert.Equal(1, _diagnostics.RebalanceExecutionFailed); // ⚠️ This is the critical event
+        Assert.Equal(0, _diagnostics.RebalanceExecutionCompleted); // Should not complete
     }
 
     /// <summary>
@@ -95,6 +97,7 @@ public class RebalanceExceptionHandlingTests : IDisposable
                     // Second call (rebalance) fails
                     throw new InvalidOperationException("Rebalance fetch failed");
                 }
+
                 // Other calls succeed
                 return GenerateTestData(range);
             }
@@ -117,11 +120,13 @@ public class RebalanceExceptionHandlingTests : IDisposable
         );
 
         // Act: First request succeeds, triggers failed rebalance
-        var data1 = await cache.GetDataAsync(Intervals.NET.Factories.Range.Closed<int>(100, 110), CancellationToken.None);
+        var data1 = await cache.GetDataAsync(Intervals.NET.Factories.Range.Closed<int>(100, 110),
+            CancellationToken.None);
         await cache.WaitForIdleAsync(TimeSpan.FromSeconds(5));
 
         // Second request should still work (user path bypasses failed rebalance)
-        var data2 = await cache.GetDataAsync(Intervals.NET.Factories.Range.Closed<int>(200, 210), CancellationToken.None);
+        var data2 = await cache.GetDataAsync(Intervals.NET.Factories.Range.Closed<int>(200, 210),
+            CancellationToken.None);
         await cache.WaitForIdleAsync(TimeSpan.FromSeconds(5));
 
         // Assert: Both requests succeeded despite rebalance failure
@@ -156,6 +161,7 @@ public class RebalanceExceptionHandlingTests : IDisposable
                     // First call (user request) succeeds
                     return GenerateTestData(range);
                 }
+
                 // Second call (rebalance) fails
                 throw new InvalidOperationException("Data source is unhealthy");
             }
@@ -212,7 +218,8 @@ public class RebalanceExceptionHandlingTests : IDisposable
             return Task.FromResult(data);
         }
 
-        public Task<IEnumerable<TData>> FetchAsync(IEnumerable<Range<TRange>> ranges, CancellationToken cancellationToken)
+        public Task<IEnumerable<TData>> FetchAsync(IEnumerable<Range<TRange>> ranges,
+            CancellationToken cancellationToken)
         {
             var allData = new List<TData>();
             foreach (var range in ranges)
@@ -220,6 +227,7 @@ public class RebalanceExceptionHandlingTests : IDisposable
                 var data = _fetchSingleRange(range);
                 allData.AddRange(data);
             }
+
             return Task.FromResult<IEnumerable<TData>>(allData);
         }
     }
@@ -237,6 +245,10 @@ public class RebalanceExceptionHandlingTests : IDisposable
             _logError = logError;
         }
 
+        public void RebalanceScheduled()
+        {
+        }
+
         public void RebalanceExecutionFailed(Exception ex)
         {
             // ⚠️ CRITICAL: This is the minimum requirement for production
@@ -244,21 +256,69 @@ public class RebalanceExceptionHandlingTests : IDisposable
         }
 
         // All other methods can be no-op if you only care about failures
-        public void UserRequestServed() { }
-        public void CacheExpanded() { }
-        public void CacheReplaced() { }
-        public void UserRequestFullCacheHit() { }
-        public void UserRequestPartialCacheHit() { }
-        public void UserRequestFullCacheMiss() { }
-        public void DataSourceFetchSingleRange() { }
-        public void DataSourceFetchMissingSegments() { }
-        public void RebalanceIntentPublished() { }
-        public void RebalanceIntentCancelled() { }
-        public void RebalanceExecutionStarted() { }
-        public void RebalanceExecutionCompleted() { }
-        public void RebalanceExecutionCancelled() { }
-        public void RebalanceSkippedNoRebalanceRange() { }
-        public void RebalanceSkippedSameRange() { }
+        public void UserRequestServed()
+        {
+        }
+
+        public void CacheExpanded()
+        {
+        }
+
+        public void CacheReplaced()
+        {
+        }
+
+        public void UserRequestFullCacheHit()
+        {
+        }
+
+        public void UserRequestPartialCacheHit()
+        {
+        }
+
+        public void UserRequestFullCacheMiss()
+        {
+        }
+
+        public void DataSourceFetchSingleRange()
+        {
+        }
+
+        public void DataSourceFetchMissingSegments()
+        {
+        }
+
+        public void RebalanceIntentPublished()
+        {
+        }
+
+        public void RebalanceIntentCancelled()
+        {
+        }
+
+        public void RebalanceExecutionStarted()
+        {
+        }
+
+        public void RebalanceExecutionCompleted()
+        {
+        }
+
+        public void RebalanceExecutionCancelled()
+        {
+        }
+
+        public void RebalanceSkippedCurrentNoRebalanceRange()
+        {
+        }
+
+        public void RebalanceSkippedPendingNoRebalanceRange()
+        {
+        }
+
+        public void RebalanceSkippedSameRange()
+        {
+        }
     }
 
     private static IEnumerable<string> GenerateTestData(Intervals.NET.Range<int> range)
@@ -268,6 +328,7 @@ public class RebalanceExceptionHandlingTests : IDisposable
         {
             data.Add($"Item-{i}");
         }
+
         return data;
     }
 

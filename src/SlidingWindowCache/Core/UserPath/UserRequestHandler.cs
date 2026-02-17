@@ -4,6 +4,7 @@ using Intervals.NET.Data.Extensions;
 using Intervals.NET.Domain.Abstractions;
 using Intervals.NET.Extensions;
 using SlidingWindowCache.Core.Rebalance.Execution;
+using SlidingWindowCache.Core.Rebalance.Decision;
 using SlidingWindowCache.Core.Rebalance.Intent;
 using SlidingWindowCache.Core.State;
 using SlidingWindowCache.Infrastructure.Instrumentation;
@@ -110,10 +111,6 @@ internal sealed class UserRequestHandler<TRange, TData, TDomain>
         Range<TRange> requestedRange,
         CancellationToken cancellationToken)
     {
-        // CRITICAL: Cancel any pending/ongoing rebalance FIRST (Invariant A.0: User Path priority)
-        // This ensures rebalance execution doesn't interfere even though User Path no longer mutates
-        _intentManager.CancelPendingRebalance();
-
         // Check if cache is cold (never used) - use ToRangeData to detect empty cache
         var cacheStorage = _state.Cache;
         var isColdStart = !_state.LastRequested.HasValue;
@@ -173,7 +170,7 @@ internal sealed class UserRequestHandler<TRange, TData, TDomain>
             // Fetch ONLY the requested range from IDataSource
             // NOTE: The logic is similar to cold start
             _cacheDiagnostics.DataSourceFetchSingleRange();
-            assembledData = (await _dataSource.FetchAsync(requestedRange, cancellationToken))
+            assembledData = (await _dataSource.FetchAsync(requestedRange, cancellationToken).ConfigureAwait(false))
                 .ToRangeData(requestedRange, _state.Domain);
 
             _cacheDiagnostics.UserRequestFullCacheMiss();

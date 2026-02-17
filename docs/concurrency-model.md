@@ -24,37 +24,106 @@ The cache implements a **single-writer** concurrency model:
 
 - **One Writer:** Rebalance Execution Path exclusively
 - **Read-Only User Path:** User Path never mutates cache state
-- **No Locks:** Coordination via cancellation, not mutual exclusion
+- **Coordination via Cancellation:** Cancellation prevents concurrent executions (mechanical coordination), not duplicate decision-making
+- **Rebalance Decision Validation:** Multi-stage analytical pipeline determines rebalance necessity (CPU-only, no I/O)
 - **Eventual Consistency:** Cache state converges asynchronously to optimal configuration
 
 ### Write Ownership
 
-Only `RebalanceExecutor` may write to:
-- Cache data and range (via `Cache.Rematerialize()`)
-- `LastRequested` field
-- `NoRebalanceRange` field
+Only `RebalanceExecutor` may write to `CacheState` fields:
+- Cache data and range (via `Cache.Rematerialize()` atomic swap)
+- `LastRequested` property (via `internal set` - restricted to rebalance execution)
+- `NoRebalanceRange` property (via `internal set` - restricted to rebalance execution)
 
-All other components have read-only access to cache state.
+All other components have read-only access to cache state (public getters only).
 
 ### Read Safety
 
 User Path safely reads cache state without locks because:
-- User Path never writes to cache (read-only guarantee)
-- Rebalance Execution performs atomic updates via `Rematerialize()`
-- Cancellation ensures Rebalance Execution yields before User Path operations
-- Single-writer eliminates race conditions
+- **User Path never writes to CacheState** (architectural invariant, no write access)
+- **Rebalance Execution is sole writer** (single-writer architecture eliminates write-write races)
+- **Cache storage performs atomic updates** via `Rematerialize()` (array/List reference assignment is atomic)
+- **Property reads are safe** - reference reads are atomic on all supported platforms
+- **Cancellation coordination** - Rebalance Execution checks cancellation before mutations
+- **No read-write races** - User Path may read while Rebalance executes, but User Path sees consistent state (old or new, never partial)
 
-### Eventual Consistency Model
+**Key Insight:** Thread-safety is achieved through **architectural constraints** (single-writer) and **coordination** (cancellation), not through locks or volatile keywords on CacheState fields.
 
-Cache state converges to optimal configuration asynchronously:
+### Execution Serialization
+
+While the single-writer architecture eliminates write-write races between User Path and Rebalance Execution, multiple rebalance operations can be scheduled concurrently. To guarantee that only one rebalance execution writes to cache state at a time, `RebalanceExecutor` uses a `SemaphoreSlim(1, 1)` for mutual exclusion.
+
+**Serialization Mechanism:**
+
+- **`SemaphoreSlim`**: Ensures only one rebalance execution can proceed through cache mutation at a time
+- **Cancellation Token**: Provides early exit signaling - operations can be cancelled while waiting for the semaphore
+- **Ordering**: New rebalance scheduled AFTER old one is cancelled, ensuring proper semaphore acquisition order
+- **Atomic cancellation**: `Interlocked.Exchange` prevents race where multiple threads call `Cancel()` on same `PendingRebalance`
+
+**Why Both CTS and SemaphoreSlim:**
+
+- **CTS**: Lightweight signaling mechanism for cooperative cancellation (intent obsolescence, user cancellation)
+- **SemaphoreSlim**: Mutual exclusion for cache writes (prevents concurrent execution)
+- Together: CTS signals "don't do this work anymore", semaphore enforces "only one at a time"
+
+**Design Properties:**
+
+- ✅ **WebAssembly compatible** - async, no blocking threads
+- ✅ **Zero User Path blocking** - User Path never acquires semaphore, only rebalance execution does
+- ✅ **Production-grade** - prevents data corruption from parallel cache writes
+- ✅ **Lightweight** - semaphore rarely contended (rebalance is rare operation)
+- ✅ **Cancellation-friendly** - `WaitAsync(cancellationToken)` exits cleanly if cancelled
+
+**Acquisition Point:**
+
+The semaphore is acquired at the start of `RebalanceExecutor.ExecuteAsync()`, before any I/O operations. This prevents queue buildup while allowing cancellation to propagate immediately. If cancelled during wait, the operation exits without acquiring the semaphore.
+
+### Rebalance Validation vs Cancellation
+
+**Key Distinction:**
+- **Rebalance Validation** = Decision mechanism (analytical, CPU-only, determines necessity) - **THE authority**
+- **Cancellation** = Coordination mechanism (mechanical, prevents concurrent executions) - coordination tool only
+
+**Decision-Driven Execution Model:**
+1. User Path publishes intent with delivered data (signal, not command)
+2. **Rebalance Decision Engine validates necessity** via multi-stage analytical pipeline (THE sole authority)
+3. **Validation confirms necessity** → pending rebalance cancelled + new execution scheduled (coordination via cancellation)
+4. **Validation rejects necessity** → no cancellation, work avoidance (skip entirely: NoRebalanceRange containment, pending coverage, Desired==Current)
+
+**Smart Eventual Consistency Principle:**
+
+Cancellation does NOT drive decisions; **validated rebalance necessity drives cancellation**.
+
+The Decision Engine determines necessity through analytical validation (work avoidance authority). Cancellation is merely the coordination tool that prevents concurrent executions (single-writer enforcement). This separation enables smart eventual consistency: the system converges to optimal configuration while avoiding unnecessary work (thrashing prevention, redundant I/O elimination, oscillation avoidance).
+
+### Smart Eventual Consistency Model
+
+Cache state converges to optimal configuration asynchronously through **decision-driven rebalance execution**:
 
 1. **User Path** returns correct data immediately (from cache or IDataSource)
-2. **User Path** publishes intent with delivered data
-3. **Cache state** updates occur in background via Rebalance Execution
-4. **Debounce delay** controls convergence timing
-5. **User correctness** never depends on cache state being up-to-date
+2. **User Path** publishes intent with delivered data (**synchronously in user thread**)
+3. **Rebalance Decision Engine** validates rebalance necessity through multi-stage analytical pipeline (**synchronously in user thread - CPU-only, side-effect free, lightweight**)
+4. **Scheduling** creates PendingRebalance and schedules background Task (**synchronously in user thread**)
+5. **Work avoidance**: Rebalance skipped if validation determines it's unnecessary (NoRebalanceRange containment, Desired==Current, pending rebalance coverage) - **all happens synchronously before background scheduling**
+6. **Background execution** (only part that runs in ThreadPool): debounce delay + actual rebalance I/O operations
+7. **Debounce delay** controls convergence timing and prevents thrashing (background)
+8. **User correctness** never depends on cache state being up-to-date
 
 **Key insight:** User always receives correct data, regardless of whether cache has converged yet.
+
+**"Smart" characteristic:** The system avoids unnecessary work through multi-stage validation rather than blindly executing every intent. This prevents thrashing, reduces redundant I/O, and maintains stability under rapidly changing access patterns while ensuring eventual convergence to optimal configuration.
+
+**Critical Architectural Detail - Intent Processing is Synchronous:**
+
+The decision logic (multi-stage validation) and scheduling are **NOT background operations**. They execute **synchronously in the user thread** before returning control to the user. Only the actual rebalance execution (I/O operations) happens in background via background task scheduling.
+
+This design is intentional and critical for handling user request bursts:
+- ✅ **CPU-only validation** in user thread (math, conditions, no I/O)
+- ✅ **Side-effect free** - just calculations
+- ✅ **Lightweight** - completes in microseconds
+- ✅ **Prevents intent thrashing** - validates necessity immediately, skips if not needed
+- ✅ **No background queue buildup** - decisions made synchronously
+- ⚠️ Only actual **I/O operations** (data fetching, cache mutation) happen in background
 
 ---
 
@@ -94,10 +163,11 @@ This is not a concurrency bug — it is a **model mismatch**.
 ### 2. Rebalance Logic Depends on a Single Timeline
 
 Rebalance behavior relies on:
-- ordered intents
-- cancellation of obsolete work
-- "latest access wins" semantics
-- eventual stabilization
+- ordered intents representing sequential access observations
+- multi-stage validation determining rebalance necessity
+- cancellation of pending work when validation confirms new rebalance needed
+- "latest validated decision wins" semantics
+- eventual stabilization through work avoidance (NoRebalanceRange, Desired==Current checks)
 
 These guarantees require a **single temporal sequence of access events**.
 
@@ -192,24 +262,34 @@ Method exists only to expose idle synchronization through public API for testing
 
 **IntentController** uses lock-free synchronization:
 - **No locks, no `lock` statements, no mutexes**
-- Uses `Interlocked.Exchange` for atomic field replacement
-- `_currentIntentCts` field atomically swapped during intent operations
+- Uses `Volatile.Read` and `Volatile.Write` for safe field access across threads
+- `_pendingRebalance` field accessed with memory barriers via `Volatile` operations
+- Encapsulates `CancellationTokenSource` within `PendingRebalance` domain object (DDD-style)
 - Thread-safe without blocking - guaranteed progress
 - Zero contention overhead
 
-**Race Condition Prevention:**
+**Safe Visibility Pattern:**
 ```csharp
-// Atomic replacement ensures no race conditions
-var oldCts = Interlocked.Exchange(ref _currentIntentCts, newCts);
+// Read with memory barrier for safe observation
+var pending = Volatile.Read(ref _pendingRebalance);
+
+// Write with memory barrier for safe publication
+Volatile.Write(ref _pendingRebalance, newPending);
 ```
+
+**Domain-Driven Cancellation:**
+- `PendingRebalance` domain object owns `CancellationTokenSource` lifecycle
+- Cancellation invoked through domain object's `Cancel()` method
+- Eliminates direct CTS management in IntentController (better encapsulation)
 
 **Testing Coverage:**
 - Lock-free behavior validated by `ConcurrencyStabilityTests`
 - Tested under concurrent load (100+ simultaneous operations)
 - No deadlocks, no race conditions, no data corruption observed
 
-This lightweight synchronization primitive ensures thread-safety without the overhead
-and complexity of traditional locking mechanisms.
+This lightweight synchronization approach using `Volatile` operations ensures thread-safety 
+without the overhead and complexity of traditional locking mechanisms, while the DDD-style 
+domain object pattern provides clean encapsulation of cancellation infrastructure.
 
 ### Relation to Concurrency Model
 

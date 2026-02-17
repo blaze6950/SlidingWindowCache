@@ -90,44 +90,44 @@ public static class TestHelpers
         {
             // For closed ranges [start, end], data should be sequential from start
             case { IsStartInclusive: true, IsEndInclusive: true }:
-            {
-                for (var i = 0; i < span.Length; i++)
                 {
-                    Assert.Equal(start + i, span[i]);
-                }
+                    for (var i = 0; i < span.Length; i++)
+                    {
+                        Assert.Equal(start + i, span[i]);
+                    }
 
-                break;
-            }
+                    break;
+                }
             case { IsStartInclusive: true, IsEndInclusive: false }:
-            {
-                // [start, end) - start inclusive, end exclusive
-                for (var i = 0; i < span.Length; i++)
                 {
-                    Assert.Equal(start + i, span[i]);
-                }
+                    // [start, end) - start inclusive, end exclusive
+                    for (var i = 0; i < span.Length; i++)
+                    {
+                        Assert.Equal(start + i, span[i]);
+                    }
 
-                break;
-            }
+                    break;
+                }
             case { IsStartInclusive: false, IsEndInclusive: true }:
-            {
-                // (start, end] - start exclusive, end inclusive
-                for (var i = 0; i < span.Length; i++)
                 {
-                    Assert.Equal(start + 1 + i, span[i]);
-                }
+                    // (start, end] - start exclusive, end inclusive
+                    for (var i = 0; i < span.Length; i++)
+                    {
+                        Assert.Equal(start + 1 + i, span[i]);
+                    }
 
-                break;
-            }
+                    break;
+                }
             default:
-            {
-                // (start, end) - both exclusive
-                for (var i = 0; i < span.Length; i++)
                 {
-                    Assert.Equal(start + 1 + i, span[i]);
-                }
+                    // (start, end) - both exclusive
+                    for (var i = 0; i < span.Length; i++)
+                    {
+                        Assert.Equal(start + 1 + i, span[i]);
+                    }
 
-                break;
-            }
+                    break;
+                }
         }
     }
 
@@ -293,6 +293,12 @@ public static class TestHelpers
     /// </summary>
     /// <remarks>
     /// <para>
+    /// <strong>Cancellation is a coordination mechanism triggered by scheduling decisions, not automatic
+    /// request-driven behavior.</strong> Cancellation occurs ONLY when the Decision Engine validates that
+    /// a new rebalance is necessary. This method verifies that IF cancellation occurred, it was properly
+    /// tracked in the lifecycle.
+    /// </para>
+    /// <para>
     /// Due to timing, cancellation can occur at two distinct lifecycle points:
     /// </para>
     /// <list type="number">
@@ -339,14 +345,40 @@ public static class TestHelpers
     }
 
     /// <summary>
-    /// Asserts that rebalance was skipped due to NoRebalanceRange policy.
+    /// Asserts that rebalance was skipped due to current cache NoRebalanceRange (Stage 1).
+    /// </summary>
+    public static void AssertRebalanceSkippedDueToPolicyStage1(EventCounterCacheDiagnostics cacheDiagnostics)
+    {
+        var skipped = cacheDiagnostics.RebalanceSkippedCurrentNoRebalanceRange;
+        Assert.True(skipped > 0,
+            $"Expected at least one rebalance to be skipped due to current NoRebalanceRange (Stage 1), but found {skipped}.");
+        Assert.Equal(0, cacheDiagnostics.RebalanceExecutionStarted);
+        Assert.Equal(0, cacheDiagnostics.RebalanceExecutionCompleted);
+    }
+
+    /// <summary>
+    /// Asserts that rebalance was skipped due to pending rebalance NoRebalanceRange (Stage 2).
+    /// </summary>
+    public static void AssertRebalanceSkippedDueToPolicyStage2(EventCounterCacheDiagnostics cacheDiagnostics)
+    {
+        var skipped = cacheDiagnostics.RebalanceSkippedPendingNoRebalanceRange;
+        Assert.True(skipped > 0,
+            $"Expected at least one rebalance to be skipped due to pending NoRebalanceRange (Stage 2), but found {skipped}.");
+        Assert.Equal(0, cacheDiagnostics.RebalanceExecutionStarted);
+        Assert.Equal(0, cacheDiagnostics.RebalanceExecutionCompleted);
+    }
+
+    /// <summary>
+    /// Asserts that rebalance was skipped due to NoRebalanceRange policy (either stage).
     /// </summary>
     public static void AssertRebalanceSkippedDueToPolicy(EventCounterCacheDiagnostics cacheDiagnostics)
     {
-        var skipped = cacheDiagnostics.RebalanceSkippedNoRebalanceRange;
-        Assert.True(skipped > 0,
-            $"Expected at least one rebalance to be skipped due to NoRebalanceRange policy, but found {skipped}.");
+        var skippedStage1 = cacheDiagnostics.RebalanceSkippedCurrentNoRebalanceRange;
+        var skippedStage2 = cacheDiagnostics.RebalanceSkippedPendingNoRebalanceRange;
+        var totalSkipped = skippedStage1 + skippedStage2;
 
+        Assert.True(totalSkipped > 0,
+            $"Expected at least one rebalance to be skipped due to NoRebalanceRange policy, but found Stage1={skippedStage1}, Stage2={skippedStage2}.");
         Assert.Equal(0, cacheDiagnostics.RebalanceExecutionStarted);
         Assert.Equal(0, cacheDiagnostics.RebalanceExecutionCompleted);
     }
@@ -400,5 +432,66 @@ public static class TestHelpers
         int expectedCount = 1)
     {
         Assert.Equal(expectedCount, cacheDiagnostics.DataSourceFetchMissingSegments);
+    }
+
+    /// <summary>
+    /// Asserts that rebalance was scheduled (decision engine validated rebalance as necessary).
+    /// </summary>
+    /// <param name="cacheDiagnostics">The diagnostics instance to check.</param>
+    /// <param name="expectedCount">Expected number of times rebalance was scheduled (default: 1).</param>
+    public static void AssertRebalanceScheduled(EventCounterCacheDiagnostics cacheDiagnostics, int expectedCount = 1)
+    {
+        Assert.Equal(expectedCount, cacheDiagnostics.RebalanceScheduled);
+    }
+
+    /// <summary>
+    /// Asserts that rebalance was skipped because DesiredCacheRange equals CurrentCacheRange (Stage 3 / D.28).
+    /// </summary>
+    /// <param name="cacheDiagnostics">The diagnostics instance to check.</param>
+    /// <param name="minExpected">Minimum number of same-range skips expected (default: 1).</param>
+    public static void AssertRebalanceSkippedSameRange(EventCounterCacheDiagnostics cacheDiagnostics,
+        int minExpected = 1)
+    {
+        Assert.True(cacheDiagnostics.RebalanceSkippedSameRange >= minExpected,
+            $"Expected at least {minExpected} rebalance skip(s) due to same range (DesiredCacheRange == CurrentCacheRange), " +
+            $"but found {cacheDiagnostics.RebalanceSkippedSameRange}.");
+        Assert.Equal(0, cacheDiagnostics.RebalanceExecutionStarted);
+        Assert.Equal(0, cacheDiagnostics.RebalanceExecutionCompleted);
+    }
+
+    /// <summary>
+    /// Asserts the complete rebalance decision-to-execution pipeline lifecycle integrity.
+    /// Validates that all intents are accounted for across decision stages and execution.
+    /// </summary>
+    /// <remarks>
+    /// Decision Pipeline Stages:
+    /// - Stage 1: Current NoRebalanceRange check → SkippedCurrentNoRebalanceRange
+    /// - Stage 2: Pending NoRebalanceRange check → SkippedPendingNoRebalanceRange  
+    /// - Stage 3: DesiredCacheRange == CurrentCacheRange → SkippedSameRange
+    /// - All stages pass → RebalanceScheduled
+    /// - Intent superseded before decision → IntentCancelled
+    /// 
+    /// Execution Lifecycle:
+    /// - Scheduled → ExecutionStarted (unless cancelled between scheduling and execution)
+    /// - Started → (Completed | ExecutionCancelled | ExecutionFailed)
+    /// </remarks>
+    public static void AssertRebalancePipelineIntegrity(EventCounterCacheDiagnostics cacheDiagnostics)
+    {
+        var intentPublished = cacheDiagnostics.RebalanceIntentPublished;
+        var scheduled = cacheDiagnostics.RebalanceScheduled;
+        var skippedStage1 = cacheDiagnostics.RebalanceSkippedCurrentNoRebalanceRange;
+        var skippedStage2 = cacheDiagnostics.RebalanceSkippedPendingNoRebalanceRange;
+        var skippedStage3 = cacheDiagnostics.RebalanceSkippedSameRange;
+        var intentCancelled = cacheDiagnostics.RebalanceIntentCancelled;
+
+        // Decision phase: All intents must be accounted for
+        var totalDecisionOutcomes = scheduled + skippedStage1 + skippedStage2 + skippedStage3 + intentCancelled;
+        Assert.True(totalDecisionOutcomes <= intentPublished,
+            $"Decision outcomes ({totalDecisionOutcomes}) cannot exceed intents published ({intentPublished}). " +
+            $"Breakdown: Scheduled={scheduled}, SkippedStage1={skippedStage1}, SkippedStage2={skippedStage2}, " +
+            $"SkippedStage3={skippedStage3}, IntentCancelled={intentCancelled}");
+
+        // Execution phase: Verify lifecycle integrity
+        AssertRebalanceLifecycleIntegrity(cacheDiagnostics);
     }
 }

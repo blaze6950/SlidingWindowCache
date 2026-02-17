@@ -51,12 +51,22 @@ public class NoOpDiagnostics : ICacheDiagnostics
     }
 
     /// <inheritdoc/>
-    public void RebalanceSkippedNoRebalanceRange()
+    public void RebalanceSkippedCurrentNoRebalanceRange()
+    {
+    }
+
+    /// <inheritdoc/>
+    public void RebalanceSkippedPendingNoRebalanceRange()
     {
     }
 
     /// <inheritdoc/>
     public void RebalanceSkippedSameRange()
+    {
+    }
+
+    /// <inheritdoc/>
+    public void RebalanceScheduled()
     {
     }
 

@@ -51,9 +51,9 @@ public sealed class WindowCacheInvariantTests : IAsyncDisposable
     #region A.1 Concurrency & Priority
 
     /// <summary>
-    /// Tests Invariant A.0a (🟢 Behavioral): Every User Request MUST cancel any ongoing or pending
-    /// Rebalance Execution to ensure rebalance doesn't interfere with User Path data assembly.
-    /// Verifies cancellation via DEBUG instrumentation counters.
+    /// Tests Invariant A.0a (🟢 Behavioral): User Request MAY cancel ongoing or pending Rebalance Execution
+    /// ONLY when a new rebalance is validated as necessary by the multi-stage decision pipeline.
+    /// Verifies cancellation is validation-driven coordination, not automatic request-driven behavior.
     /// Related: A.0 (Architectural - User Path has higher priority than Rebalance Execution)
     /// </summary>
     [Fact]
@@ -69,14 +69,23 @@ public sealed class WindowCacheInvariantTests : IAsyncDisposable
         var intentPublishedBefore = _cacheDiagnostics.RebalanceIntentPublished;
         Assert.Equal(1, intentPublishedBefore);
 
-        // Second request cancels the first rebalance intent
+        // Second request (non-overlapping range) - Decision Engine validates if new rebalance is necessary
         await cache.GetDataAsync(TestHelpers.CreateRange(120, 130), CancellationToken.None);
 
         // Wait for background rebalance to settle before checking counters
         await cache.WaitForIdleAsync();
 
-        // ASSERT: Verify cancellation occurred
-        TestHelpers.AssertRebalancePathCancelled(_cacheDiagnostics);
+        // ASSERT: Priority mechanism enforced via validation-driven cancellation
+        // Cancellation occurs ONLY when Decision Engine validates new rebalance as necessary
+        // System does NOT guarantee automatic cancellation on every new request
+        TestHelpers.AssertIntentPublished(_cacheDiagnostics, 2);
+
+        // Verify lifecycle integrity and system stability (not deterministic cancellation counts)
+        TestHelpers.AssertRebalanceLifecycleIntegrity(_cacheDiagnostics);
+
+        // At least one rebalance should complete successfully
+        Assert.True(_cacheDiagnostics.RebalanceExecutionCompleted >= 1,
+            $"Expected at least 1 rebalance to complete, but found {_cacheDiagnostics.RebalanceExecutionCompleted}");
     }
 
     #endregion
@@ -292,8 +301,9 @@ public sealed class WindowCacheInvariantTests : IAsyncDisposable
     #region C. Rebalance Intent & Temporal Invariants
 
     /// <summary>
-    /// Tests Invariant C.17 (🟢 Behavioral): At any point in time, at most one active rebalance intent exists.
-    /// Verifies rapid requests cause each new intent to cancel previous ones, preventing intent queue buildup.
+    /// Tests Invariant C.17 (🔵 Architectural): At most one rebalance intent may be active at any time.
+    /// This is an architectural constraint enforced by single-writer design. Test verifies system stability
+    /// and lifecycle integrity under rapid concurrent requests, not deterministic cancellation counts.
     /// </summary>
     [Fact]
     public async Task Invariant_C17_AtMostOneActiveIntent()
@@ -310,15 +320,21 @@ public sealed class WindowCacheInvariantTests : IAsyncDisposable
         // Wait for background rebalance to settle before checking counters
         await cache.WaitForIdleAsync();
 
-        // ASSERT: Each new request publishes intent and cancels previous (at least 2 cancelled)
-        TestHelpers.AssertIntentPublished(_cacheDiagnostics, 3);
-        TestHelpers.AssertRebalancePathCancelled(_cacheDiagnostics, 2);
+        // ASSERT: System stability - verify lifecycle integrity (not deterministic cancellation counts)
+        // Architectural invariant: at most one active intent enforced by design
+        TestHelpers.AssertRebalanceLifecycleIntegrity(_cacheDiagnostics);
+
+        // Verify that at least one rebalance was scheduled and completed
+        Assert.True(_cacheDiagnostics.RebalanceScheduled >= 1,
+            $"Expected at least 1 rebalance to be scheduled, but found {_cacheDiagnostics.RebalanceScheduled}");
+        Assert.True(_cacheDiagnostics.RebalanceExecutionCompleted >= 1,
+            $"Expected at least 1 rebalance to complete, but found {_cacheDiagnostics.RebalanceExecutionCompleted}");
     }
 
     /// <summary>
-    /// Tests Invariant C.18 (🟢 Behavioral): Any previously created rebalance intent is considered
-    /// obsolete after a new intent is generated. Prevents stale rebalance operations from executing
-    /// with outdated information.
+    /// Tests Invariant C.18 (🟡 Conceptual): Previously created intents may become logically superseded.
+    /// This is a conceptual design intent. Test verifies system stability and cache consistency when
+    /// multiple intents are published, not deterministic cancellation behavior (obsolescence ≠ cancellation).
     /// </summary>
     [Fact]
     public async Task Invariant_C18_PreviousIntentBecomesObsolete()
@@ -331,15 +347,24 @@ public sealed class WindowCacheInvariantTests : IAsyncDisposable
         await cache.GetDataAsync(TestHelpers.CreateRange(100, 110), CancellationToken.None);
         var publishedBefore = _cacheDiagnostics.RebalanceIntentPublished;
 
-        // Second request publishes new intent and cancels old one
+        // Second request publishes new intent (may supersede old one depending on Decision Engine validation)
         await cache.GetDataAsync(TestHelpers.CreateRange(200, 210), CancellationToken.None);
 
         // Wait for background rebalance to settle before checking counters
         await cache.WaitForIdleAsync();
 
-        // ASSERT: New intent published, old one cancelled
+        // ASSERT: System stability - new intent published, system remains consistent
         Assert.True(_cacheDiagnostics.RebalanceIntentPublished > publishedBefore);
-        TestHelpers.AssertRebalancePathCancelled(_cacheDiagnostics);
+
+        // Conceptual invariant: obsolescence ≠ guaranteed cancellation
+        // Cancellation depends on Decision Engine validation, not automatic on new requests
+        TestHelpers.AssertRebalanceLifecycleIntegrity(_cacheDiagnostics);
+
+        // Verify that at least one rebalance was scheduled and completed
+        Assert.True(_cacheDiagnostics.RebalanceScheduled >= 1,
+            $"Expected at least 1 rebalance to be scheduled, but found {_cacheDiagnostics.RebalanceScheduled}");
+        Assert.True(_cacheDiagnostics.RebalanceExecutionCompleted >= 1,
+            $"Expected at least 1 rebalance to complete, but found {_cacheDiagnostics.RebalanceExecutionCompleted}");
     }
 
     /// <summary>
@@ -366,7 +391,9 @@ public sealed class WindowCacheInvariantTests : IAsyncDisposable
 
         // ASSERT: Intent published but execution may be skipped due to NoRebalanceRange
         TestHelpers.AssertIntentPublished(_cacheDiagnostics);
-        if (_cacheDiagnostics.RebalanceSkippedNoRebalanceRange > 0)
+        var totalSkipped = _cacheDiagnostics.RebalanceSkippedCurrentNoRebalanceRange +
+                           _cacheDiagnostics.RebalanceSkippedPendingNoRebalanceRange;
+        if (totalSkipped > 0)
         {
             Assert.Equal(0, _cacheDiagnostics.RebalanceExecutionCompleted);
         }
@@ -432,41 +459,134 @@ public sealed class WindowCacheInvariantTests : IAsyncDisposable
     }
 
     /// <summary>
+    /// Tests Invariant D.27 Stage 1: Rebalance skipped when request is within current cache's NoRebalanceRange.
+    /// Stage 1 (current cache stability check) is the fast-path optimization that prevents unnecessary
+    /// rebalance when the requested range is fully covered by the existing cache's no-rebalance threshold zone.
+    /// This validates the first stage of the multi-stage decision pipeline.
+    /// Related: D.27 (NoRebalanceRange policy), C.24a (execution skipped due to policy).
+    /// </summary>
+    [Fact]
+    public async Task Invariant_D27_Stage1_SkipsWhenWithinCurrentNoRebalanceRange()
+    {
+        // ARRANGE: Set up cache with threshold configuration
+        var options = TestHelpers.CreateDefaultOptions(
+            leftCacheSize: 1.0,
+            rightCacheSize: 1.0,
+            leftThreshold: 0.3, // 30% threshold
+            rightThreshold: 0.3,
+            debounceDelay: TimeSpan.FromMilliseconds(50));
+        var (cache, _) = TrackCache(TestHelpers.CreateCacheWithDefaults(_domain, _cacheDiagnostics, options));
+
+        // ACT: Establish cache with range [100, 120] (size 21)
+        await TestHelpers.ExecuteRequestAndWaitForRebalance(cache, TestHelpers.CreateRange(100, 120));
+        _cacheDiagnostics.Reset();
+
+        // NoRebalanceRange should be approximately [106, 114] (shrunk by 30% on each side)
+        // Request within this range should trigger Stage 1 skip
+        await cache.GetDataAsync(TestHelpers.CreateRange(108, 112), CancellationToken.None);
+        await cache.WaitForIdleAsync();
+
+        // ASSERT: Stage 1 skip occurred
+        Assert.Equal(1, _cacheDiagnostics.RebalanceIntentPublished);
+        Assert.Equal(1, _cacheDiagnostics.RebalanceSkippedCurrentNoRebalanceRange);
+        Assert.Equal(0, _cacheDiagnostics.RebalanceSkippedPendingNoRebalanceRange);
+        Assert.Equal(0, _cacheDiagnostics.RebalanceExecutionStarted);
+        Assert.Equal(0, _cacheDiagnostics.RebalanceExecutionCompleted);
+    }
+
+    /// <summary>
+    /// Tests Invariant D.29 Stage 2: Rebalance skipped when request is within pending rebalance's NoRebalanceRange.
+    /// Stage 2 (pending rebalance stability check) is the anti-thrashing optimization that prevents
+    /// cancellation storms when a scheduled rebalance will already satisfy the incoming request.
+    /// This validates the second stage of the multi-stage decision pipeline.
+    /// Related: D.29 (multi-stage validation), C.18 (intent supersession with validation).
+    /// </summary>
+    [Fact]
+    public async Task Invariant_D29_Stage2_SkipsWhenWithinPendingNoRebalanceRange()
+    {
+        // ARRANGE: Set up cache with threshold and debounce to allow multiple intents
+        var options = TestHelpers.CreateDefaultOptions(
+            leftCacheSize: 1.0, // Large expansion
+            rightCacheSize: 1.0,
+            leftThreshold: 0.2,
+            rightThreshold: 0.2,
+            debounceDelay: TimeSpan.FromMilliseconds(2000)); // Long debounce to create pending state
+        var (cache, _) = TrackCache(TestHelpers.CreateCacheWithDefaults(_domain, _cacheDiagnostics, options));
+        var initialRange = TestHelpers.CreateRange(200, 300); // Span 101
+        // Initial cache range is expected to be [98, 400] (size 303).
+        // The NoRebalanceRange is 20% shrunk from each side of that cache range,
+        // which gives [159, 340] (301 inner span; 20% of 301 is ~60 on each side).
+
+        var requestRange = TestHelpers.CreateRange(300, 400); // Span 101
+        // Desired cache range for this request would be [198, 500],
+        // and its NoRebalanceRange would be [258, 440] using the same 20% shrink.
+
+        // Next request is chosen to be within the pending rebalance's NoRebalanceRange
+        // but outside the current NoRebalanceRange, to trigger a Stage 2 skip.
+        var nextRequestRange = TestHelpers.CreateRange(320, 420); // Span 101
+        // ACT: Establish initial cache
+        await TestHelpers.ExecuteRequestAndWaitForRebalance(cache, initialRange);
+        _cacheDiagnostics.Reset();
+
+        // Request 1: Trigger rebalance outside NoRebalanceRange - will be pending due to debounce
+        _ = await cache.GetDataAsync(requestRange, CancellationToken.None);
+        await Task.Delay(500); // Allow intent to be published but not executed (still in debounce)
+
+        // Request 2: Make another request that would be covered by pending rebalance's NoRebalanceRange
+        // This should trigger Stage 2 skip since the pending rebalance will satisfy this request
+        _ = await cache.GetDataAsync(nextRequestRange, CancellationToken.None);
+
+        // Wait to complete
+        await cache.WaitForIdleAsync();
+
+        // ASSERT: Stage 2 skip occurred for second request
+        Assert.Equal(2, _cacheDiagnostics.RebalanceIntentPublished);
+        Assert.True(_cacheDiagnostics.RebalanceSkippedPendingNoRebalanceRange >= 1,
+            $"Expected at least one Stage 2 skip due to pending rebalance NoRebalanceRange, but found {_cacheDiagnostics.RebalanceSkippedPendingNoRebalanceRange}");
+        // First rebalance should execute, second should be skipped by Stage 2
+        Assert.Equal(1, _cacheDiagnostics.RebalanceExecutionCompleted);
+    }
+
+    /// <summary>
     /// Tests Invariant D.28 (🟢 Behavioral): If DesiredCacheRange == CurrentCacheRange, rebalance execution
-    /// not required. When cache already matches desired state, system skips execution as optimization.
-    /// Uses DEBUG counter RebalanceSkippedSameRange to verify early-exit in RebalanceExecutor.
-    /// Corresponds to sub-invariant C.24c (execution skipped due to optimization).
+    /// is not required (Stage 3 validation / same-range optimization). This is the final decision stage that
+    /// prevents no-op rebalance operations when the cache is already in optimal configuration for the request.
+    /// Verifies the RebalanceSkippedSameRange counter tracks this optimization.
+    /// Related: C.24c (execution skipped due to same range), D.29 (multi-stage decision pipeline).
     /// </summary>
     [Fact]
     public async Task Invariant_D28_SkipWhenDesiredEqualsCurrentRange()
     {
-        // ARRANGE
-        var options = TestHelpers.CreateDefaultOptions(leftCacheSize: 1.0, rightCacheSize: 1.0,
-            leftThreshold: 0.4, rightThreshold: 0.4, debounceDelay: TimeSpan.FromMilliseconds(100));
+        // ARRANGE: Use zero thresholds to eliminate NoRebalanceRange effects (isolate same-range logic)
+        var options = TestHelpers.CreateDefaultOptions(
+            leftCacheSize: 1.0,
+            rightCacheSize: 1.0,
+            leftThreshold: 0.9, // Very small NoRebalanceRange - forces decision to Stage 3
+            rightThreshold: 0.0,
+            debounceDelay: TimeSpan.FromMilliseconds(50));
         var (cache, _) = TrackCache(TestHelpers.CreateCacheWithDefaults(_domain, _cacheDiagnostics, options));
 
-        // ACT: First request establishes cache at desired range
-        var firstRange = TestHelpers.CreateRange(100, 110);
-        await TestHelpers.ExecuteRequestAndWaitForRebalance(cache, firstRange);
+        // ACT: Establish cache with specific range [100, 110]
+        var initialRange = TestHelpers.CreateRange(100, 110);
+        await TestHelpers.ExecuteRequestAndWaitForRebalance(cache, initialRange);
+
         _cacheDiagnostics.Reset();
 
-        // Second request: same range should trigger intent, pass decision logic, starts executions, but skip before mutating data due to same-range optimization
-        await cache.GetDataAsync(firstRange, CancellationToken.None);
+        // Request the exact same expanded range that should already be cached
+        // This creates scenario where DesiredCacheRange (computed from request) == CurrentCacheRange (existing cache)
+        var data = await cache.GetDataAsync(initialRange, CancellationToken.None);
         await cache.WaitForIdleAsync();
 
-        // ASSERT: Intent published but execution optimized away
-        Assert.Equal(1, _cacheDiagnostics.RebalanceIntentPublished);
+        // ASSERT: Verify same-range skip occurred (Stage 3 validation)
+        TestHelpers.AssertUserDataCorrect(data, initialRange);
+        TestHelpers.AssertIntentPublished(_cacheDiagnostics, 1);
+        TestHelpers.AssertRebalanceSkippedSameRange(_cacheDiagnostics, 1);
 
-        // Execution should either be skipped entirely or not completed
-        // (skipped due to same-range optimization or never started)
+        // Verify no execution occurred (optimization prevented unnecessary rebalance)
+        Assert.Equal(0, _cacheDiagnostics.RebalanceScheduled);
+        Assert.Equal(0, _cacheDiagnostics.RebalanceExecutionStarted);
         Assert.Equal(0, _cacheDiagnostics.RebalanceExecutionCompleted);
-        Assert.Equal(1, _cacheDiagnostics.RebalanceSkippedSameRange);
     }
-
-    // NOTE: Invariant D.25, D.26, D.28, D.29: Decision Path is purely analytical,
-    // never mutates cache state, checks DesiredCacheRange == CurrentCacheRange
-    // Cannot be directly tested via public API - requires internal state access
-    // or integration tests with mock decision engine
 
     #endregion
 
@@ -593,12 +713,12 @@ public sealed class WindowCacheInvariantTests : IAsyncDisposable
 
     /// <summary>
     /// Tests Invariants F.35 (🟢 Behavioral), F.35a (🔵 Architectural), and G.46 (🟢 Behavioral):
-    /// Rebalance Execution MUST support cancellation at all stages and yield to User Path immediately.
-    /// Validates detailed cancellation mechanics, lifecycle tracking (Started == Completed + Cancelled),
-    /// and high-level guarantee that cancellation works in all scenarios.
+    /// Rebalance Execution MUST be cancellation-safe at all stages (before I/O, during I/O, before mutations).
+    /// Validates deterministic termination, no partial mutations, lifecycle integrity, and that cancellation
+    /// support works as a high-level guarantee (not deterministic per-request behavior).
     /// Uses slow data source to allow cancellation during execution. Verifies DEBUG instrumentation counters
-    /// ensure proper lifecycle tracking. Related: A.0a (User Path cancels rebalance), C.24d (execution
-    /// skipped due to cancellation).
+    /// ensure proper lifecycle tracking. Related: A.0a (User Path priority via validation-driven cancellation),
+    /// C.24d (execution skipped due to cancellation).
     /// </summary>
     [Fact]
     public async Task Invariant_F35_G46_RebalanceCancellationBehavior()
@@ -609,17 +729,22 @@ public sealed class WindowCacheInvariantTests : IAsyncDisposable
         var (cache, _) = TrackCache(TestHelpers.CreateCacheWithDefaults(_domain, _cacheDiagnostics, options,
             fetchDelay: TimeSpan.FromMilliseconds(200)));
 
-        // ACT: First request triggers rebalance, then immediately cancel with multiple new requests
+        // ACT: First request triggers rebalance, then immediately make new requests
         await cache.GetDataAsync(TestHelpers.CreateRange(100, 110), CancellationToken.None);
         await cache.GetDataAsync(TestHelpers.CreateRange(105, 115), CancellationToken.None);
         await cache.GetDataAsync(TestHelpers.CreateRange(110, 120), CancellationToken.None);
         await cache.WaitForIdleAsync();
 
-        // ASSERT: Verify cancellation occurred (F.35, G.46)
-        TestHelpers.AssertRebalancePathCancelled(_cacheDiagnostics, 2); // 2 cancels for the 2 new requests after the first
+        // ASSERT: Verify cancellation-safety (F.35, G.46)
+        // Focus on lifecycle integrity and system stability, not deterministic cancellation counts
+        // Cancellation is triggered by Decision Engine scheduling, not automatically by requests
 
-        // Verify Rebalance lifecycle integrity: every started execution reaches terminal state (F.35a)
+        // Verify Rebalance lifecycle integrity: every started execution reaches terminal state (F.35)
         TestHelpers.AssertRebalanceLifecycleIntegrity(_cacheDiagnostics);
+
+        // Verify system stability: at least one rebalance completed successfully
+        Assert.True(_cacheDiagnostics.RebalanceExecutionCompleted >= 1,
+            $"Expected at least 1 rebalance to complete, but found {_cacheDiagnostics.RebalanceExecutionCompleted}");
     }
 
     /// <summary>
@@ -642,6 +767,7 @@ public sealed class WindowCacheInvariantTests : IAsyncDisposable
         // ASSERT: Rebalance executed successfully
         TestHelpers.AssertRebalanceCompleted(_cacheDiagnostics);
         TestHelpers.AssertRebalanceLifecycleIntegrity(_cacheDiagnostics);
+        TestHelpers.AssertRebalanceScheduled(_cacheDiagnostics, 1);
 
         // Cache should be normalized - verify by requesting from expected expanded range
         var extendedData = await cache.GetDataAsync(TestHelpers.CreateRange(95, 115), CancellationToken.None);
@@ -667,6 +793,9 @@ public sealed class WindowCacheInvariantTests : IAsyncDisposable
 
         if (_cacheDiagnostics.RebalanceExecutionCompleted > 0)
         {
+            // Verify rebalance was scheduled
+            TestHelpers.AssertRebalanceScheduled(_cacheDiagnostics, 1);
+
             // After rebalance, cache should serve data from normalized range [100-11, 110+11] = [89, 121]
             var normalizedData = await cache.GetDataAsync(TestHelpers.CreateRange(90, 120), CancellationToken.None);
             TestHelpers.AssertUserDataCorrect(normalizedData, TestHelpers.CreateRange(90, 120));
@@ -721,7 +850,8 @@ public sealed class WindowCacheInvariantTests : IAsyncDisposable
     public async Task Invariant_G46_UserCancellationDuringFetch()
     {
         // ARRANGE: Slow mock data source to allow cancellation during fetch
-        var (cache, _) = TrackCache(TestHelpers.CreateCacheWithDefaults(_domain, _cacheDiagnostics, TestHelpers.CreateDefaultOptions(),
+        var (cache, _) = TrackCache(TestHelpers.CreateCacheWithDefaults(_domain, _cacheDiagnostics,
+            TestHelpers.CreateDefaultOptions(),
             fetchDelay: TimeSpan.FromMilliseconds(300)));
 
         // Act & Assert: Cancel token during fetch operation
@@ -786,6 +916,8 @@ public sealed class WindowCacheInvariantTests : IAsyncDisposable
         // Verify key behavioral properties
         Assert.Equal(5, _cacheDiagnostics.UserRequestServed);
         Assert.True(_cacheDiagnostics.RebalanceIntentPublished >= 5);
+        Assert.True(_cacheDiagnostics.RebalanceScheduled >= 1,
+            $"Expected at least 1 rebalance to be scheduled, but found {_cacheDiagnostics.RebalanceScheduled}");
         TestHelpers.AssertRebalanceCompleted(_cacheDiagnostics);
     }
 
@@ -826,8 +958,14 @@ public sealed class WindowCacheInvariantTests : IAsyncDisposable
 
         Assert.Equal(20, _cacheDiagnostics.UserRequestServed);
         Assert.True(_cacheDiagnostics.RebalanceIntentPublished == 20);
-        TestHelpers.AssertRebalancePathCancelled(_cacheDiagnostics, 19); // Each new request cancels the previous intent, so expect 19 cancellations
-        Assert.Equal(1, _cacheDiagnostics.RebalanceExecutionCompleted);
+
+        // Verify system stability: lifecycle integrity and successful completion
+        // Cancellation is coordination mechanism triggered by scheduling decisions, not deterministic per-request
+        TestHelpers.AssertRebalanceLifecycleIntegrity(_cacheDiagnostics);
+        Assert.True(_cacheDiagnostics.RebalanceScheduled >= 1,
+            $"Expected at least 1 rebalance scheduled, but found {_cacheDiagnostics.RebalanceScheduled}");
+        Assert.True(_cacheDiagnostics.RebalanceExecutionCompleted >= 1,
+            $"Expected at least 1 rebalance completed, but found {_cacheDiagnostics.RebalanceExecutionCompleted}");
     }
 
     /// <summary>

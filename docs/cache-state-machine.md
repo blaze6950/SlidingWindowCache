@@ -92,16 +92,19 @@ The cache exists in one of three states:
 - **Trigger:** User request (any scenario)
 - **Actor:** User Path (reads), Rebalance Executor (writes)
 - **Sequence:**
-  1. User Path cancels any pending rebalance
-  2. User Path reads from cache or fetches from IDataSource (NO cache mutation)
-  3. User Path returns data to user immediately
-  4. User Path publishes intent with delivered data
-  5. Rebalance Execution writes to cache (background)
-- **Mutation:** Performed by Rebalance Execution ONLY
-  - User Path does NOT mutate cache, LastRequested, or NoRebalanceRange
-  - Rebalance Execution normalizes cache to DesiredCacheRange
+  1. User Path reads from cache or fetches from IDataSource (NO cache mutation)
+  2. User Path returns data to user immediately
+  3. User Path publishes intent with delivered data
+  4. **Decision-driven validation:** Rebalance Decision Engine validates necessity via multi-stage pipeline (THE authority)
+  5. **Validation-driven cancellation:** If validation confirms NEW rebalance is necessary, pending rebalance is cancelled and new execution scheduled (coordination mechanism)
+  6. **Work avoidance:** If validation rejects (NoRebalanceRange containment, pending coverage, Desired==Current), no cancellation occurs and execution skipped entirely
+  7. Rebalance Execution writes to cache (background, only if validated as necessary)
+- **Mutation:** Performed by Rebalance Execution ONLY (single-writer architecture)
+  - User Path does NOT mutate cache, LastRequested, or NoRebalanceRange (read-only)
+  - Rebalance Execution normalizes cache to DesiredCacheRange (only if validated)
 - **Concurrency:** User Path is read-only; no race conditions
-- **Postcondition:** Cache logically enters `Rebalancing` state (background process active)
+- **Cancellation Model:** Mechanical coordination tool (prevents concurrent executions), NOT decision mechanism; validation determines necessity
+- **Postcondition:** Cache logically enters `Rebalancing` state (background process active, only if all validation stages passed)
 
 ### T3: Rebalancing → Initialized (Rebalance Completion)
 - **Trigger:** Rebalance execution completes successfully
@@ -117,18 +120,21 @@ The cache exists in one of three states:
 - **Atomicity:** Changes applied atomically (Invariant 12)
 - **Postcondition:** Cache returns to stable `Initialized` state
 
-### T4: Rebalancing → Initialized (User Request Cancels Rebalance)
+### T4: Rebalancing → Initialized (User Request MAY Cancel Rebalance)
 - **Trigger:** User request arrives during rebalance execution (Scenarios C1, C2)
-- **Actor:** User Path (cancels), Rebalance Execution (yields)
+- **Actor:** User Path (publishes intent), Rebalance Decision Engine (validates and determines necessity), Rebalance Execution (yields if cancelled)
 - **Sequence:**
-  1. **User Path cancels ongoing/pending rebalance** (Invariant 0a)
-  2. User Path reads from cache or fetches from IDataSource (NO cache mutation)
-  3. User Path returns data to user immediately
-  4. User Path publishes new intent with delivered data
-  5. New rebalance execution begins (background)
-- **Critical Rule:** User Path does NOT mutate cache; only cancels to prevent interference (Invariant 0)
-- **Priority:** User Path always has priority, ensured via cancellation not mutation exclusion
-- **Note:** Cancelled rebalance yields; new rebalance uses new intent's delivered data
+  1. User Path reads from cache or fetches from IDataSource (NO cache mutation)
+  2. User Path returns data to user immediately
+  3. User Path publishes new intent with delivered data
+  4. **Decision Engine validates:** Multi-stage analytical pipeline determines if NEW rebalance is necessary (THE authority)
+  5. **Validation confirms necessity** → Pending rebalance is cancelled and new execution scheduled (coordination via cancellation token)
+  6. **Validation rejects necessity** → Pending rebalance continues undisturbed (no cancellation, work avoidance)
+  7. If cancelled: Rebalance yields; new rebalance uses new intent's delivered data (if validated)
+- **Critical Principle:** User Path does NOT decide cancellation; Decision Engine validation determines necessity, cancellation is mechanical coordination
+- **Priority Model:** User Path priority enforced via validation-driven cancellation, not automatic cancellation on every request
+- **Cancellation Semantics:** Mechanical coordination tool (single-writer architecture), NOT decision mechanism; prevents concurrent executions, not duplicate decision-making
+- **Note:** "User Request MAY Cancel" = cancellation occurs ONLY when validation confirms new rebalance necessary
 
 ---
 

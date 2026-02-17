@@ -8,8 +8,9 @@ This document provides a comprehensive map of all components in the Sliding Wind
 - Read/write patterns
 - Data flow diagrams
 - Thread safety model
+- Rebalance Decision Model and multi-stage validation pipeline
 
-**Last Updated**: February 8, 2026
+**Last Updated**: February 16, 2026
 
 ---
 
@@ -98,6 +99,93 @@ This document provides a comprehensive map of all components in the Sliding Wind
     └── 🟦 CacheDataExtensionService<TRange, TData, TDomain>
         └── uses → 🟧 IDataSource<TRange, TData> (user-provided)
 ```
+
+---
+
+## Rebalance Decision Model & Validation Pipeline
+
+### Core Conceptual Framework
+
+The system uses a **multi-stage rebalance decision pipeline**, not a cancellation policy. This section clarifies the conceptual model that drives the architecture.
+
+#### Key Distinctions
+
+**Rebalance Validation vs Cancellation:**
+- **Rebalance Validation** = Analytical decision mechanism (determines necessity)
+- **Cancellation** = Mechanical coordination tool (prevents concurrent executions)
+- Cancellation is NOT a decision mechanism; it ensures single-writer architecture
+
+**Intent Semantics:**
+- Intent = Access signal ("user accessed this range"), NOT command ("must rebalance")
+- Publishing intent does NOT guarantee execution (opportunistic behavior)
+- Execution determined by multi-stage validation, not intent existence
+
+### Multi-Stage Validation Pipeline
+
+**Authority**: `RebalanceDecisionEngine` is the sole authority for rebalance necessity determination.
+
+**Pipeline Stages** (all must pass for execution):
+
+1. **Stage 1: Current Cache NoRebalanceRange Validation**
+   - Component: `ThresholdRebalancePolicy.ShouldRebalance()`
+   - Check: Is RequestedRange contained in NoRebalanceRange(CurrentCacheRange)?
+   - Purpose: Fast-path rejection if current cache provides sufficient buffer
+   - Result: Skip if contained (no I/O needed)
+
+2. **Stage 2: Pending Desired Cache NoRebalanceRange Validation** (anti-thrashing)
+   - Conceptual: Check if pending rebalance will satisfy request
+   - Check: Is RequestedRange contained in NoRebalanceRange(PendingDesiredCacheRange)?
+   - Purpose: Prevent oscillating cache geometry (thrashing)
+   - Result: Skip if pending rebalance covers request
+   - Note: May be implemented via cancellation timing optimization
+
+3. **Stage 3: DesiredCacheRange vs CurrentCacheRange Equality**
+   - Component: `RebalanceDecisionEngine.Evaluate` (pre-scheduling analytical check)
+   - Check: Does computed DesiredCacheRange == CurrentCacheRange?
+   - Purpose: Avoid no-op mutations
+   - Result: Skip scheduling if cache already in optimal configuration
+
+**Execution Rule**: Rebalance executes ONLY if ALL stages confirm necessity.
+
+### Component Responsibilities in Decision Model
+
+| Component | Role | Decision Authority |
+|-----------|------|-------------------|
+| **UserRequestHandler** | Read-only; publishes intents with delivered data | No decision authority |
+| **IntentController** | Manages intent lifecycle; coordinates cancellation | No decision authority |
+| **RebalanceScheduler** | Orchestrates validation pipeline timing | No decision authority |
+| **RebalanceDecisionEngine** | **SOLE AUTHORITY** for necessity determination | **Yes - THE authority** |
+| **ThresholdRebalancePolicy** | Stage 1 validation (NoRebalanceRange check) | Analytical input |
+| **ProportionalRangePlanner** | Computes desired cache geometry | Analytical input |
+| **RebalanceExecutor** | Mechanical execution; assumes validated necessity | No decision authority |
+
+### System Stability Principle
+
+The system prioritizes **decision correctness and work avoidance** over aggressive rebalance responsiveness, enabling **smart eventual consistency**.
+
+**Work Avoidance Mechanisms:**
+- Stage 1: Avoid rebalance if current cache sufficient (NoRebalanceRange containment)
+- Stage 2: Avoid redundant rebalance if pending execution covers request (anti-thrashing)
+- Stage 3: Avoid no-op mutations if cache already optimal (Desired==Current)
+
+**Smart Eventual Consistency:**
+
+The cache converges to optimal configuration asynchronously through decision-driven execution:
+- User always receives correct data immediately (from cache or IDataSource)
+- Decision Engine validates necessity through multi-stage pipeline (THE authority)
+- Work avoidance prevents unnecessary operations (thrashing, redundant I/O, oscillation)
+- Cache state updates occur in background ONLY when validated as necessary
+- System remains stable under rapidly changing access patterns
+
+**Trade-offs:**
+- ✅ Prevents thrashing and oscillation (stability over aggressive responsiveness)
+- ✅ Reduces redundant I/O operations (efficiency through validation)
+- ✅ Improves system stability under rapid access pattern changes (work avoidance)
+- ⚠️ May delay cache optimization by debounce period (acceptable for stability gains)
+
+**Related Documentation:**
+- See [Concurrency Model - Smart Eventual Consistency](concurrency-model.md#smart-eventual-consistency-model) for detailed consistency semantics
+- See [Invariants - Section D](invariants.md#d-rebalance-decision-path-invariants) for multi-stage validation pipeline specification
 
 ---
 
@@ -613,24 +701,32 @@ internal sealed class IntentController<TRange, TData, TDomain>
 
 **Fields**:
 - `RebalanceScheduler<TRange, TData, TDomain> _scheduler` (readonly)
-- ✏️ `CancellationTokenSource? _currentIntentCts` - **Mutable**, tracks current intent
+- `RebalanceDecisionEngine<TRange, TDomain> _decisionEngine` (readonly)
+- `CacheState<TRange, TData, TDomain> _state` (readonly reference to shared state)
+- ✏️ `PendingRebalance<TRange>? _pendingRebalance` - **Mutable**, tracks current pending rebalance (accessed via Volatile.Read/Write)
 
 **Key Methods**:
 
-**`PublishIntent(Range<TRange> requestedRange)`**:
+**`PublishIntent(Intent<TRange, TData, TDomain> intent)`**:
 ```csharp
-public void PublishIntent(Range<TRange> requestedRange)
+public void PublishIntent(Intent<TRange, TData, TDomain> intent)
 {
-    // 1. Invalidate previous intent
-    _currentIntentCts?.Cancel();
-    _currentIntentCts?.Dispose();
+    // 1. Evaluate necessity via DecisionEngine (THE authority)
+    var pendingSnapshot = Volatile.Read(ref _pendingRebalance);
+    var decision = _decisionEngine.Evaluate(intent.RequestedRange, _state, pendingSnapshot);
     
-    // 2. Create new intent identity
-    _currentIntentCts = new CancellationTokenSource();
-    var intentToken = _currentIntentCts.Token;
+    // 2. If validation rejects, skip entirely (work avoidance)
+    if (!decision.ShouldSchedule) return;
     
-    // 3. Delegate to scheduler
-    _scheduler.ScheduleRebalance(requestedRange, intentToken);
+    // 3. Cancel pending via domain object (validation-driven cancellation)
+    var oldPending = Volatile.Read(ref _pendingRebalance);
+    oldPending?.Cancel();
+    
+    // 4. Delegate to scheduler, capture returned PendingRebalance
+    var newPending = _scheduler.ScheduleRebalance(intent, decision);
+    
+    // 5. Update snapshot for next Stage 2 validation
+    Volatile.Write(ref _pendingRebalance, newPending);
 }
 ```
 
@@ -638,37 +734,48 @@ public void PublishIntent(Range<TRange> requestedRange)
 ```csharp
 public void CancelPendingRebalance()
 {
-    if (_currentIntentCts != null)
-    {
-        _currentIntentCts.Cancel();
-        _currentIntentCts.Dispose();
-        _currentIntentCts = null;
-    }
+    var pending = Volatile.Read(ref _pendingRebalance);
+    if (pending == null) return;
+    
+    // DDD-style cancellation through domain object
+    pending.Cancel();
+    Volatile.Write(ref _pendingRebalance, null);
 }
 ```
 
 **`WaitForIdleAsync(TimeSpan? timeout = null)`** (Infrastructure/Testing):
 ```csharp
-public Task WaitForIdleAsync(TimeSpan? timeout = null)
+public async Task WaitForIdleAsync(TimeSpan? timeout = null)
 {
-    // Delegate to RebalanceScheduler's Task tracking mechanism
-    return _scheduler.WaitForIdleAsync(timeout);
+    // Observe-and-stabilize pattern using PendingRebalance.ExecutionTask
+    while (stopwatch.Elapsed < maxWait)
+    {
+        var observedPending = Volatile.Read(ref _pendingRebalance);
+        if (observedPending?.ExecutionTask == null) return;
+        
+        await observedPending.ExecutionTask;
+        
+        var currentPending = Volatile.Read(ref _pendingRebalance);
+        if (ReferenceEquals(observedPending, currentPending)) return;
+    }
 }
 ```
 
 **Characteristics**:
-- ✅ Owns intent identity (CancellationTokenSource lifecycle)
-- ✅ Single-flight enforcement (only one active intent)
-- ✅ Exposes cancellation to User Path
-- ✅ **Lock-free implementation** using `Interlocked.Exchange` for atomic operations
+- ✅ Owns pending rebalance snapshot (`_pendingRebalance` field)
+- ✅ Single-flight enforcement (only one active intent via cancellation)
+- ✅ Exposes cancellation to User Path via `CancelPendingRebalance()`
+- ✅ **Lock-free implementation** using `Volatile.Read/Write` for safe memory visibility
+- ✅ **DDD-style cancellation** - PendingRebalance domain object encapsulates CancellationTokenSource
 - ✅ **Thread-safe without locks** - no race conditions, tested under concurrent load
 - ⚠️ **Intent does not guarantee execution** - execution is opportunistic
-- ❌ **Does NOT**: Timing, scheduling, execution logic
+- ❌ **Does NOT**: Timing, scheduling, execution logic, CTS lifecycle management
 
 **Concurrency Model**:
-- Uses lightweight synchronization primitives (`Interlocked.Exchange`)
+- Uses `Volatile.Read/Write` for safe memory visibility across threads
 - No locks, no `lock` statements, no mutexes
-- Atomic field replacement ensures thread-safety
+- Memory barriers via `Volatile` operations ensure correct ordering
+- PendingRebalance domain object owns CancellationTokenSource lifecycle
 - Validated by `ConcurrencyStabilityTests` under concurrent load
 
 **Ownership**: 
@@ -676,12 +783,12 @@ public Task WaitForIdleAsync(TimeSpan? timeout = null)
 - Composes with RebalanceScheduler
 
 **Execution Context**: 
-- Synchronous methods (called from User Thread)
-- Scheduled work executes in Background
+- **PublishIntent() executes synchronously in User Thread** (includes decision evaluation)
+- **Only scheduled work (background task) executes in Background ThreadPool**
 
 **State**: 
-- `_currentIntentCts` (mutable, nullable)
-- Represents identity of latest intent
+- `_pendingRebalance` (mutable, nullable, accessed via Volatile.Read/Write)
+- Represents snapshot of current pending rebalance for Stage 2 validation
 
 **Responsibilities**: 
 - Intent lifecycle management
@@ -720,26 +827,29 @@ internal sealed class RebalanceScheduler<TRange, TData, TDomain>
 ```csharp
 public void ScheduleRebalance(Range<TRange> requestedRange, CancellationToken intentToken)
 {
-    // Fire-and-forget: schedule execution in background thread pool
-    Task.Run(async () =>
+    // Fire-and-forget: background execution with ConfigureAwait(false)
+    pendingRebalance.ExecutionTask = RunAsync();
+    
+    async Task RunAsync()
     {
         try
         {
-            // Debounce delay
-            await Task.Delay(_debounceDelay, intentToken);
+            await Task.Delay(_debounceDelay, intentToken)
+                .ConfigureAwait(false);
             
             // Intent validity check
             if (intentToken.IsCancellationRequested)
                 return;
             
             // Execute pipeline
-            await ExecutePipelineAsync(requestedRange, intentToken);
+            await ExecutePipelineAsync(requestedRange, intentToken)
+                .ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {
             // Expected when intent is cancelled
         }
-    }, intentToken);
+    }
 }
 ```
 
@@ -817,7 +927,7 @@ internal sealed class RebalanceDecisionEngine<TRange, TDomain>
 
 **Type**: Class (sealed)
 
-**Role**: Pure Decision Logic
+**Role**: Pure Decision Logic - **SOLE AUTHORITY for Rebalance Necessity Determination**
 
 **Fields** (all readonly, value types):
 - `ThresholdRebalancePolicy<TRange, TDomain> _policy` (struct, copied)
@@ -829,14 +939,15 @@ public RebalanceDecision<TRange> ShouldExecuteRebalance(
     Range<TRange> requestedRange,
     Range<TRange>? noRebalanceRange)
 {
-    // Decision Path D1: Check NoRebalanceRange (fast path)
+    // Stage 1: Current Cache NoRebalanceRange validation (fast path)
     if (noRebalanceRange.HasValue && 
         !_policy.ShouldRebalance(noRebalanceRange.Value, requestedRange))
     {
         return RebalanceDecision<TRange>.Skip();
     }
     
-    // Decision Path D2/D3: Compute DesiredCacheRange
+    // Stage 3: Compute DesiredCacheRange and return for execution
+    // (Stage 2 may be handled by cancellation timing optimization)
     var desiredRange = _planner.Plan(requestedRange);
     
     return RebalanceDecision<TRange>.Execute(desiredRange);
@@ -844,15 +955,22 @@ public RebalanceDecision<TRange> ShouldExecuteRebalance(
 ```
 
 **Characteristics**:
-- ✅ **Pure function** (no side effects)
+- ✅ **Pure function** (no side effects, CPU-only, no I/O)
 - ✅ **Deterministic** (same inputs → same outputs)
 - ✅ **Stateless** (composes value-type policies)
+- ✅ **THE authority** for rebalance necessity determination
 - ✅ Invoked only in background
 - ❌ Not visible to User Path
 
+**Decision Authority**:
+- **This component is the SOLE AUTHORITY** for determining whether rebalance is necessary
+- All execution decisions flow from this component's analytical validation
+- No other component may override or bypass these decisions
+- Executor assumes necessity already validated when invoked
+
 **Uses**:
-- ◇ `_policy.ShouldRebalance()` - check NoRebalanceRange containment
-- ◇ `_planner.Plan()` - compute DesiredCacheRange
+- ◇ `_policy.ShouldRebalance()` - Stage 1: NoRebalanceRange containment check
+- ◇ `_planner.Plan()` - Compute DesiredCacheRange for execution
 
 **Returns**: `RebalanceDecision<TRange>` (struct)
 
@@ -861,15 +979,18 @@ public RebalanceDecision<TRange> ShouldExecuteRebalance(
 **Execution Context**: Background / ThreadPool
 
 **Responsibilities**: 
-- Evaluate if rebalance is needed
-- Check NoRebalanceRange
-- Compute DesiredCacheRange
+- **THE authority** for rebalance necessity determination
+- Evaluate if rebalance is needed through multi-stage validation
+- Stage 1: Check NoRebalanceRange (fast path rejection)
+- Stage 3: Compute DesiredCacheRange (execution parameters)
+- Produce analytical decision (execute or skip)
 
 **Invariants Enforced**:
-- 24: Decision path is purely analytical
-- 25: Never mutates cache state
-- 26: No rebalance if inside NoRebalanceRange
-- 27: No rebalance if DesiredCacheRange == CurrentCacheRange
+- D.25: Decision path is purely analytical (CPU-only, no I/O)
+- D.26: Never mutates cache state
+- D.27: No rebalance if inside NoRebalanceRange (Stage 1 validation)
+- D.28: No rebalance if DesiredCacheRange == CurrentCacheRange (Stage 3 validation)
+- D.29: Rebalance executes ONLY if ALL stages confirm necessity
 
 ---
 
@@ -914,7 +1035,7 @@ public Range<TRange>? GetNoRebalanceRange(Range<TRange> cacheRange)
 
 **Ownership**: Value type, copied into RebalanceDecisionEngine and RebalanceExecutor
 
-**Execution Context**: Background / ThreadPool
+**Execution Context**: User Thread (invoked by RebalanceDecisionEngine which runs synchronously in user thread)
 
 **Responsibilities**:
 - Compute NoRebalanceRange (shrinks cache by threshold ratios)
@@ -968,7 +1089,7 @@ public Range<TRange> Plan(Range<TRange> requested)
 
 **Ownership**: Value type, copied into RebalanceDecisionEngine
 
-**Execution Context**: Background / ThreadPool
+**Execution Context**: User Thread (invoked by RebalanceDecisionEngine which runs synchronously in user thread)
 
 **Responsibilities**:
 - Compute DesiredCacheRange (expands requested by left/right coefficients)
@@ -1023,7 +1144,7 @@ internal readonly struct RebalanceDecision<TRange>
 internal sealed class RebalanceExecutor<TRange, TData, TDomain>
 ```
 
-**File**: `src/SlidingWindowCache/CacheRebalance/Executor/RebalanceExecutor.cs`
+**File**: `src/SlidingWindowCache/Core/Rebalance/Execution/RebalanceExecutor.cs`
 
 **Type**: Class (sealed)
 
@@ -1032,51 +1153,69 @@ internal sealed class RebalanceExecutor<TRange, TData, TDomain>
 **Fields** (all readonly):
 - `CacheState<TRange, TData, TDomain> _state`
 - `CacheDataExtensionService<TRange, TData, TDomain> _cacheExtensionService`
-- `ThresholdRebalancePolicy<TRange, TDomain> _rebalancePolicy`
+- `ICacheDiagnostics _cacheDiagnostics`
+- `SemaphoreSlim _executionSemaphore` (initialized to `new SemaphoreSlim(1, 1)`)
+
+**Concurrency Model**:
+- Uses `SemaphoreSlim(1, 1)` to serialize execution - ensures only one rebalance can write to cache state at a time
+- Semaphore acquired at start of `ExecuteAsync()`, before any I/O operations
+- Released in `finally` block to guarantee release even on cancellation or exception
+- Works with `CancellationToken` - operations can be cancelled while waiting for semaphore
+- WebAssembly-compatible, async, zero User Path blocking
 
 **Key Method**:
 ```csharp
-public async Task ExecuteAsync(Range<TRange> desiredRange, CancellationToken cancellationToken)
+public async Task ExecuteAsync(
+    Intent<TRange, TData, TDomain> intent,
+    Range<TRange> desiredRange,
+    Range<TRange>? desiredNoRebalanceRange,
+    CancellationToken cancellationToken)
 {
-    // Get current cache snapshot
-    var rangeData = _state.Cache.ToRangeData();
+    // Acquire semaphore to serialize execution
+    await _executionSemaphore.WaitAsync(cancellationToken).ConfigureAwait(false);
     
-    // Check if already at desired state (Decision Path D2)
-    if (rangeData.Range == desiredRange)
-        return;
-    
-    // Cancellation check before I/O
-    cancellationToken.ThrowIfCancellationRequested();
-    
-    // Phase 1: Extend cache to cover desired range
-    var extended = await _cacheFetcher.ExtendCacheAsync(rangeData, desiredRange, cancellationToken);
-    
-    // Cancellation check after I/O
-    cancellationToken.ThrowIfCancellationRequested();
-    
-    // Phase 2: Trim to desired range
-    var rebalanced = extended[desiredRange];
-    
-    // Cancellation check before mutation
-    cancellationToken.ThrowIfCancellationRequested();
-    
-    // Phase 3: Update cache (atomic mutation)
-    _state.Cache.Rematerialize(rebalanced);
-    
-    // Phase 4: Update no-rebalance range
-    _state.NoRebalanceRange = _rebalancePolicy.GetNoRebalanceRange(_state.Cache.Range);
+    try
+    {
+        // Get delivered data from intent
+        var baseRangeData = intent.AvailableRangeData;
+        
+        // Cancellation check after acquiring semaphore
+        cancellationToken.ThrowIfCancellationRequested();
+        
+        // Phase 1: Extend to cover desired range
+        var extended = await _cacheExtensionService.ExtendCacheAsync(
+            baseRangeData, desiredRange, cancellationToken).ConfigureAwait(false);
+        
+        // Cancellation check after I/O
+        cancellationToken.ThrowIfCancellationRequested();
+        
+        // Phase 2: Trim to desired range
+        baseRangeData = extended[desiredRange];
+        
+        // Cancellation check before mutation
+        cancellationToken.ThrowIfCancellationRequested();
+        
+        // Phase 3: Update cache state atomically
+        UpdateCacheState(baseRangeData, intent.RequestedRange, desiredNoRebalanceRange);
+    }
+    finally
+    {
+        // Always release semaphore
+        _executionSemaphore.Release();
+    }
 }
 ```
 
 **Reads from**:
-- ⊳ `_state.Cache` (ToRangeData, Range)
+- ⊳ `intent.AvailableRangeData` (delivered data from User Path)
 
 **Writes to**:
 - ⊲ `_state.Cache` (via Rematerialize - normalizes to DesiredCacheRange)
+- ⊲ `_state.LastRequested`
 - ⊲ `_state.NoRebalanceRange`
 
 **Uses**:
-- ◇ `_cacheFetcher.ExtendCacheAsync()` (fetch missing data)
+- ◇ `_cacheExtensionService.ExtendCacheAsync()` (fetch missing data)
 - ◇ `_rebalancePolicy.GetNoRebalanceRange()` (compute new threshold zone)
 
 **Characteristics**:
@@ -1323,11 +1462,12 @@ public Task WaitForIdleAsync(TimeSpan? timeout = null)
 │  🟦 CLASS (sealed)                                                │   │
 │                                                                   │   │
 │  ScheduleRebalance(range, intentToken):                          │   │
-│   Task.Run(async () => {                                         │   │
-│     await Task.Delay(_debounceDelay, intentToken);               │   │
-│     if (!intentToken.IsCancellationRequested)                    │   │
-│       await ExecutePipelineAsync(range, intentToken); ───────────┼───┤
-│   });                                                             │   │
+│   ExecutionTask = RunAsync();                                    │   │
+│     async Task RunAsync() {                                      │   │
+│       await Task.Delay(...).ConfigureAwait(false);               │   │
+│       if (!intentToken.IsCancellationRequested)                  │   │
+│         await ExecutePipelineAsync(...).ConfigureAwait(false); ──┼───┤
+│     }                                                             │   │
 │                                                                   │   │
 │  ExecutePipelineAsync(range, ct):                                │   │
 │   1. Check cancellation                                          │   │
@@ -1441,21 +1581,24 @@ public Task WaitForIdleAsync(TimeSpan? timeout = null)
 
 #### Writers
 
-**UserRequestHandler**:
+**RebalanceExecutor** (SOLE WRITER - single-writer architecture):
+- ✏️ Writes `Cache` (via `Rematerialize()`)
+  - **Purpose**: Normalize cache to DesiredCacheRange using delivered data from intent
+  - **When**: Rebalance execution completes (background)
+  - **Scope**: Expands, trims, or replaces cache as needed
 - ✏️ Writes `LastRequested` property
-- ✏️ Writes `Cache` (via `Rematerialize()`)
-  - **Purpose**: Expand cache to cover requested range
-  - **When**: User request needs data not in cache
-  - **Scope**: Expands only (never trims)
-
-**RebalanceExecutor**:
-- ✏️ Writes `Cache` (via `Rematerialize()`)
-  - **Purpose**: Normalize cache to DesiredCacheRange
-  - **When**: Rebalance execution completes
-  - **Scope**: Expands AND trims
+  - **Purpose**: Record the range that triggered this rebalance
+  - **When**: After successful rebalance execution
 - ✏️ Writes `NoRebalanceRange` property
   - **Purpose**: Update threshold zone after normalization
-  - **When**: After successful rebalance
+  - **When**: After successful rebalance execution
+
+**UserRequestHandler** (READ-ONLY):
+- ❌ Does NOT write to CacheState
+- ❌ Does NOT call `Cache.Rematerialize()`
+- ❌ Does NOT write to `LastRequested` or `NoRebalanceRange`
+- ✅ Only reads from cache and IDataSource
+- ✅ Publishes intent with delivered data for Rebalance Execution to process
 
 #### Readers
 
@@ -1474,10 +1617,16 @@ public Task WaitForIdleAsync(TimeSpan? timeout = null)
 #### Coordination
 
 **No locks** (by design):
-- Single consumer model (one logical user per cache)
-- Coordination via **CancellationToken**
-- User Path **always cancels** rebalance before mutations
-- Rebalance **always checks** cancellation before mutations
+- **Single-writer architecture** - User Path is read-only, only Rebalance Execution writes
+- **Single consumer model** - one logical user per cache instance
+- Coordination via **validation-driven cancellation** (DecisionEngine confirms necessity, triggers cancellation)
+- Rebalance **always checks** cancellation before mutations (yields to new rebalance if needed)
+
+**Thread-Safety Through Architecture:**
+- No write-write races (only one writer exists)
+- Reference reads are atomic (User Path safely reads while Rebalance may execute)
+- `Rematerialize()` performs atomic reference swaps (array/List assignment)
+- `internal set` on CacheState properties restricts write access to internal components
 
 **Atomic operations**:
 - `Rematerialize()` replaces storage atomically (array/list assignment)
@@ -1536,56 +1685,84 @@ The Sliding Window Cache follows a **single consumer model** as documented in `d
    - One access trajectory
    - One temporal sequence of requests
 
-2. **No Synchronization Primitives**
+2. **Execution Serialization**
+   - ✅ Uses `SemaphoreSlim(1, 1)` in `RebalanceExecutor` for execution serialization
    - ❌ No locks (`lock`, `Monitor`)
-   - ❌ No semaphores (`SemaphoreSlim`)
    - ❌ No concurrent collections
-   - ✅ Only `CancellationToken` for coordination
+   - ✅ `CancellationToken` for coordination and signaling
+   - ✅ `Interlocked.Exchange` for atomic pending rebalance cancellation
 
 3. **Coordination Mechanism**
-   - User Path cancels rebalance **before** any cache mutation
-   - Rebalance checks cancellation **before and during** execution
-   - Atomic array/list replacement in `Rematerialize()`
+   - **Single-Writer Architecture** - User Path is read-only, only Rebalance Execution writes to CacheState
+   - **Validation-driven cancellation** - DecisionEngine confirms necessity, then triggers cancellation of pending rebalance
+   - **Atomic updates** - `Rematerialize()` performs atomic array/List reference swaps
+   - **Execution serialization** - `SemaphoreSlim` ensures only one rebalance writes to cache at a time
+   - **Atomic cancellation** - `Interlocked.Exchange` prevents race conditions during pending rebalance cancellation
 
 ### Thread Contexts
 
-| Component                         | Thread Context    | Notes                                  |
-|-----------------------------------|-------------------|----------------------------------------|
-| **WindowCache**                   | Neutral           | Just delegates                         |
-| **UserRequestHandler**            | ⚡ **User Thread** | Synchronous, fast path                 |
-| **RebalanceIntentManager**        | User Thread       | Synchronous methods (called from user) |
-| **RebalanceScheduler**            | 🔄 **Background** | ThreadPool, async                      |
-| **RebalanceDecisionEngine**       | 🔄 **Background** | ThreadPool, pure logic                 |
-| **RebalanceExecutor**             | 🔄 **Background** | ThreadPool, async, I/O                 |
-| **CacheDataExtensionService**     | Both ⚡🔄          | User Thread OR Background              |
-| **CacheState**                    | Both ⚡🔄          | Shared mutable (no locks!)             |
-| **Storage (Snapshot/CopyOnRead)** | Both ⚡🔄          | Owned by CacheState                    |
+| Component                         | Thread Context    | Notes                                                     |
+|-----------------------------------|-------------------|-----------------------------------------------------------|
+| **WindowCache**                   | Neutral           | Just delegates                                            |
+| **UserRequestHandler**            | ⚡ **User Thread** | Synchronous, fast path                                    |
+| **IntentController**              | ⚡ **User Thread** | Synchronous methods (PublishIntent, decision evaluation)  |
+| **RebalanceDecisionEngine**       | ⚡ **User Thread** | Invoked synchronously by IntentController, CPU-only logic |
+| **RebalanceScheduler (scheduling)**| ⚡ **User Thread** | ScheduleRebalance() is synchronous (creates background task) |
+| **RebalanceScheduler (execution)**| 🔄 **Background** | Background task execution - debounce + executor invocation |
+| **RebalanceExecutor**             | 🔄 **Background** | ThreadPool, async, I/O                                    |
+| **CacheDataExtensionService**     | Both ⚡🔄          | User Thread OR Background                                 |
+| **CacheState**                    | Both ⚡🔄          | Shared mutable (no locks!)                                |
+| **Storage (Snapshot/CopyOnRead)** | Both ⚡🔄          | Owned by CacheState                                       |
+
+**Critical:** Decision logic and scheduling are **synchronous operations in user thread** (CPU-only, lightweight). Only the actual rebalance execution (I/O) happens in background ThreadPool.
 
 ### Concurrency Invariants (from `docs/invariants.md`)
 
 **A.1 Concurrency & Priority**:
-- **-1**: User Path **MUST NOT execute concurrently** with Rebalance Execution
-- **0**: User Path **always has higher priority** than Rebalance Execution
-- **0a**: Every User Request **MUST cancel** any ongoing/pending Rebalance before mutations
+- **-1**: User Path and Rebalance Execution **never write to cache concurrently** (User Path is read-only, single-writer architecture)
+- **0**: User Path **always has higher priority** than Rebalance Execution (enforced via validation-driven cancellation)
+- **0a**: User Request **MAY cancel** ongoing/pending Rebalance **ONLY when DecisionEngine validation confirms new rebalance is necessary**
 
 **C. Rebalance Intent & Temporal Invariants**:
 - **17**: At most **one active rebalance intent**
-- **18**: Previous intents are **obsolete** after new intent
+- **18**: Previous intents may become **logically superseded** when validation confirms new rebalance necessary
 - **21**: At most **one rebalance execution** active at any time
+
+**Key Correction:** User Path does NOT cancel before its own mutations. User Path is **read-only** - it never mutates cache. Cancellation is triggered by validation confirming necessity, not automatically by user requests.
 
 ### How It Works
 
-#### User Request Flow (User Thread)
+#### User Request Flow (User Thread - ALL SYNCHRONOUS until background scheduling)
 ```
 1. UserRequestHandler.HandleRequestAsync() called
-2. FIRST STEP: _intentManager.CancelPendingRebalance()
-   └─> Cancels CancellationTokenSource
-   └─> Background rebalance receives cancellation signal
-3. Check cache, extend if needed
-4. Mutate cache (Rematerialize) - safe, rebalance is cancelled
-5. Publish new intent
-6. Return data
+2. Read from cache or fetch missing data from IDataSource
+3. Assemble data to return to user (NO cache mutation)
+4. Return data to user immediately
+5. Publish intent with delivered data (SYNCHRONOUS in user thread):
+   └─> IntentController.PublishIntent(intent) ⚡ USER THREAD
+       ├─> DecisionEngine.Evaluate() ⚡ USER THREAD
+       │   └─> Multi-stage validation (CPU-only, side-effect free)
+       │       - Stage 1: NoRebalanceRange check
+       │       - Stage 2: Pending coverage check
+       │       - Stage 3: Desired==Current check
+       ├─> If validation rejects: return immediately (work avoidance)
+       ├─> If validation confirms: oldPending?.Cancel() ⚡ USER THREAD
+       └─> Scheduler.ScheduleRebalance() ⚡ USER THREAD
+           ├─> Create PendingRebalance (synchronous)
+           └─> Schedule background task ← HERE background starts 🔄
+               └─> Debounce delay 🔄 BACKGROUND
+               └─> RebalanceExecutor.ExecuteAsync() 🔄 BACKGROUND
+                   └─> I/O operations, cache mutations
 ```
+
+**Key:** Everything up to background task scheduling happens **synchronously in user thread**. 
+Only debounce + actual execution happen in background.
+
+**Why This Matters:**
+- User request burst → immediate validation in user thread → work avoidance
+- No background queue buildup with pending decisions
+- Intent thrashing prevented by synchronous validation
+- Lightweight CPU-only operations don't block user thread (microseconds)
 
 #### Rebalance Flow (Background Thread)
 ```
@@ -1644,7 +1821,7 @@ var sharedCache = new WindowCache<int, Data, IntDomain>(...);
 | WindowCache               | Immutable (after ctor)                       | No           | User creates             | App lifetime   |
 | UserRequestHandler        | Immutable                                    | No           | WindowCache owns         | Cache lifetime |
 | CacheState                | **Mutable**                                  | **Yes** ⚠️   | WindowCache owns, shared | Cache lifetime |
-| IntentController          | Mutable (_currentIntentCts)                  | No           | WindowCache owns         | Cache lifetime |
+| IntentController          | Mutable (_pendingRebalance)                  | No           | WindowCache owns         | Cache lifetime |
 | RebalanceScheduler        | Immutable                                    | No           | IntentController owns    | Cache lifetime |
 | RebalanceDecisionEngine   | Immutable                                    | No           | WindowCache owns         | Cache lifetime |
 | RebalanceExecutor         | Immutable                                    | No           | WindowCache owns         | Cache lifetime |
@@ -1679,10 +1856,13 @@ var sharedCache = new WindowCache<int, Data, IntDomain>(...);
 **User Thread (Synchronous, Fast)**:
 - WindowCache - Facade, delegates
 - UserRequestHandler - Serve requests, trigger intents
+- IntentController - Intent lifecycle, decision orchestration (synchronous methods)
+- RebalanceDecisionEngine - Pure decision logic (CPU-only, synchronous)
+- ThresholdRebalancePolicy - Threshold validation (value type, inline)
+- ProportionalRangePlanner - Cache geometry planning (value type, inline)
 
 **Background / ThreadPool (Asynchronous, Heavy)**:
-- RebalanceScheduler - Timing, debounce, orchestration
-- RebalanceDecisionEngine - Pure decision logic
+- RebalanceScheduler - Timing, debounce, orchestration (execution only, scheduling is sync)
 - RebalanceExecutor - Cache normalization, I/O
 
 **Both Contexts**:

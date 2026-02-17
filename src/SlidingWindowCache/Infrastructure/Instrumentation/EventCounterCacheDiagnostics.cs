@@ -15,8 +15,10 @@ public class EventCounterCacheDiagnostics : ICacheDiagnostics
     private int _rebalanceExecutionStarted;
     private int _rebalanceExecutionCompleted;
     private int _rebalanceExecutionCancelled;
-    private int _rebalanceSkippedNoRebalanceRange;
+    private int _rebalanceSkippedCurrentNoRebalanceRange;
+    private int _rebalanceSkippedPendingNoRebalanceRange;
     private int _rebalanceSkippedSameRange;
+    private int _rebalanceScheduled;
     private int _userRequestFullCacheHit;
     private int _userRequestPartialCacheHit;
     private int _userRequestFullCacheMiss;
@@ -37,8 +39,10 @@ public class EventCounterCacheDiagnostics : ICacheDiagnostics
     public int RebalanceExecutionStarted => _rebalanceExecutionStarted;
     public int RebalanceExecutionCompleted => _rebalanceExecutionCompleted;
     public int RebalanceExecutionCancelled => _rebalanceExecutionCancelled;
-    public int RebalanceSkippedNoRebalanceRange => _rebalanceSkippedNoRebalanceRange;
+    public int RebalanceSkippedCurrentNoRebalanceRange => _rebalanceSkippedCurrentNoRebalanceRange;
+    public int RebalanceSkippedPendingNoRebalanceRange => _rebalanceSkippedPendingNoRebalanceRange;
     public int RebalanceSkippedSameRange => _rebalanceSkippedSameRange;
+    public int RebalanceScheduled => _rebalanceScheduled;
     public int RebalanceExecutionFailed => _rebalanceExecutionFailed;
 
     /// <inheritdoc/>
@@ -70,11 +74,18 @@ public class EventCounterCacheDiagnostics : ICacheDiagnostics
     void ICacheDiagnostics.RebalanceIntentPublished() => Interlocked.Increment(ref _rebalanceIntentPublished);
 
     /// <inheritdoc/>
-    void ICacheDiagnostics.RebalanceSkippedNoRebalanceRange() =>
-        Interlocked.Increment(ref _rebalanceSkippedNoRebalanceRange);
+    void ICacheDiagnostics.RebalanceSkippedCurrentNoRebalanceRange() =>
+        Interlocked.Increment(ref _rebalanceSkippedCurrentNoRebalanceRange);
+
+    /// <inheritdoc/>
+    void ICacheDiagnostics.RebalanceSkippedPendingNoRebalanceRange() =>
+        Interlocked.Increment(ref _rebalanceSkippedPendingNoRebalanceRange);
 
     /// <inheritdoc/>
     void ICacheDiagnostics.RebalanceSkippedSameRange() => Interlocked.Increment(ref _rebalanceSkippedSameRange);
+
+    /// <inheritdoc/>
+    void ICacheDiagnostics.RebalanceScheduled() => Interlocked.Increment(ref _rebalanceScheduled);
 
     /// <inheritdoc/>
     void ICacheDiagnostics.RebalanceExecutionFailed(Exception ex)
@@ -117,8 +128,10 @@ public class EventCounterCacheDiagnostics : ICacheDiagnostics
         _rebalanceExecutionStarted = 0;
         _rebalanceExecutionCompleted = 0;
         _rebalanceExecutionCancelled = 0;
-        _rebalanceSkippedNoRebalanceRange = 0;
+        _rebalanceSkippedCurrentNoRebalanceRange = 0;
+        _rebalanceSkippedPendingNoRebalanceRange = 0;
         _rebalanceSkippedSameRange = 0;
+        _rebalanceScheduled = 0;
         _userRequestFullCacheHit = 0;
         _userRequestPartialCacheHit = 0;
         _userRequestFullCacheMiss = 0;

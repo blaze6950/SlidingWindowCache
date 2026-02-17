@@ -146,13 +146,39 @@ public interface ICacheDiagnostics
     // ============================================================================
 
     /// <summary>
-    /// Records a rebalance skipped due to RequestedRange being within NoRebalanceRange.
-    /// Called when DecisionEngine determines rebalance is unnecessary because RequestedRange falls inside the no-rebalance threshold zone.
-    /// Indicates policy-based skip decision before expensive operations (Decision Scenario D1).
-    /// Location: RebalanceScheduler.ExecutePipelineAsync (after DecisionEngine returns ShouldExecute=false)
-    /// Related: Invariant D.26 (No rebalance if inside NoRebalanceRange), Invariant D.27 (Policy-based skip tracking)
+    /// Records a rebalance skipped due to RequestedRange being within the CURRENT cache's NoRebalanceRange (Stage 1).
+    /// Called when DecisionEngine Stage 1 validation determines that the requested range is fully covered
+    /// by the current cache's no-rebalance threshold zone, making rebalance unnecessary.
+    /// This is the fast-path optimization that prevents unnecessary decision computation.
     /// </summary>
-    void RebalanceSkippedNoRebalanceRange();
+    /// <remarks>
+    /// <para><strong>Decision Pipeline Stage:</strong> Stage 1 - Current Cache Stability Check</para>
+    /// <para><strong>Location:</strong> IntentController.RecordReason (RebalanceReason.WithinCurrentNoRebalanceRange)</para>
+    /// <para><strong>Related Invariants:</strong></para>
+    /// <list type="bullet">
+    /// <item><description>D.26: No rebalance if RequestedRange ⊆ CurrentNoRebalanceRange</description></item>
+    /// <item><description>Stage 1 is the primary fast-path optimization</description></item>
+    /// </list>
+    /// </remarks>
+    void RebalanceSkippedCurrentNoRebalanceRange();
+
+    /// <summary>
+    /// Records a rebalance skipped due to RequestedRange being within the PENDING rebalance's DesiredNoRebalanceRange (Stage 2).
+    /// Called when DecisionEngine Stage 2 validation determines that the requested range will be covered
+    /// by a pending rebalance's target no-rebalance zone, preventing cancellation storms and thrashing.
+    /// This is the anti-thrashing optimization that protects scheduled-but-not-yet-executed rebalances.
+    /// </summary>
+    /// <remarks>
+    /// <para><strong>Decision Pipeline Stage:</strong> Stage 2 - Pending Rebalance Stability Check (Anti-Thrashing)</para>
+    /// <para><strong>Location:</strong> IntentController.RecordReason (RebalanceReason.WithinPendingNoRebalanceRange)</para>
+    /// <para><strong>Related Invariants:</strong></para>
+    /// <list type="bullet">
+    /// <item><description>Stage 2 prevents cancellation storms</description></item>
+    /// <item><description>Validates that pending rebalance will satisfy the request</description></item>
+    /// <item><description>Key metric for measuring anti-thrashing effectiveness</description></item>
+    /// </list>
+    /// </remarks>
+    void RebalanceSkippedPendingNoRebalanceRange();
 
     /// <summary>
     /// Records a rebalance skipped because CurrentCacheRange equals DesiredCacheRange.
@@ -162,6 +188,31 @@ public interface ICacheDiagnostics
     /// Related: Invariant D.27 (No rebalance if DesiredCacheRange == CurrentCacheRange), Invariant D.28 (Same-range optimization tracking)
     /// </summary>
     void RebalanceSkippedSameRange();
+
+    /// <summary>
+    /// Records that a rebalance was scheduled for execution after passing all decision pipeline stages (Stage 5).
+    /// Called when DecisionEngine completes all validation stages and determines rebalance is necessary,
+    /// and IntentController successfully schedules the rebalance with the scheduler.
+    /// This event occurs AFTER decision validation but BEFORE actual execution starts.
+    /// </summary>
+    /// <remarks>
+    /// <para><strong>Decision Pipeline Stage:</strong> Stage 5 - Rebalance Required (Scheduling)</para>
+    /// <para><strong>Location:</strong> IntentController.RecordReason (RebalanceReason.RebalanceRequired)</para>
+    /// <para><strong>Lifecycle Position:</strong></para>
+    /// <list type="number">
+    /// <item><description>RebalanceIntentPublished - User request published intent</description></item>
+    /// <item><description>**RebalanceScheduled** - Decision validated, scheduled (THIS EVENT)</description></item>
+    /// <item><description>RebalanceExecutionStarted - After debounce, execution begins</description></item>
+    /// <item><description>RebalanceExecutionCompleted - Execution finished successfully</description></item>
+    /// </list>
+    /// <para><strong>Key Metrics:</strong></para>
+    /// <list type="bullet">
+    /// <item><description>Measures how many intents pass ALL decision stages</description></item>
+    /// <item><description>Ratio vs RebalanceIntentPublished shows decision efficiency</description></item>
+    /// <item><description>Ratio vs RebalanceExecutionStarted shows debounce/cancellation rate</description></item>
+    /// </list>
+    /// </remarks>
+    void RebalanceScheduled();
 
     /// <summary>
     /// Records a rebalance execution failure due to an exception during execution.
