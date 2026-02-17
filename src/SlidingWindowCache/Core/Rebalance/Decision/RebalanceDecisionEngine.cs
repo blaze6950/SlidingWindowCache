@@ -7,23 +7,33 @@ namespace SlidingWindowCache.Core.Rebalance.Decision;
 
 /// <summary>
 /// Evaluates whether rebalance execution is required based on cache geometry policy.
-/// This component lives strictly in the background execution context and is never
-/// invoked directly by the User Path.
+/// This is the SOLE AUTHORITY for rebalance necessity determination.
 /// </summary>
 /// <typeparam name="TRange">The type representing the range boundaries.</typeparam>
 /// <typeparam name="TDomain">The type representing the domain of the ranges.</typeparam>
 /// <remarks>
-/// <para><strong>Execution Context:</strong> Background / ThreadPool</para>
-/// <para><strong>Visibility:</strong> Not visible to User Path, invoked only by IntentController</para>
-/// <para><strong>Characteristics:</strong> Pure, deterministic, side-effect free</para>
+/// <para><strong>Execution Context:</strong> User Thread (Synchronous)</para>
+/// <para>
+/// This component executes SYNCHRONOUSLY in the user thread during intent publication.
+/// This is intentional and critical for handling request bursts and preventing intent thrashing.
+/// Decision logic is CPU-only, side-effect free, and lightweight (completes in microseconds).
+/// </para>
+/// <para><strong>Visibility:</strong> Not visible to external users, owned and invoked by IntentController</para>
+/// <para><strong>Invocation:</strong> Called synchronously by IntentController.PublishIntent() before any background scheduling (before Task.Run)</para>
+/// <para><strong>Characteristics:</strong> Pure, deterministic, side-effect free, CPU-only (no I/O)</para>
 /// <para><strong>Decision Pipeline (5 Stages):</strong></para>
 /// <list type="number">
-/// <item><description>Stage 1: Current Cache NoRebalanceRange stability check (fast path)</description></item>
+/// <item><description>Stage 1: Current Cache NoRebalanceRange stability check (fast path work avoidance)</description></item>
 /// <item><description>Stage 2: Pending Rebalance NoRebalanceRange stability check (anti-thrashing)</description></item>
 /// <item><description>Stage 3: Compute DesiredCacheRange and DesiredNoRebalanceRange</description></item>
-/// <item><description>Stage 4: Equality short-circuit (DesiredRange == CurrentRange)</description></item>
+/// <item><description>Stage 4: Equality short-circuit (DesiredRange == CurrentRange - no-op prevention)</description></item>
 /// <item><description>Stage 5: Rebalance required - return full decision</description></item>
 /// </list>
+/// <para><strong>Smart Eventual Consistency:</strong></para>
+/// <para>
+/// Enables work avoidance through multi-stage validation. Prevents thrashing, reduces redundant I/O,
+/// and maintains stability under rapidly changing access patterns while ensuring eventual convergence.
+/// </para>
 /// </remarks>
 internal sealed class RebalanceDecisionEngine<TRange, TDomain>
     where TRange : IComparable<TRange>

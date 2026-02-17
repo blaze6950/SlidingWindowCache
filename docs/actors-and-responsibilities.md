@@ -117,7 +117,10 @@ This logical actor is internally decomposed into two components for separation o
 - **ProportionalRangePlanner** - Computes DesiredCacheRange, plans cache geometry
 
 **Execution Context:**  
-**Lives in: Background / ThreadPool** (invoked by RebalanceDecisionEngine)
+**Lives in: User Thread** (invoked synchronously by RebalanceDecisionEngine, which itself runs in user thread)
+
+**Characteristics:**  
+Pure functions, lightweight structs (value types), CPU-only, side-effect free
 
 **Responsible for invariants:**
 - 29. DesiredCacheRange computed from RequestedRange + config [ProportionalRangePlanner]

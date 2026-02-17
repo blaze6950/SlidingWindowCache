@@ -1032,7 +1032,7 @@ public Range<TRange>? GetNoRebalanceRange(Range<TRange> cacheRange)
 
 **Ownership**: Value type, copied into RebalanceDecisionEngine and RebalanceExecutor
 
-**Execution Context**: Background / ThreadPool
+**Execution Context**: User Thread (invoked by RebalanceDecisionEngine which runs synchronously in user thread)
 
 **Responsibilities**:
 - Compute NoRebalanceRange (shrinks cache by threshold ratios)
@@ -1086,7 +1086,7 @@ public Range<TRange> Plan(Range<TRange> requested)
 
 **Ownership**: Value type, copied into RebalanceDecisionEngine
 
-**Execution Context**: Background / ThreadPool
+**Execution Context**: User Thread (invoked by RebalanceDecisionEngine which runs synchronously in user thread)
 
 **Responsibilities**:
 - Compute DesiredCacheRange (expands requested by left/right coefficients)
@@ -1832,10 +1832,13 @@ var sharedCache = new WindowCache<int, Data, IntDomain>(...);
 **User Thread (Synchronous, Fast)**:
 - WindowCache - Facade, delegates
 - UserRequestHandler - Serve requests, trigger intents
+- IntentController - Intent lifecycle, decision orchestration (synchronous methods)
+- RebalanceDecisionEngine - Pure decision logic (CPU-only, synchronous)
+- ThresholdRebalancePolicy - Threshold validation (value type, inline)
+- ProportionalRangePlanner - Cache geometry planning (value type, inline)
 
 **Background / ThreadPool (Asynchronous, Heavy)**:
-- RebalanceScheduler - Timing, debounce, orchestration
-- RebalanceDecisionEngine - Pure decision logic
+- RebalanceScheduler - Timing, debounce, orchestration (execution only, scheduling is sync)
 - RebalanceExecutor - Cache normalization, I/O
 
 **Both Contexts**:

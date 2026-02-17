@@ -308,9 +308,13 @@ shape to target).
 
 ### Execution Context
 
-**Mixed:**
-- **User Thread**: PublishIntent(), DecisionEngine.Evaluate(), ScheduleRebalance() (all synchronous)
-- **Background / ThreadPool**: Only the Task.Run lambda in Scheduler (debounce + execution) (invoked by RebalanceDecisionEngine)
+**User Thread** (invoked synchronously by RebalanceDecisionEngine during intent publication)
+
+**Characteristics:**
+- Pure functions, lightweight structs (value types)
+- CPU-only calculations (no I/O)
+- Side-effect free
+- Inline execution as part of DecisionEngine.Evaluate() call chain
 
 ### Component Responsibilities
 
