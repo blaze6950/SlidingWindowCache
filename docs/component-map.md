@@ -827,26 +827,29 @@ internal sealed class RebalanceScheduler<TRange, TData, TDomain>
 ```csharp
 public void ScheduleRebalance(Range<TRange> requestedRange, CancellationToken intentToken)
 {
-    // Fire-and-forget: optimized background execution on thread pool
-    // Using Task.Delay().ContinueWith() pattern for performance
-    Task.Delay(_debounceDelay, intentToken)
-        .ContinueWith(async delayTask =>
+    // Fire-and-forget: background execution with ConfigureAwait(false)
+    pendingRebalance.ExecutionTask = RunAsync();
+    
+    async Task RunAsync()
+    {
+        try
         {
-            try
-            {
-                // Intent validity check
-                if (delayTask.IsCanceled || intentToken.IsCancellationRequested)
-                    return;
-                
-                // Execute pipeline
-                await ExecutePipelineAsync(requestedRange, intentToken);
-            }
-            catch (OperationCanceledException)
-            {
-                // Expected when intent is cancelled
-            }
-        }, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default)
-        .Unwrap();
+            await Task.Delay(_debounceDelay, intentToken)
+                .ConfigureAwait(false);
+            
+            // Intent validity check
+            if (intentToken.IsCancellationRequested)
+                return;
+            
+            // Execute pipeline
+            await ExecutePipelineAsync(requestedRange, intentToken)
+                .ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            // Expected when intent is cancelled
+        }
+    }
 }
 ```
 
@@ -1441,11 +1444,12 @@ public Task WaitForIdleAsync(TimeSpan? timeout = null)
 │  🟦 CLASS (sealed)                                                │   │
 │                                                                   │   │
 │  ScheduleRebalance(range, intentToken):                          │   │
-│   Task.Delay(_debounceDelay, intentToken)                        │   │
-│     .ContinueWith(async () => {                                  │   │
+│   ExecutionTask = RunAsync();                                    │   │
+│     async Task RunAsync() {                                      │   │
+│       await Task.Delay(...).ConfigureAwait(false);               │   │
 │       if (!intentToken.IsCancellationRequested)                  │   │
-│         await ExecutePipelineAsync(range, intentToken); ─────────┼───┤
-│     }).Unwrap();                                                  │   │
+│         await ExecutePipelineAsync(...).ConfigureAwait(false); ──┼───┤
+│     }                                                             │   │
 │                                                                   │   │
 │  ExecutePipelineAsync(range, ct):                                │   │
 │   1. Check cancellation                                          │   │
