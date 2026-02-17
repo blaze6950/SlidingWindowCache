@@ -83,5 +83,6 @@ internal sealed class PendingRebalance<TRange>
     public void Cancel()
     {
         _cts?.Cancel();
+        _cts?.Dispose();
     }
 }

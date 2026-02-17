@@ -169,7 +169,11 @@ internal sealed class RebalanceScheduler<TRange, TData, TDomain>
 
                 // Intent validity check: discard if cancelled during debounce
                 // This implements Invariant C.20: "If intent becomes obsolete before execution begins, execution must not start"
-                intentToken.ThrowIfCancellationRequested();
+                if (intentToken.IsCancellationRequested)
+                {
+                    _cacheDiagnostics.RebalanceIntentCancelled();
+                    return;
+                }
 
                 // Execute the rebalance pipeline - ConfigureAwait(false) maintains thread pool execution
                 await ExecutePipelineAsync(intent, decision, intentToken)
