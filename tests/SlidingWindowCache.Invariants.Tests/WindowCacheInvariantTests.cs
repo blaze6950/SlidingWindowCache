@@ -513,23 +513,17 @@ public sealed class WindowCacheInvariantTests : IAsyncDisposable
             debounceDelay: TimeSpan.FromMilliseconds(2000)); // Long debounce to create pending state
         var (cache, _) = TrackCache(TestHelpers.CreateCacheWithDefaults(_domain, _cacheDiagnostics, options));
         var initialRange = TestHelpers.CreateRange(200, 300); // Span 101
-        // Initial cache range [98, 400] size 303, NoRebalanceRange 20% from 301 = 60 on left side, so [159, 340]
-        var initialCacheRange = initialRange.ExpandByRatio(_domain, options.LeftCacheSize, options.RightCacheSize);
-        var initialNoRebalanceRange = initialCacheRange.ExpandByRatio(
-            domain: _domain,
-            leftRatio: -(options.LeftThreshold ?? 0), // Negate to shrink
-            rightRatio: -(options.RightThreshold ?? 0) // Negate to shrink
-        );
-        var requestRange = TestHelpers.CreateRange(300, 400); // Span 101
-        // Desired cache range for request would be [198, 500], NoRebalanceRange would be [258, 440]
-        var desiredCacheRange = requestRange.ExpandByRatio(_domain, options.LeftCacheSize, options.RightCacheSize);
-        var desiredNoRebalanceRange = desiredCacheRange.ExpandByRatio(
-            domain: _domain,
-            leftRatio: -(options.LeftThreshold ?? 0),
-            rightRatio: -(options.RightThreshold ?? 0)
-        );
-        var nextRequestRange = TestHelpers.CreateRange(320, 420); // Span 101, within pending NoRebalanceRange but outside current NoRebalanceRange
+        // Initial cache range is expected to be [98, 400] (size 303).
+        // The NoRebalanceRange is 20% shrunk from each side of that cache range,
+        // which gives [159, 340] (301 inner span; 20% of 301 is ~60 on each side).
 
+        var requestRange = TestHelpers.CreateRange(300, 400); // Span 101
+        // Desired cache range for this request would be [198, 500],
+        // and its NoRebalanceRange would be [258, 440] using the same 20% shrink.
+
+        // Next request is chosen to be within the pending rebalance's NoRebalanceRange
+        // but outside the current NoRebalanceRange, to trigger a Stage 2 skip.
+        var nextRequestRange = TestHelpers.CreateRange(320, 420); // Span 101
         // ACT: Establish initial cache
         await TestHelpers.ExecuteRequestAndWaitForRebalance(cache, initialRange);
         _cacheDiagnostics.Reset();
