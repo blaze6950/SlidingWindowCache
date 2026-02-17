@@ -308,10 +308,6 @@ public class RebalanceExceptionHandlingTests : IDisposable
         {
         }
 
-        public void RebalanceSkippedNoRebalanceRange()
-        {
-        }
-
         public void RebalanceSkippedCurrentNoRebalanceRange()
         {
         }
