@@ -266,7 +266,7 @@ internal sealed class IntentController<TRange, TData, TDomain>
             }
 
             // Await the observed task
-            await observedPending.ExecutionTask;
+            await observedPending.ExecutionTask.ConfigureAwait(false);
 
             // Check if _pendingRebalance changed while we were waiting
             var currentPending = Volatile.Read(ref _pendingRebalance);

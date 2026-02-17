@@ -81,7 +81,8 @@ internal sealed class RebalanceExecutor<TRange, TData, TDomain>
 
         // Phase 1: Extend delivered data to cover desired range (fetch only truly missing data)
         // Use delivered data as base instead of current cache to ensure consistency
-        var extended = await _cacheExtensionService.ExtendCacheAsync(baseRangeData, desiredRange, cancellationToken);
+        var extended = await _cacheExtensionService.ExtendCacheAsync(baseRangeData, desiredRange, cancellationToken)
+            .ConfigureAwait(false);
 
         // Cancellation check after I/O but before mutation
         // If User Path cancelled us, don't apply the rebalance result

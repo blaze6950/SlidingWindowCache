@@ -170,7 +170,7 @@ internal sealed class UserRequestHandler<TRange, TData, TDomain>
             // Fetch ONLY the requested range from IDataSource
             // NOTE: The logic is similar to cold start
             _cacheDiagnostics.DataSourceFetchSingleRange();
-            assembledData = (await _dataSource.FetchAsync(requestedRange, cancellationToken))
+            assembledData = (await _dataSource.FetchAsync(requestedRange, cancellationToken).ConfigureAwait(false))
                 .ToRangeData(requestedRange, _state.Domain);
 
             _cacheDiagnostics.UserRequestFullCacheMiss();

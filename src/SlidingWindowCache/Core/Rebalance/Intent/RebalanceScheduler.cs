@@ -237,7 +237,8 @@ internal sealed class RebalanceScheduler<TRange, TData, TDomain>
                 intent,
                 decision.DesiredRange!.Value,
                 decision.DesiredNoRebalanceRange,
-                cancellationToken);
+                cancellationToken)
+                .ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {
