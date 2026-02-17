@@ -161,18 +161,31 @@ The system uses a **multi-stage rebalance decision pipeline**, not a cancellatio
 
 ### System Stability Principle
 
-The system prioritizes **decision correctness and work avoidance** over aggressive rebalance responsiveness.
+The system prioritizes **decision correctness and work avoidance** over aggressive rebalance responsiveness, enabling **smart eventual consistency**.
 
 **Work Avoidance Mechanisms:**
-- Stage 1: Avoid rebalance if current cache sufficient
-- Stage 2: Avoid redundant rebalance if pending execution covers request
-- Stage 3: Avoid no-op mutations if cache already optimal
+- Stage 1: Avoid rebalance if current cache sufficient (NoRebalanceRange containment)
+- Stage 2: Avoid redundant rebalance if pending execution covers request (anti-thrashing)
+- Stage 3: Avoid no-op mutations if cache already optimal (Desired==Current)
+
+**Smart Eventual Consistency:**
+
+The cache converges to optimal configuration asynchronously through decision-driven execution:
+- User always receives correct data immediately (from cache or IDataSource)
+- Decision Engine validates necessity through multi-stage pipeline (THE authority)
+- Work avoidance prevents unnecessary operations (thrashing, redundant I/O, oscillation)
+- Cache state updates occur in background ONLY when validated as necessary
+- System remains stable under rapidly changing access patterns
 
 **Trade-offs:**
-- ✅ Prevents thrashing and oscillation
-- ✅ Reduces redundant I/O operations
-- ✅ Improves system stability under rapid access pattern changes
-- ⚠️ May delay cache optimization by debounce period
+- ✅ Prevents thrashing and oscillation (stability over aggressive responsiveness)
+- ✅ Reduces redundant I/O operations (efficiency through validation)
+- ✅ Improves system stability under rapid access pattern changes (work avoidance)
+- ⚠️ May delay cache optimization by debounce period (acceptable for stability gains)
+
+**Related Documentation:**
+- See [Concurrency Model - Smart Eventual Consistency](concurrency-model.md#smart-eventual-consistency-model) for detailed consistency semantics
+- See [Invariants - Section D](invariants.md#d-rebalance-decision-path-invariants) for multi-stage validation pipeline specification
 
 ---
 
@@ -688,24 +701,32 @@ internal sealed class IntentController<TRange, TData, TDomain>
 
 **Fields**:
 - `RebalanceScheduler<TRange, TData, TDomain> _scheduler` (readonly)
-- ✏️ `CancellationTokenSource? _currentIntentCts` - **Mutable**, tracks current intent
+- `RebalanceDecisionEngine<TRange, TDomain> _decisionEngine` (readonly)
+- `CacheState<TRange, TData, TDomain> _state` (readonly reference to shared state)
+- ✏️ `PendingRebalance<TRange>? _pendingRebalance` - **Mutable**, tracks current pending rebalance (accessed via Volatile.Read/Write)
 
 **Key Methods**:
 
-**`PublishIntent(Range<TRange> requestedRange)`**:
+**`PublishIntent(Intent<TRange, TData, TDomain> intent)`**:
 ```csharp
-public void PublishIntent(Range<TRange> requestedRange)
+public void PublishIntent(Intent<TRange, TData, TDomain> intent)
 {
-    // 1. Invalidate previous intent
-    _currentIntentCts?.Cancel();
-    _currentIntentCts?.Dispose();
+    // 1. Evaluate necessity via DecisionEngine (THE authority)
+    var pendingSnapshot = Volatile.Read(ref _pendingRebalance);
+    var decision = _decisionEngine.Evaluate(intent.RequestedRange, _state, pendingSnapshot);
     
-    // 2. Create new intent identity
-    _currentIntentCts = new CancellationTokenSource();
-    var intentToken = _currentIntentCts.Token;
+    // 2. If validation rejects, skip entirely (work avoidance)
+    if (!decision.ShouldSchedule) return;
     
-    // 3. Delegate to scheduler
-    _scheduler.ScheduleRebalance(requestedRange, intentToken);
+    // 3. Cancel pending via domain object (validation-driven cancellation)
+    var oldPending = Volatile.Read(ref _pendingRebalance);
+    oldPending?.Cancel();
+    
+    // 4. Delegate to scheduler, capture returned PendingRebalance
+    var newPending = _scheduler.ScheduleRebalance(intent, decision);
+    
+    // 5. Update snapshot for next Stage 2 validation
+    Volatile.Write(ref _pendingRebalance, newPending);
 }
 ```
 
@@ -713,37 +734,48 @@ public void PublishIntent(Range<TRange> requestedRange)
 ```csharp
 public void CancelPendingRebalance()
 {
-    if (_currentIntentCts != null)
-    {
-        _currentIntentCts.Cancel();
-        _currentIntentCts.Dispose();
-        _currentIntentCts = null;
-    }
+    var pending = Volatile.Read(ref _pendingRebalance);
+    if (pending == null) return;
+    
+    // DDD-style cancellation through domain object
+    pending.Cancel();
+    Volatile.Write(ref _pendingRebalance, null);
 }
 ```
 
 **`WaitForIdleAsync(TimeSpan? timeout = null)`** (Infrastructure/Testing):
 ```csharp
-public Task WaitForIdleAsync(TimeSpan? timeout = null)
+public async Task WaitForIdleAsync(TimeSpan? timeout = null)
 {
-    // Delegate to RebalanceScheduler's Task tracking mechanism
-    return _scheduler.WaitForIdleAsync(timeout);
+    // Observe-and-stabilize pattern using PendingRebalance.ExecutionTask
+    while (stopwatch.Elapsed < maxWait)
+    {
+        var observedPending = Volatile.Read(ref _pendingRebalance);
+        if (observedPending?.ExecutionTask == null) return;
+        
+        await observedPending.ExecutionTask;
+        
+        var currentPending = Volatile.Read(ref _pendingRebalance);
+        if (ReferenceEquals(observedPending, currentPending)) return;
+    }
 }
 ```
 
 **Characteristics**:
-- ✅ Owns intent identity (CancellationTokenSource lifecycle)
-- ✅ Single-flight enforcement (only one active intent)
-- ✅ Exposes cancellation to User Path
-- ✅ **Lock-free implementation** using `Interlocked.Exchange` for atomic operations
+- ✅ Owns pending rebalance snapshot (`_pendingRebalance` field)
+- ✅ Single-flight enforcement (only one active intent via cancellation)
+- ✅ Exposes cancellation to User Path via `CancelPendingRebalance()`
+- ✅ **Lock-free implementation** using `Volatile.Read/Write` for safe memory visibility
+- ✅ **DDD-style cancellation** - PendingRebalance domain object encapsulates CancellationTokenSource
 - ✅ **Thread-safe without locks** - no race conditions, tested under concurrent load
 - ⚠️ **Intent does not guarantee execution** - execution is opportunistic
-- ❌ **Does NOT**: Timing, scheduling, execution logic
+- ❌ **Does NOT**: Timing, scheduling, execution logic, CTS lifecycle management
 
 **Concurrency Model**:
-- Uses lightweight synchronization primitives (`Interlocked.Exchange`)
+- Uses `Volatile.Read/Write` for safe memory visibility across threads
 - No locks, no `lock` statements, no mutexes
-- Atomic field replacement ensures thread-safety
+- Memory barriers via `Volatile` operations ensure correct ordering
+- PendingRebalance domain object owns CancellationTokenSource lifecycle
 - Validated by `ConcurrencyStabilityTests` under concurrent load
 
 **Ownership**: 
@@ -751,12 +783,12 @@ public Task WaitForIdleAsync(TimeSpan? timeout = null)
 - Composes with RebalanceScheduler
 
 **Execution Context**: 
-- Synchronous methods (called from User Thread)
-- Scheduled work executes in Background
+- **PublishIntent() executes synchronously in User Thread** (includes decision evaluation)
+- **Only scheduled work (Task.Run lambda) executes in Background ThreadPool**
 
 **State**: 
-- `_currentIntentCts` (mutable, nullable)
-- Represents identity of latest intent
+- `_pendingRebalance` (mutable, nullable, accessed via Volatile.Read/Write)
+- Represents snapshot of current pending rebalance for Stage 2 validation
 
 **Responsibilities**: 
 - Intent lifecycle management
@@ -1527,21 +1559,24 @@ public Task WaitForIdleAsync(TimeSpan? timeout = null)
 
 #### Writers
 
-**UserRequestHandler**:
+**RebalanceExecutor** (SOLE WRITER - single-writer architecture):
+- ✏️ Writes `Cache` (via `Rematerialize()`)
+  - **Purpose**: Normalize cache to DesiredCacheRange using delivered data from intent
+  - **When**: Rebalance execution completes (background)
+  - **Scope**: Expands, trims, or replaces cache as needed
 - ✏️ Writes `LastRequested` property
-- ✏️ Writes `Cache` (via `Rematerialize()`)
-  - **Purpose**: Expand cache to cover requested range
-  - **When**: User request needs data not in cache
-  - **Scope**: Expands only (never trims)
-
-**RebalanceExecutor**:
-- ✏️ Writes `Cache` (via `Rematerialize()`)
-  - **Purpose**: Normalize cache to DesiredCacheRange
-  - **When**: Rebalance execution completes
-  - **Scope**: Expands AND trims
+  - **Purpose**: Record the range that triggered this rebalance
+  - **When**: After successful rebalance execution
 - ✏️ Writes `NoRebalanceRange` property
   - **Purpose**: Update threshold zone after normalization
-  - **When**: After successful rebalance
+  - **When**: After successful rebalance execution
+
+**UserRequestHandler** (READ-ONLY):
+- ❌ Does NOT write to CacheState
+- ❌ Does NOT call `Cache.Rematerialize()`
+- ❌ Does NOT write to `LastRequested` or `NoRebalanceRange`
+- ✅ Only reads from cache and IDataSource
+- ✅ Publishes intent with delivered data for Rebalance Execution to process
 
 #### Readers
 
@@ -1560,10 +1595,16 @@ public Task WaitForIdleAsync(TimeSpan? timeout = null)
 #### Coordination
 
 **No locks** (by design):
-- Single consumer model (one logical user per cache)
-- Coordination via **CancellationToken**
-- User Path **always cancels** rebalance before mutations
-- Rebalance **always checks** cancellation before mutations
+- **Single-writer architecture** - User Path is read-only, only Rebalance Execution writes
+- **Single consumer model** - one logical user per cache instance
+- Coordination via **validation-driven cancellation** (DecisionEngine confirms necessity, triggers cancellation)
+- Rebalance **always checks** cancellation before mutations (yields to new rebalance if needed)
+
+**Thread-Safety Through Architecture:**
+- No write-write races (only one writer exists)
+- Reference reads are atomic (User Path safely reads while Rebalance may execute)
+- `Rematerialize()` performs atomic reference swaps (array/List assignment)
+- `internal set` on CacheState properties restricts write access to internal components
 
 **Atomic operations**:
 - `Rematerialize()` replaces storage atomically (array/list assignment)
@@ -1629,49 +1670,75 @@ The Sliding Window Cache follows a **single consumer model** as documented in `d
    - ✅ Only `CancellationToken` for coordination
 
 3. **Coordination Mechanism**
-   - User Path cancels rebalance **before** any cache mutation
-   - Rebalance checks cancellation **before and during** execution
-   - Atomic array/list replacement in `Rematerialize()`
+   - **Single-Writer Architecture** - User Path is read-only, only Rebalance Execution writes to CacheState
+   - **Validation-driven cancellation** - DecisionEngine confirms necessity, then triggers cancellation of pending rebalance
+   - **Atomic updates** - `Rematerialize()` performs atomic array/List reference swaps
+   - **No locks needed** - Single-writer eliminates write-write races, reference reads are atomic
 
 ### Thread Contexts
 
-| Component                         | Thread Context    | Notes                                  |
-|-----------------------------------|-------------------|----------------------------------------|
-| **WindowCache**                   | Neutral           | Just delegates                         |
-| **UserRequestHandler**            | ⚡ **User Thread** | Synchronous, fast path                 |
-| **RebalanceIntentManager**        | User Thread       | Synchronous methods (called from user) |
-| **RebalanceScheduler**            | 🔄 **Background** | ThreadPool, async                      |
-| **RebalanceDecisionEngine**       | 🔄 **Background** | ThreadPool, pure logic                 |
-| **RebalanceExecutor**             | 🔄 **Background** | ThreadPool, async, I/O                 |
-| **CacheDataExtensionService**     | Both ⚡🔄          | User Thread OR Background              |
-| **CacheState**                    | Both ⚡🔄          | Shared mutable (no locks!)             |
-| **Storage (Snapshot/CopyOnRead)** | Both ⚡🔄          | Owned by CacheState                    |
+| Component                         | Thread Context    | Notes                                                     |
+|-----------------------------------|-------------------|-----------------------------------------------------------|
+| **WindowCache**                   | Neutral           | Just delegates                                            |
+| **UserRequestHandler**            | ⚡ **User Thread** | Synchronous, fast path                                    |
+| **IntentController**              | ⚡ **User Thread** | Synchronous methods (PublishIntent, decision evaluation)  |
+| **RebalanceDecisionEngine**       | ⚡ **User Thread** | Invoked synchronously by IntentController, CPU-only logic |
+| **RebalanceScheduler (scheduling)**| ⚡ **User Thread** | ScheduleRebalance() is synchronous (creates Task)        |
+| **RebalanceScheduler (execution)**| 🔄 **Background** | Inside Task.Run - debounce + executor invocation         |
+| **RebalanceExecutor**             | 🔄 **Background** | ThreadPool, async, I/O                                    |
+| **CacheDataExtensionService**     | Both ⚡🔄          | User Thread OR Background                                 |
+| **CacheState**                    | Both ⚡🔄          | Shared mutable (no locks!)                                |
+| **Storage (Snapshot/CopyOnRead)** | Both ⚡🔄          | Owned by CacheState                                       |
+
+**Critical:** Decision logic and scheduling are **synchronous operations in user thread** (CPU-only, lightweight). Only the actual rebalance execution (I/O) happens in background ThreadPool.
 
 ### Concurrency Invariants (from `docs/invariants.md`)
 
 **A.1 Concurrency & Priority**:
-- **-1**: User Path **MUST NOT execute concurrently** with Rebalance Execution
-- **0**: User Path **always has higher priority** than Rebalance Execution
-- **0a**: Every User Request **MUST cancel** any ongoing/pending Rebalance before mutations
+- **-1**: User Path and Rebalance Execution **never write to cache concurrently** (User Path is read-only, single-writer architecture)
+- **0**: User Path **always has higher priority** than Rebalance Execution (enforced via validation-driven cancellation)
+- **0a**: User Request **MAY cancel** ongoing/pending Rebalance **ONLY when DecisionEngine validation confirms new rebalance is necessary**
 
 **C. Rebalance Intent & Temporal Invariants**:
 - **17**: At most **one active rebalance intent**
-- **18**: Previous intents are **obsolete** after new intent
+- **18**: Previous intents may become **logically superseded** when validation confirms new rebalance necessary
 - **21**: At most **one rebalance execution** active at any time
+
+**Key Correction:** User Path does NOT cancel before its own mutations. User Path is **read-only** - it never mutates cache. Cancellation is triggered by validation confirming necessity, not automatically by user requests.
 
 ### How It Works
 
-#### User Request Flow (User Thread)
+#### User Request Flow (User Thread - ALL SYNCHRONOUS until Task.Run)
 ```
 1. UserRequestHandler.HandleRequestAsync() called
-2. FIRST STEP: _intentManager.CancelPendingRebalance()
-   └─> Cancels CancellationTokenSource
-   └─> Background rebalance receives cancellation signal
-3. Check cache, extend if needed
-4. Mutate cache (Rematerialize) - safe, rebalance is cancelled
-5. Publish new intent
-6. Return data
+2. Read from cache or fetch missing data from IDataSource
+3. Assemble data to return to user (NO cache mutation)
+4. Return data to user immediately
+5. Publish intent with delivered data (SYNCHRONOUS in user thread):
+   └─> IntentController.PublishIntent(intent) ⚡ USER THREAD
+       ├─> DecisionEngine.Evaluate() ⚡ USER THREAD
+       │   └─> Multi-stage validation (CPU-only, side-effect free)
+       │       - Stage 1: NoRebalanceRange check
+       │       - Stage 2: Pending coverage check
+       │       - Stage 3: Desired==Current check
+       ├─> If validation rejects: return immediately (work avoidance)
+       ├─> If validation confirms: oldPending?.Cancel() ⚡ USER THREAD
+       └─> Scheduler.ScheduleRebalance() ⚡ USER THREAD
+           ├─> Create PendingRebalance (synchronous)
+           └─> Task.Run(() => ...) ← HERE background starts 🔄
+               └─> Debounce delay 🔄 BACKGROUND
+               └─> RebalanceExecutor.ExecuteAsync() 🔄 BACKGROUND
+                   └─> I/O operations, cache mutations
 ```
+
+**Key:** Everything up to `Task.Run` happens **synchronously in user thread**. 
+Only debounce + actual execution happen in background.
+
+**Why This Matters:**
+- User request burst → immediate validation in user thread → work avoidance
+- No background queue buildup with pending decisions
+- Intent thrashing prevented by synchronous validation
+- Lightweight CPU-only operations don't block user thread (microseconds)
 
 #### Rebalance Flow (Background Thread)
 ```
@@ -1730,7 +1797,7 @@ var sharedCache = new WindowCache<int, Data, IntDomain>(...);
 | WindowCache               | Immutable (after ctor)                       | No           | User creates             | App lifetime   |
 | UserRequestHandler        | Immutable                                    | No           | WindowCache owns         | Cache lifetime |
 | CacheState                | **Mutable**                                  | **Yes** ⚠️   | WindowCache owns, shared | Cache lifetime |
-| IntentController          | Mutable (_currentIntentCts)                  | No           | WindowCache owns         | Cache lifetime |
+| IntentController          | Mutable (_pendingRebalance)                  | No           | WindowCache owns         | Cache lifetime |
 | RebalanceScheduler        | Immutable                                    | No           | IntentController owns    | Cache lifetime |
 | RebalanceDecisionEngine   | Immutable                                    | No           | WindowCache owns         | Cache lifetime |
 | RebalanceExecutor         | Immutable                                    | No           | WindowCache owns         | Cache lifetime |

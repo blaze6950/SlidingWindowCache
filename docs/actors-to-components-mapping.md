@@ -37,38 +37,71 @@ User Thread
             ▼
 
 ═══════════════════════════════════════════════════════════
-Background / ThreadPool
+═══════════════════════════════════════════════════════════
+User Thread (Synchronous)
 ═══════════════════════════════════════════════════════════
 
-┌───────────────────────────┐
-│ RebalanceIntentManager    │ ← Temporal Authority
-│                           │   • debounce / cancel obsolete
-│                           │   • enforce single-flight
-└───────────┬───────────────┘   • schedule execution
+┌───────────────────────┐
+│ SlidingWindowCache    │ ← Public Facade
+└───────────┬───────────┘
             │
-            │ invoke decision pipeline
+            ▼
+┌───────────────────────┐
+│ UserRequestHandler    │ ← Fast user-facing logic
+└───────────┬───────────┘
+            │
+            │ publish rebalance intent (synchronous)
             │
             ▼
 ┌───────────────────────────┐
-│ RebalanceDecisionEngine   │ ← Pure Decision Logic
+│ IntentController          │ ← Intent Lifecycle & Orchestration
+│ (Rebalance Intent Mgr)    │   • owns DecisionEngine
+│                           │   • owns RebalanceScheduler
+└───────────┬───────────────┘   • invokes decision synchronously
+            │
+            │ invoke DecisionEngine (synchronous, CPU-only)
+            │
+            ▼
+┌───────────────────────────┐
+│ RebalanceDecisionEngine   │ ← Pure Decision Logic (User Thread!)
 │                           │   • NoRebalanceRange check
 │ + CacheGeometryPolicy     │   • DesiredCacheRange computation
 └───────────┬───────────────┘   • allow/block execution
             │
-            │ if execution allowed
+            │ if validation confirms necessity
             │
             ▼
 ┌───────────────────────────┐
-│ RebalanceExecutor         │ ← Mutating Actor
+│ ScheduleRebalance()       │ ← Creates Task.Run (returns synchronously)
+└───────────┬───────────────┘
+            │
+            │ Task.Run() - HERE background starts ⚡→🔄
+            │
+            ▼
+
+═══════════════════════════════════════════════════════════
+Background / ThreadPool (After Task.Run)
+═══════════════════════════════════════════════════════════
+
+            ▼
+┌───────────────────────────┐
+│ Debounce Delay            │ ← Wait before execution
+└───────────┬───────────────┘
+            │
+            ▼
+┌───────────────────────────┐
+│ RebalanceExecutor         │ ← Mutating Actor (I/O operations)
 └───────────┬───────────────┘
             │
             │ atomic mutation
             │
             ▼
 ┌───────────────────────────┐
-│ CacheStateManager         │ ← Consistency Guardian
+│ CacheState                │ ← Consistency (single-writer)
 └───────────────────────────┘
 ```
+
+**Critical:** Everything up to Task.Run happens **synchronously in user thread**. Only debounce + actual execution happen in background.
 
 ---
 
@@ -183,30 +216,42 @@ return _userRequestHandler.HandleRequestAsync(requestedRange, cancellationToken)
 
 ### Execution Context
 
-**Lives in: Background / ThreadPool**
+**Lives in: User Thread** (invoked synchronously by IntentController)
+
+**Critical:**  Decision evaluation happens SYNCHRONOUSLY in user thread before any background scheduling.
 
 ### Visibility
 
-- **Not visible to User Path**
-- Invoked only by RebalanceScheduler
-- May execute many times, results may be discarded
+- **Not visible to external users**
+- **Owned by IntentController** (composed in constructor)
+- Invoked synchronously by IntentController.PublishIntent()
+- Executes inline with user request (before Task.Run)
+- May execute many times, work avoidance allows skipping scheduling entirely
+
+### Ownership
+
+**Owned by:** IntentController  
+**Created by:** IntentController constructor  
+**Lifecycle:** Same as IntentController (cache lifetime)
 
 ### Critical Rule
 
 ```
-DecisionEngine lives strictly inside the background contour.
-DecisionEngine is the SOLE AUTHORITY for rebalance necessity determination.
+DecisionEngine executes SYNCHRONOUSLY in user thread.
+DecisionEngine is THE SOLE AUTHORITY for rebalance necessity determination.
+Decision happens BEFORE background scheduling (prevents work buildup, intent thrashing).
 ```
 
 ### Responsibilities
 
-- **THE authority for rebalance necessity determination**
-- Evaluates whether rebalance is required through multi-stage validation:
-  - **Stage 1**: NoRebalanceRange containment check (fast path)
-  - **Stage 2**: Conceptual anti-thrashing validation (pending desired cache)
-  - **Stage 3**: DesiredCacheRange vs CurrentCacheRange equality check
-- Produces analytical decision (execute or skip)
-- Rebalance executes ONLY if ALL validation stages confirm necessity
+- **THE sole authority for rebalance necessity determination** (not a helper, but THE decision maker)
+- Evaluates whether rebalance is required through multi-stage analytical validation:
+  - **Stage 1**: NoRebalanceRange containment check (fast path work avoidance)
+  - **Stage 2**: Conceptual anti-thrashing validation (pending desired cache coverage)
+  - **Stage 3**: DesiredCacheRange vs CurrentCacheRange equality check (no-op prevention)
+- Produces analytical decision (execute or skip) that drives system behavior
+- Enables smart eventual consistency through work avoidance mechanisms
+- Rebalance executes ONLY if ALL validation stages confirm necessity (prevents thrashing, redundant I/O, oscillation)
 
 ### Characteristics
 
@@ -263,7 +308,9 @@ shape to target).
 
 ### Execution Context
 
-**Lives in: Background / ThreadPool** (invoked by RebalanceDecisionEngine)
+**Mixed:**
+- **User Thread**: PublishIntent(), DecisionEngine.Evaluate(), ScheduleRebalance() (all synchronous)
+- **Background / ThreadPool**: Only the Task.Run lambda in Scheduler (debounce + execution) (invoked by RebalanceDecisionEngine)
 
 ### Component Responsibilities
 
@@ -322,55 +369,65 @@ but externally appears as a unified policy concept.
 **Implemented as:** Two internal components working together as a unified actor:
 
 1. **IntentController**
-   - `internal class IntentController<TRange, TData, TDomain>`
-   - File: `src/SlidingWindowCache/CacheRebalance/IntentController.cs`
-   - Owns intent identity and cancellation lifecycle
-   - Exposes `CancelPendingRebalance()` and `PublishIntent()` to User Path
+   - `internal sealed class IntentController<TRange, TData, TDomain>`
+   - File: `src/SlidingWindowCache/Core/Rebalance/Intent/IntentController.cs`
+   - **Owns DecisionEngine** (composes in constructor)
+   - **Owns RebalanceScheduler** (creates in constructor)
+   - Manages intent lifecycle and cancellation via PendingRebalance snapshot
+   - Invokes DecisionEngine synchronously in PublishIntent()
+   - Exposes `CancelPendingRebalance()` and `PublishIntent()` methods
 
 2. **RebalanceScheduler (Execution Scheduler)**
-   - `internal class RebalanceScheduler<TRange, TData, TDomain>`
-   - File: `src/SlidingWindowCache/CacheRebalance/RebalanceScheduler.cs`
-   - Owns debounce timing and background execution
-   - Orchestrates DecisionEngine → Executor pipeline based on validation results
-   - Ensures single-flight execution
+   - `internal sealed class RebalanceScheduler<TRange, TData, TDomain>`
+   - File: `src/SlidingWindowCache/Core/Rebalance/Intent/RebalanceScheduler.cs`
+   - **Owned by IntentController** (created in constructor)
+   - Handles debounce timing and background execution
+   - ScheduleRebalance() is synchronous (creates Task.Run, returns PendingRebalance)
+   - Ensures single-flight execution via Task lifecycle
    - **Intentionally stateless** - does not own intent identity
-   - **Task tracking** - provides `WaitForIdleAsync()` for deterministic synchronization (infrastructure/testing)
+   - **Task tracking** - provides ExecutionTask on PendingRebalance for deterministic synchronization (infrastructure/testing)
 
-**Key Principle:** The logical actor (Rebalance Intent Manager) is decomposed into 
-two cooperating components for separation of concerns, but externally appears as 
-a single unified actor.
+**Key Principle:** IntentController is the owner/orchestrator. It owns both DecisionEngine and RebalanceScheduler, invokes DecisionEngine synchronously, and delegates background execution to Scheduler.
 
 ### Execution Context
 
 **Lives in: Background / ThreadPool**
 
-### Enhanced Role (Corrected Model)
+### Enhanced Role (Decision-Driven Model)
 
 The Rebalance Intent Manager actor is responsible for:
 
-- **Receiving intents** (on every user request) [Intent Controller responsibility]
-- **Intent lifecycle management** (identity, versioning) [Intent Controller responsibility]
-- **Cancellation coordination** based on validation results [Intent Controller responsibility]
-- **Deduplication** and debouncing [Execution Scheduler responsibility]
-- **Single-flight execution** enforcement [Execution Scheduler responsibility]
-- **Starting background tasks** [Execution Scheduler responsibility]
-- **Orchestrating the validation-driven decision pipeline**: [Execution Scheduler responsibility]
-  1. Invoke DecisionEngine (multi-stage analytical validation)
-  2. If ALL stages pass validation, invoke Executor
-  3. If validation rejects, skip execution (no-op)
-  4. Handle cancellation when new validated rebalance is needed
+- **Receiving intents** (on every user request) [IntentController.PublishIntent() - User Thread, synchronous]
+- **Owning and invoking DecisionEngine** [IntentController owns, invokes synchronously]
+- **Intent lifecycle management** via PendingRebalance snapshot [IntentController - Volatile.Read/Write]
+- **Cancellation coordination** based on validation results from owned DecisionEngine [IntentController - User Thread]
+- **Immediate work avoidance** through synchronous decision evaluation [IntentController - User Thread]
+- **Debouncing** [Execution Scheduler - Background, after Task.Run]
+- **Single-flight execution** enforcement [Both components via cancellation + Task lifecycle]
+- **Starting background tasks** [Execution Scheduler - ScheduleRebalance creates Task.Run]
+- **Orchestrating the validation-driven decision pipeline**: [IntentController - User Thread, SYNCHRONOUS]
+  1. **IntentController.PublishIntent()** invokes owned DecisionEngine synchronously (User Thread, CPU-only)
+  2. **DecisionEngine.Evaluate()** performs multi-stage validation (User Thread, CPU-only)
+  3. If validation rejects → return immediately (work avoidance, no Task.Run scheduled)
+  4. If validation confirms → cancel old pending, call Scheduler.ScheduleRebalance()
+  5. **Scheduler.ScheduleRebalance()** creates PendingRebalance, schedules Task.Run (returns synchronously to user thread)
+  6. **Background Task** (only part that's async) performs debounce delay + ExecuteAsync
+
+**Key Principle:** IntentController is the owner/orchestrator. It **owns DecisionEngine** and invokes it **synchronously in user thread** during PublishIntent(), enabling immediate work avoidance and preventing intent thrashing. The **DecisionEngine (owned by IntentController) is THE sole authority** for necessity determination. This separation enables **smart eventual consistency** through work avoidance: the system converges to optimal configuration while avoiding unnecessary operations.
 
 ### Component Responsibilities
 
 #### Intent Controller (IntentController)
-- Owns `CancellationTokenSource` for current intent
+- Owns pending rebalance snapshot (`_pendingRebalance` field accessed via `Volatile.Read/Write`)
 - Provides `CancelPendingRebalance()` for User Path priority
 - Provides `PublishIntent()` to receive new intents
-- Invalidates previous intent when new intent arrives
+- Invalidates previous intent when new intent arrives (via PendingRebalance.Cancel())
 - Does NOT perform scheduling or timing logic
-- Does NOT orchestrate execution pipeline
+- Does NOT orchestrate execution pipeline  
 - Does NOT determine rebalance necessity (DecisionEngine's job)
-- **Lock-free implementation** using `Interlocked.Exchange` for atomic operations
+- Does NOT own CancellationTokenSource lifecycle (PendingRebalance domain object does)
+- **Lock-free implementation** using `Volatile.Read/Write` for safe memory visibility
+- **DDD-style cancellation** - PendingRebalance domain object encapsulates CancellationTokenSource
 - **Thread-safe without locks** - no race conditions, no blocking
 - Validated by `ConcurrencyStabilityTests` under concurrent load
 
@@ -559,19 +616,22 @@ RebalanceExecutor
 
 ### Key Principle
 
-🔑 **DecisionEngine lives strictly within the background contour.**
+🔑 **DecisionEngine executes SYNCHRONOUSLY in user thread (before Task.Run), enabling immediate work avoidance and preventing intent thrashing.**
 
 ### Actor Execution Contexts
 
-| Actor                      | Execution Context     | Invoked By               |
-|----------------------------|-----------------------|--------------------------|
-| UserRequestHandler         | User Thread           | User (public API)        |
-| IntentController           | Background/ThreadPool | UserRequestHandler       |
-| RebalanceScheduler         | Background/ThreadPool | IntentController         |
-| RebalanceDecisionEngine    | Background/ThreadPool | RebalanceScheduler       |
-| CacheGeometryPolicy        | Background/ThreadPool | RebalanceDecisionEngine  |
-| RebalanceExecutor          | Background/ThreadPool | RebalanceScheduler       |
-| CacheStateManager          | Both (with locking)   | Both paths (coordinated) |
+| Actor                      | Execution Context                     | Invoked By                    |
+|----------------------------|---------------------------------------|-------------------------------|
+| UserRequestHandler         | User Thread                           | User (public API)             |
+| IntentController           | **User Thread (synchronous)**         | UserRequestHandler            |
+| RebalanceDecisionEngine    | **User Thread (synchronous)**         | IntentController              |
+| CacheGeometryPolicy        | **User Thread (synchronous)**         | RebalanceDecisionEngine       |
+| RebalanceScheduler         | **User Thread** (scheduling)          | IntentController              |
+| RebalanceScheduler (Task)  | Background/ThreadPool (execution)     | Task.Run                      |
+| RebalanceExecutor          | Background/ThreadPool                 | RebalanceScheduler background |
+| CacheStateManager          | Both (User: reads, Background: writes)| Both paths (single-writer)    |
+
+**Critical:** Everything up to `Task.Run` happens synchronously in user thread. Only debounce + actual execution happen in background.
 
 ### Responsibilities Refixed
 

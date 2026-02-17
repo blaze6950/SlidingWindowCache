@@ -54,26 +54,44 @@ The UserRequestHandler NEVER invokes directly decision logic - it just publishes
 ## 2. Rebalance Decision Engine (Pure Decision Actor)
 
 **Role:**  
-The **sole authority for rebalance necessity determination**. Analyzes the need for rebalance through multi-stage analytical validation without mutating system state.
+The **sole authority for rebalance necessity determination**. Analyzes the need for rebalance through multi-stage analytical validation without mutating system state. Enables **smart eventual consistency** through work avoidance mechanisms.
 
 **Execution Context:**  
-**Lives in: Background / ThreadPool**
+**Lives in: User Thread** (invoked synchronously by IntentController during intent publication)
+
+**Critical Execution Model:**
+```
+Decision Engine executes SYNCHRONOUSLY in user thread.
+This is intentional and critical for handling bursts and preventing intent thrashing.
+Decision logic is CPU-only, side-effect free, lightweight (microseconds).
+```
 
 **Visibility:**
-- **Not visible to User Path**
-- Invoked only by RebalanceScheduler
-- May execute many times, results may be discarded
+- **Not visible to external users**
+- **Owned and invoked by IntentController** (not by Scheduler)
+- Invoked synchronously during IntentController.PublishIntent()
+- Executes inline with user request (before Task.Run)
+- May execute many times, work avoidance allows skipping scheduling entirely
 
 **Critical Rule:**
 ```
-DecisionEngine lives strictly inside the background contour.
-DecisionEngine is the ONLY authority for rebalance necessity determination.
+DecisionEngine lives in the user thread synchronous execution path.
+DecisionEngine is THE ONLY authority for rebalance necessity determination.
+All execution decisions flow from this component's analytical validation.
+Decision happens BEFORE background scheduling, preventing work buildup.
+IntentController OWNS the DecisionEngine instance.
 ```
 
-**Multi-Stage Validation Pipeline:**
-1. **Stage 1**: Current Cache NoRebalanceRange containment check (fast path)
+**Multi-Stage Validation Pipeline (Work Avoidance):**
+1. **Stage 1**: Current Cache NoRebalanceRange containment check (fast path work avoidance)
 2. **Stage 2**: Pending Desired Cache NoRebalanceRange validation (anti-thrashing, conceptual)
-3. **Stage 3**: DesiredCacheRange vs CurrentCacheRange equality check
+3. **Stage 3**: DesiredCacheRange vs CurrentCacheRange equality check (no-op prevention)
+
+**Enables Smart Eventual Consistency:**
+- Prevents thrashing through multi-stage validation
+- Reduces redundant I/O via work avoidance (skip unnecessary operations)
+- Maintains stability under rapidly changing access patterns
+- Ensures convergence to optimal configuration without aggressive over-execution
 
 **Responsible for invariants:**
 - 24. Decision Path is purely analytical (CPU-only, no I/O)
@@ -82,9 +100,9 @@ DecisionEngine is the ONLY authority for rebalance necessity determination.
 - 27. No rebalance if DesiredCacheRange == CurrentCacheRange (Stage 3 validation)
 - 28. Rebalance triggered only if ALL validation stages confirm necessity
 
-**Responsibility Type:** ensures correctness of rebalance necessity decisions through analytical validation
+**Responsibility Type:** ensures correctness of rebalance necessity decisions through analytical validation, enabling smart eventual consistency
 
-**Note:** Not a top-level actor — internal tool of IntentManager/Executor pipeline, but THE authority for necessity determination.
+**Note:** Not a top-level actor — internal tool of IntentManager/Executor pipeline, but THE authority for necessity determination and work avoidance.
 
 ---
 
@@ -123,30 +141,44 @@ Manages lifecycle of rebalance intents, orchestrates decision pipeline, and coor
 
 **Implementation:**
 This logical actor is internally decomposed into two components for separation of concerns:
-- **IntentController** (Intent Controller) - intent identity, lifecycle, cancellation
-- **RebalanceScheduler** (Execution Scheduler) - timing, debounce, pipeline orchestration (stateless, plus Task tracking for infrastructure/testing)
+- **IntentController** (Intent Controller) - owns DecisionEngine, intent lifecycle, cancellation coordination, decision invocation
+- **RebalanceScheduler** (Execution Scheduler) - timing, debounce, background execution orchestration (owned by IntentController)
 
 **Execution Context:**  
-**Lives in: Background / ThreadPool**
+**Mixed:**
+- **User Thread**: PublishIntent(), decision evaluation, cancellation, scheduling setup (all synchronous)
+- **Background / ThreadPool**: Only the scheduled execution task (after Task.Run in Scheduler)
 
-**Enhanced Role (Corrected Model):**
+**Ownership Hierarchy:**
+```
+IntentController (User Thread)
+├── owns DecisionEngine (invokes synchronously)
+├── owns RebalanceScheduler (creates in constructor)
+│   └── owns RebalanceExecutor (passed to Scheduler)
+└── owns _pendingRebalance snapshot (Volatile.Read/Write)
+```
+
+**Enhanced Role (Decision-Driven Model):**
 
 Now responsible for:
-- **Receiving intents** (on every user request) [Intent Controller]
-- **Intent identity and versioning** [Intent Controller]
-- **Cancellation coordination** based on validation results [Intent Controller]
-- **Deduplication** and debouncing [Execution Scheduler]
-- **Single-flight execution** enforcement [Execution Scheduler]
+- **Receiving intents** (on every user request) [Intent Controller - User Thread]
+- **Owning and invoking DecisionEngine** [Intent Controller - User Thread, synchronous]
+- **Intent identity and versioning** via PendingRebalance snapshot [Intent Controller]
+- **Cancellation coordination** based on validation results from owned DecisionEngine [Intent Controller]
+- **Deduplication** via synchronous decision evaluation [Intent Controller - User Thread]
+- **Debouncing** [Execution Scheduler - Background]
+- **Single-flight execution** enforcement [Both components via cancellation]
 - **Starting background tasks** [Execution Scheduler]
-- **Orchestrating the decision pipeline**: [Execution Scheduler]
-  1. Invoke DecisionEngine (multi-stage validation)
-  2. If ALL stages pass validation, invoke Executor
-  3. If validation rejects, skip execution (no-op)
-  4. Handle cancellation when new validated rebalance is needed
+- **Orchestrating the validation-driven decision pipeline**: [Intent Controller - User Thread, synchronous]
+  1. **IntentController.PublishIntent()** invokes owned DecisionEngine synchronously (User Thread)
+  2. If ALL validation stages pass → cancel old pending, schedule new via Scheduler
+  3. If validation rejects → return immediately (work avoidance, no Task.Run)
+  4. **Scheduler.ScheduleRebalance()** creates PendingRebalance, schedules Task.Run (returns synchronously)
+  5. **Background Task** performs debounce delay + ExecuteAsync (only this part is async)
 
-**Authority:** *Owns time and concurrency, orchestrates validation-driven execution.*
+**Authority:** *Owns DecisionEngine and invokes it synchronously. Owns time and concurrency, orchestrates validation-driven execution. Does NOT determine rebalance necessity (delegates to owned DecisionEngine).*
 
-**Key Principle:** Cancellation is mechanical coordination (prevents concurrent executions), NOT a decision mechanism. The DecisionEngine determines rebalance necessity; the Intent Manager coordinates execution based on those decisions.
+**Key Principle:** Cancellation is mechanical coordination (prevents concurrent executions), NOT a decision mechanism. The **DecisionEngine (owned by IntentController) is THE sole authority** for determining rebalance necessity. IntentController invokes it synchronously in user thread, enabling immediate work avoidance and preventing intent thrashing. This separation enables smart eventual consistency through work avoidance.
 
 **Responsible for invariants:**
 - 17. At most one active rebalance intent

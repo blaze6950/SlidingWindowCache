@@ -188,20 +188,28 @@ and violate the Cache Contiguity Rule (Invariant 9a). The cache MUST remain cont
 
 # II. REBALANCE DECISION PATH — Decision Scenarios
 
-**Important**: Intent does not guarantee execution. Execution is opportunistic.
+**Core Principle**: Rebalance necessity is determined by multi-stage analytical validation, not by intent existence.
 
-Publishing a rebalance intent does NOT mean rebalance will execute. The decision path
-may determine that execution is not needed (NoRebalanceRange containment, or
-DesiredRange == CurrentRange), in which case execution is skipped. Additionally,
-intents may be superseded or cancelled before execution begins.
+Publishing a rebalance intent does NOT guarantee execution. The **Rebalance Decision Engine**
+is the sole authority for determining rebalance necessity through a multi-stage validation pipeline:
+
+1. **Stage 1**: Current Cache NoRebalanceRange validation (fast-path rejection)
+2. **Stage 2**: Pending Desired Cache NoRebalanceRange validation (anti-thrashing)
+3. **Stage 3**: DesiredCacheRange vs CurrentCacheRange equality check (no-op prevention)
+
+Execution occurs **ONLY if ALL validation stages confirm necessity**. The decision path
+may determine that execution is not needed (NoRebalanceRange containment, pending
+rebalance coverage, or DesiredRange == CurrentRange), in which case execution is
+skipped entirely. Additionally, intents may be superseded or cancelled before
+execution begins.
 
 The Rebalance Decision Path:
 
-- never mutates cache state
-- may result in a no-op
-- determines whether execution is required
+- never mutates cache state (pure analytical logic, CPU-only)
+- may result in a no-op (work avoidance through validation)
+- determines whether execution is required (THE authority for necessity determination)
 
-This path is always triggered by the User Path.
+This path is always triggered by the User Path, but validation determines execution.
 
 ---
 
@@ -388,11 +396,13 @@ The Sliding Window Cache follows these rules:
 ## Concurrency Scenario C1 — Rebalance Triggered While Previous Rebalance Is Pending
 
 ### Situation
+
 - User request U₁ triggers rebalance R₁ (fire-and-forget)
 - R₁ has not started execution yet (queued or delayed)
 - User request U₂ arrives before R₁ executes
 
 ### Expected Behavior
+
 1. **U₂ cancels any pending rebalance work before performing its own cache mutations**
 2. User Path for U₂ executes normally and immediately
 3. A new rebalance trigger R₂ is issued
@@ -407,11 +417,13 @@ No rebalance work is executed based on outdated user intent. User Path always ha
 ## Concurrency Scenario C2 — Rebalance Triggered While Previous Rebalance Is Executing
 
 ### Situation
+
 - User request U₁ triggers rebalance R₁
 - R₁ has already started execution (I/O or merge in progress)
 - User request U₂ arrives and triggers rebalance R₂
 
 ### Expected Behavior
+
 1. **U₂ cancels ongoing rebalance execution R₁ before performing its own cache mutations**
 2. User Path for U₂ executes normally and immediately
 3. R₂ becomes the latest rebalance intent
@@ -422,18 +434,21 @@ No rebalance work is executed based on outdated user intent. User Path always ha
 6. R₂ proceeds with fresh DesiredCacheRange
 
 **Outcome:**  
-Cache normalization reflects the most recent user access pattern. User Path and Rebalance Execution never mutate cache concurrently.
+Cache normalization reflects the most recent user access pattern. User Path and Rebalance Execution never mutate cache
+concurrently.
 
 ---
 
 ## Concurrency Scenario C3 — Multiple Rapid User Requests (Spike / Random Access)
 
 ### Situation
+
 - User produces a burst of requests: U₁, U₂, U₃, ..., Uₙ
 - Each request triggers rebalance
 - Rebalance execution cannot keep up with trigger rate
 
 ### Expected Behavior
+
 1. User Path always serves requests independently
 2. Rebalance triggers are debounced or superseded
 3. At most one rebalance execution is active at any time
