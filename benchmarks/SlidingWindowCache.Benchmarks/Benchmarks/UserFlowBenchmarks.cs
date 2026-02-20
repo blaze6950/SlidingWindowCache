@@ -1,4 +1,4 @@
-﻿using BenchmarkDotNet.Attributes;
+using BenchmarkDotNet.Attributes;
 using Intervals.NET;
 using Intervals.NET.Domain.Default.Numeric;
 using Intervals.NET.Domain.Extensions.Fixed;
@@ -13,7 +13,7 @@ namespace SlidingWindowCache.Benchmarks.Benchmarks;
 /// Measures ONLY user-facing request latency/cost.
 /// Rebalance/background activity is EXCLUDED from measurements via cleanup phase.
 /// 
-/// EXECUTION FLOW: User Request → Measures direct API call cost
+/// EXECUTION FLOW: User Request > Measures direct API call cost
 /// 
 /// Methodology:
 /// - Fresh cache per iteration
@@ -144,8 +144,8 @@ public class UserFlowBenchmarks
     {
         // Wait for any triggered rebalance to complete
         // This ensures measurements are NOT contaminated by background activity
-        _snapshotCache?.WaitForIdleAsync(timeout: TimeSpan.FromSeconds(5)).GetAwaiter().GetResult();
-        _copyOnReadCache?.WaitForIdleAsync(timeout: TimeSpan.FromSeconds(5)).GetAwaiter().GetResult();
+        _snapshotCache?.WaitForIdleAsync().GetAwaiter().GetResult();
+        _copyOnReadCache?.WaitForIdleAsync().GetAwaiter().GetResult();
     }
 
     #region Full Hit Benchmarks

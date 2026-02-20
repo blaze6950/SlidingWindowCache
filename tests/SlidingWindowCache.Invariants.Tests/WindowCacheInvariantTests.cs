@@ -103,14 +103,14 @@ public sealed class WindowCacheInvariantTests : IAsyncDisposable
         var (cache, _) = TrackCache(TestHelpers.CreateCacheWithDefaults(_domain, _cacheDiagnostics));
 
         // ACT: Make multiple requests
-        var data1 = await cache.GetDataAsync(TestHelpers.CreateRange(100, 110), CancellationToken.None);
-        var data2 = await cache.GetDataAsync(TestHelpers.CreateRange(200, 210), CancellationToken.None);
-        var data3 = await cache.GetDataAsync(TestHelpers.CreateRange(105, 115), CancellationToken.None);
+        var result1 = await cache.GetDataAsync(TestHelpers.CreateRange(100, 110), CancellationToken.None);
+        var result2 = await cache.GetDataAsync(TestHelpers.CreateRange(200, 210), CancellationToken.None);
+        var result3 = await cache.GetDataAsync(TestHelpers.CreateRange(105, 115), CancellationToken.None);
 
         // ASSERT: All requests completed with correct data
-        TestHelpers.AssertUserDataCorrect(data1, TestHelpers.CreateRange(100, 110));
-        TestHelpers.AssertUserDataCorrect(data2, TestHelpers.CreateRange(200, 210));
-        TestHelpers.AssertUserDataCorrect(data3, TestHelpers.CreateRange(105, 115));
+        TestHelpers.AssertUserDataCorrect(result1, TestHelpers.CreateRange(100, 110));
+        TestHelpers.AssertUserDataCorrect(result2, TestHelpers.CreateRange(200, 210));
+        TestHelpers.AssertUserDataCorrect(result3, TestHelpers.CreateRange(105, 115));
         Assert.Equal(3, _cacheDiagnostics.UserRequestServed);
     }
 
@@ -127,14 +127,14 @@ public sealed class WindowCacheInvariantTests : IAsyncDisposable
 
         // ACT: Request completes immediately without waiting for rebalance
         var stopwatch = System.Diagnostics.Stopwatch.StartNew();
-        var data = await cache.GetDataAsync(TestHelpers.CreateRange(100, 110), CancellationToken.None);
+        var result = await cache.GetDataAsync(TestHelpers.CreateRange(100, 110), CancellationToken.None);
         stopwatch.Stop();
 
         // ASSERT: Request completed quickly (much less than debounce delay)
         Assert.Equal(1, _cacheDiagnostics.UserRequestServed);
         Assert.Equal(1, _cacheDiagnostics.RebalanceIntentPublished);
         Assert.Equal(0, _cacheDiagnostics.RebalanceExecutionCompleted);
-        TestHelpers.AssertUserDataCorrect(data, TestHelpers.CreateRange(100, 110));
+        TestHelpers.AssertUserDataCorrect(result, TestHelpers.CreateRange(100, 110));
         await cache.WaitForIdleAsync();
         Assert.Equal(1, _cacheDiagnostics.RebalanceExecutionCompleted);
     }
@@ -161,8 +161,8 @@ public sealed class WindowCacheInvariantTests : IAsyncDisposable
 
         foreach (var range in testRanges)
         {
-            var data = await cache.GetDataAsync(range, CancellationToken.None);
-            TestHelpers.AssertUserDataCorrect(data, range);
+            var loopResult = await cache.GetDataAsync(range, CancellationToken.None);
+            TestHelpers.AssertUserDataCorrect(loopResult, range);
         }
     }
 
@@ -201,10 +201,10 @@ public sealed class WindowCacheInvariantTests : IAsyncDisposable
         }
 
         // Execute the test request
-        var data = await cache.GetDataAsync(TestHelpers.CreateRange(reqStart, reqEnd), CancellationToken.None);
+        var result = await cache.GetDataAsync(TestHelpers.CreateRange(reqStart, reqEnd), CancellationToken.None);
 
         // ASSERT: User receives correct data immediately
-        TestHelpers.AssertUserDataCorrect(data, TestHelpers.CreateRange(reqStart, reqEnd));
+        TestHelpers.AssertUserDataCorrect(result, TestHelpers.CreateRange(reqStart, reqEnd));
 
         // User Path MUST NOT mutate cache (single-writer architecture)
         TestHelpers.AssertNoUserPathMutations(_cacheDiagnostics);
@@ -229,14 +229,14 @@ public sealed class WindowCacheInvariantTests : IAsyncDisposable
         var (cache, _) = TrackCache(TestHelpers.CreateCacheWithDefaults(_domain, _cacheDiagnostics));
 
         // ACT: Make various requests including overlapping and expanding ranges
-        var data1 = await cache.GetDataAsync(TestHelpers.CreateRange(100, 110), CancellationToken.None);
-        var data2 = await cache.GetDataAsync(TestHelpers.CreateRange(105, 115), CancellationToken.None);
-        var data3 = await cache.GetDataAsync(TestHelpers.CreateRange(95, 120), CancellationToken.None);
+        var result1 = await cache.GetDataAsync(TestHelpers.CreateRange(100, 110), CancellationToken.None);
+        var result2 = await cache.GetDataAsync(TestHelpers.CreateRange(105, 115), CancellationToken.None);
+        var result3 = await cache.GetDataAsync(TestHelpers.CreateRange(95, 120), CancellationToken.None);
 
         // ASSERT: All data is contiguous (no gaps)
-        TestHelpers.AssertUserDataCorrect(data1, TestHelpers.CreateRange(100, 110));
-        TestHelpers.AssertUserDataCorrect(data2, TestHelpers.CreateRange(105, 115));
-        TestHelpers.AssertUserDataCorrect(data3, TestHelpers.CreateRange(95, 120));
+        TestHelpers.AssertUserDataCorrect(result1, TestHelpers.CreateRange(100, 110));
+        TestHelpers.AssertUserDataCorrect(result2, TestHelpers.CreateRange(105, 115));
+        TestHelpers.AssertUserDataCorrect(result3, TestHelpers.CreateRange(95, 120));
     }
 
     #endregion
@@ -265,10 +265,10 @@ public sealed class WindowCacheInvariantTests : IAsyncDisposable
 
         foreach (var range in ranges)
         {
-            var data = await cache.GetDataAsync(range, CancellationToken.None);
+            var result = await cache.GetDataAsync(range, CancellationToken.None);
             var expectedLength = (int)range.End - (int)range.Start + 1;
-            Assert.Equal(expectedLength, data.Length);
-            TestHelpers.AssertUserDataCorrect(data, range);
+            Assert.Equal(expectedLength, result.Length);
+            TestHelpers.AssertUserDataCorrect(result, range);
         }
     }
 
@@ -286,14 +286,14 @@ public sealed class WindowCacheInvariantTests : IAsyncDisposable
 
         // ACT: First request starts rebalance intent, then immediately cancel with another request
         await cache.GetDataAsync(TestHelpers.CreateRange(100, 110), CancellationToken.None);
-        var data = await cache.GetDataAsync(TestHelpers.CreateRange(200, 210), CancellationToken.None);
+        var result = await cache.GetDataAsync(TestHelpers.CreateRange(200, 210), CancellationToken.None);
 
         // ASSERT: Cache still returns correct data
-        TestHelpers.AssertUserDataCorrect(data, TestHelpers.CreateRange(200, 210));
+        TestHelpers.AssertUserDataCorrect(result, TestHelpers.CreateRange(200, 210));
 
         // Verify cache is not corrupted by making another request
-        var data2 = await cache.GetDataAsync(TestHelpers.CreateRange(205, 215), CancellationToken.None);
-        TestHelpers.AssertUserDataCorrect(data2, TestHelpers.CreateRange(205, 215));
+        var result2 = await cache.GetDataAsync(TestHelpers.CreateRange(205, 215), CancellationToken.None);
+        TestHelpers.AssertUserDataCorrect(result2, TestHelpers.CreateRange(205, 215));
     }
 
     #endregion
@@ -413,7 +413,7 @@ public sealed class WindowCacheInvariantTests : IAsyncDisposable
         var (cache, _) = TrackCache(TestHelpers.CreateCacheWithDefaults(_domain, _cacheDiagnostics, options));
 
         // ACT: Rapid burst of requests
-        var tasks = new List<Task>();
+        var tasks = new List<Task<ReadOnlyMemory<int>>>();
         for (var i = 0; i < 10; i++)
         {
             var start = 100 + i * 2;
@@ -424,8 +424,8 @@ public sealed class WindowCacheInvariantTests : IAsyncDisposable
         await cache.WaitForIdleAsync();
 
         // ASSERT: System is stable and serves new requests correctly
-        var finalData = await cache.GetDataAsync(TestHelpers.CreateRange(105, 115), CancellationToken.None);
-        TestHelpers.AssertUserDataCorrect(finalData, TestHelpers.CreateRange(105, 115));
+        var finalResult = await cache.GetDataAsync(TestHelpers.CreateRange(105, 115), CancellationToken.None);
+        TestHelpers.AssertUserDataCorrect(finalResult, TestHelpers.CreateRange(105, 115));
     }
 
     #endregion
@@ -574,11 +574,11 @@ public sealed class WindowCacheInvariantTests : IAsyncDisposable
 
         // Request the exact same expanded range that should already be cached
         // This creates scenario where DesiredCacheRange (computed from request) == CurrentCacheRange (existing cache)
-        var data = await cache.GetDataAsync(initialRange, CancellationToken.None);
+        var result = await cache.GetDataAsync(initialRange, CancellationToken.None);
         await cache.WaitForIdleAsync();
 
         // ASSERT: Verify same-range skip occurred (Stage 3 validation)
-        TestHelpers.AssertUserDataCorrect(data, initialRange);
+        TestHelpers.AssertUserDataCorrect(result, initialRange);
         TestHelpers.AssertIntentPublished(_cacheDiagnostics, 1);
         TestHelpers.AssertRebalanceSkippedSameRange(_cacheDiagnostics, 1);
 
@@ -827,14 +827,14 @@ public sealed class WindowCacheInvariantTests : IAsyncDisposable
 
         // ACT: User request completes synchronously (in user context)
         var stopwatch = System.Diagnostics.Stopwatch.StartNew();
-        var data = await cache.GetDataAsync(TestHelpers.CreateRange(100, 110), CancellationToken.None);
+        var result = await cache.GetDataAsync(TestHelpers.CreateRange(100, 110), CancellationToken.None);
         stopwatch.Stop();
 
         // ASSERT: User request completed quickly (didn't wait for background rebalance)
         Assert.Equal(1, _cacheDiagnostics.UserRequestServed);
         Assert.Equal(1, _cacheDiagnostics.RebalanceIntentPublished);
         Assert.Equal(0, _cacheDiagnostics.RebalanceExecutionCompleted);
-        TestHelpers.AssertUserDataCorrect(data, TestHelpers.CreateRange(100, 110));
+        TestHelpers.AssertUserDataCorrect(result, TestHelpers.CreateRange(100, 110));
         await cache.WaitForIdleAsync();
         Assert.Equal(1, _cacheDiagnostics.RebalanceExecutionCompleted);
     }
@@ -889,17 +889,17 @@ public sealed class WindowCacheInvariantTests : IAsyncDisposable
 
         // Act & Assert: Sequential user requests
         // Request 1: Cold start
-        var data1 = await cache.GetDataAsync(TestHelpers.CreateRange(100, 110), CancellationToken.None);
-        TestHelpers.AssertUserDataCorrect(data1, TestHelpers.CreateRange(100, 110));
+        var result1 = await cache.GetDataAsync(TestHelpers.CreateRange(100, 110), CancellationToken.None);
+        TestHelpers.AssertUserDataCorrect(result1, TestHelpers.CreateRange(100, 110));
 
         // Request 2: Overlapping expansion
-        var data2 = await cache.GetDataAsync(TestHelpers.CreateRange(105, 120), CancellationToken.None);
-        TestHelpers.AssertUserDataCorrect(data2, TestHelpers.CreateRange(105, 120));
+        var result2 = await cache.GetDataAsync(TestHelpers.CreateRange(105, 120), CancellationToken.None);
+        TestHelpers.AssertUserDataCorrect(result2, TestHelpers.CreateRange(105, 120));
         await cache.WaitForIdleAsync();
 
         // Request 3: Within cached/rebalanced range
-        var data3 = await cache.GetDataAsync(TestHelpers.CreateRange(110, 115), CancellationToken.None);
-        TestHelpers.AssertUserDataCorrect(data3, TestHelpers.CreateRange(110, 115));
+        var result3 = await cache.GetDataAsync(TestHelpers.CreateRange(110, 115), CancellationToken.None);
+        TestHelpers.AssertUserDataCorrect(result3, TestHelpers.CreateRange(110, 115));
 
         // Request 4: Non-intersecting jump
         var data4 = await cache.GetDataAsync(TestHelpers.CreateRange(200, 210), CancellationToken.None);
@@ -983,12 +983,12 @@ public sealed class WindowCacheInvariantTests : IAsyncDisposable
         var (cache, _) = TrackCache(TestHelpers.CreateCacheWithDefaults(_domain, _cacheDiagnostics, options));
 
         // Act
-        var data1 = await cache.GetDataAsync(TestHelpers.CreateRange(100, 110), CancellationToken.None);
-        var data2 = await cache.GetDataAsync(TestHelpers.CreateRange(105, 115), CancellationToken.None);
+        var result1 = await cache.GetDataAsync(TestHelpers.CreateRange(100, 110), CancellationToken.None);
+        var result2 = await cache.GetDataAsync(TestHelpers.CreateRange(105, 115), CancellationToken.None);
 
         // Assert
-        TestHelpers.VerifyDataMatchesRange(data1, TestHelpers.CreateRange(100, 110));
-        TestHelpers.VerifyDataMatchesRange(data2, TestHelpers.CreateRange(105, 115));
+        TestHelpers.VerifyDataMatchesRange(result1, TestHelpers.CreateRange(100, 110));
+        TestHelpers.VerifyDataMatchesRange(result2, TestHelpers.CreateRange(105, 115));
     }
 
     #endregion

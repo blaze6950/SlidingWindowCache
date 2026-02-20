@@ -1,4 +1,4 @@
-﻿using Intervals.NET.Domain.Abstractions;
+using Intervals.NET.Domain.Abstractions;
 
 namespace SlidingWindowCache.Unit.Tests.Infrastructure.Extensions;
 

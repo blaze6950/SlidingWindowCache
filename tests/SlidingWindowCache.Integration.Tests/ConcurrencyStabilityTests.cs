@@ -1,4 +1,4 @@
-﻿using Intervals.NET;
+using Intervals.NET;
 using Intervals.NET.Domain.Default.Numeric;
 using SlidingWindowCache.Integration.Tests.TestInfrastructure;
 using SlidingWindowCache.Infrastructure.Instrumentation;
@@ -81,9 +81,9 @@ public sealed class ConcurrencyStabilityTests : IAsyncDisposable
         // ASSERT - All requests completed successfully
         Assert.Equal(concurrentRequests, results.Length);
 
-        foreach (var t in results)
+        foreach (var data in results)
         {
-            Assert.Equal(21, t.Length); // Each range has 21 elements
+            Assert.Equal(21, data.Length); // Each range has 21 elements
         }
 
         // ASSERT - IDataSource was called and handled concurrent requests
@@ -145,13 +145,13 @@ public sealed class ConcurrencyStabilityTests : IAsyncDisposable
         var results = await Task.WhenAll(tasks);
 
         // ASSERT - Verify each result
+        const int expected = 51; // [100+offset, 150+offset] = 51 elements
         for (var i = 0; i < results.Length; i++)
         {
             var offset = i * 5;
-            var expected = 51; // [100+offset, 150+offset] = 51 elements
-            var array = results[i].ToArray();
-            Assert.Equal(expected, array.Length);
-            Assert.Equal(100 + offset, array[0]);
+            var data = results[i];
+            Assert.Equal(expected, data.Length);
+            Assert.Equal(100 + offset, data.Span[0]);
         }
     }
 
@@ -174,9 +174,9 @@ public sealed class ConcurrencyStabilityTests : IAsyncDisposable
             {
                 var start = i * 10;
                 var range = Intervals.NET.Factories.Range.Closed<int>(start, start + 15);
-                var data = await cache.GetDataAsync(range, CancellationToken.None);
+                var result = await cache.GetDataAsync(range, CancellationToken.None);
 
-                Assert.Equal(16, data.Length);
+                Assert.Equal(16, result.Length);
             }
             catch (Exception ex)
             {
@@ -345,9 +345,9 @@ public sealed class ConcurrencyStabilityTests : IAsyncDisposable
         {
             var start = (i % 20) * 10; // Create overlap pattern
             var range = Intervals.NET.Factories.Range.Closed<int>(start, start + 20);
-            var data = await cache.GetDataAsync(range, CancellationToken.None);
+            var result = await cache.GetDataAsync(range, CancellationToken.None);
 
-            Assert.Equal(21, data.Length);
+            Assert.Equal(21, result.Length);
         }
 
         // ASSERT - Completed without deadlock
@@ -383,8 +383,7 @@ public sealed class ConcurrencyStabilityTests : IAsyncDisposable
             {
                 var range = Intervals.NET.Factories.Range.Closed<int>(500 + offset, 550 + offset);
                 var data = await cache.GetDataAsync(range, CancellationToken.None);
-                var array = data.ToArray();
-                return (array.Length, array[0], expectedFirst);
+                return (data.Length, data.Span[0], expectedFirst);
             }));
         }
 

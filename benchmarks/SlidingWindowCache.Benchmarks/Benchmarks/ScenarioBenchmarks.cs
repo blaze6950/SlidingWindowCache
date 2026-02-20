@@ -1,4 +1,4 @@
-﻿using BenchmarkDotNet.Attributes;
+using BenchmarkDotNet.Attributes;
 using Intervals.NET;
 using Intervals.NET.Domain.Default.Numeric;
 using SlidingWindowCache.Benchmarks.Infrastructure;
@@ -103,7 +103,7 @@ public class ScenarioBenchmarks
         // Measure complete cold start: initial fetch + rebalance
         // WaitForIdleAsync is PART of cold start cost
         await _snapshotCache!.GetDataAsync(_coldStartRange, CancellationToken.None);
-        await _snapshotCache.WaitForIdleAsync(timeout: TimeSpan.FromSeconds(5));
+        await _snapshotCache.WaitForIdleAsync();
     }
 
     [Benchmark]
@@ -113,7 +113,7 @@ public class ScenarioBenchmarks
         // Measure complete cold start: initial fetch + rebalance
         // WaitForIdleAsync is PART of cold start cost
         await _copyOnReadCache!.GetDataAsync(_coldStartRange, CancellationToken.None);
-        await _copyOnReadCache.WaitForIdleAsync(timeout: TimeSpan.FromSeconds(5));
+        await _copyOnReadCache.WaitForIdleAsync();
     }
 
     #endregion

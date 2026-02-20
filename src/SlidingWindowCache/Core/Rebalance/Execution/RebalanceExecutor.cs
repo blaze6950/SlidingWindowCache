@@ -1,7 +1,6 @@
 ﻿using Intervals.NET;
 using Intervals.NET.Data;
 using Intervals.NET.Domain.Abstractions;
-using SlidingWindowCache.Core.Rebalance.Decision;
 using SlidingWindowCache.Core.Rebalance.Intent;
 using SlidingWindowCache.Core.State;
 using SlidingWindowCache.Infrastructure.Instrumentation;
@@ -11,18 +10,19 @@ namespace SlidingWindowCache.Core.Rebalance.Execution;
 /// <summary>
 /// Executes rebalance operations by fetching missing data, merging with existing cache,
 /// and trimming to the desired range. This is the sole component responsible for cache normalization.
+/// Called exclusively by RebalanceExecutionController actor which guarantees single-threaded execution.
 /// </summary>
 /// <typeparam name="TRange">The type representing the range boundaries.</typeparam>
 /// <typeparam name="TData">The type of data being cached.</typeparam>
 /// <typeparam name="TDomain">The type representing the domain of the ranges.</typeparam>
 /// <remarks>
-/// <para><strong>Execution Context:</strong> Background / ThreadPool</para>
+/// <para><strong>Execution Context:</strong> Background / ThreadPool (via RebalanceExecutionController actor)</para>
 /// <para><strong>Characteristics:</strong> Asynchronous, cancellable, heavyweight</para>
 /// <para><strong>Responsibility:</strong> Cache normalization (expand, trim, recompute NoRebalanceRange)</para>
-/// <para><strong>Execution Serialization:</strong> Uses <see cref="SemaphoreSlim"/> to ensure only one rebalance 
-/// execution can write to cache state at a time. This guarantees single-writer semantics even when multiple 
-/// rebalance operations are scheduled concurrently. CancellationToken provides early exit signaling, while the 
-/// semaphore provides mutual exclusion for cache mutations. WebAssembly-compatible, async, and lightweight.</para>
+/// <para><strong>Execution Serialization:</strong> Provided by RebalanceExecutionController actor which processes
+/// execution requests sequentially via Channel. No semaphore needed - the actor's single-threaded processing
+/// guarantees that only one rebalance execution can write to cache state at a time. CancellationToken provides
+/// early exit signaling. WebAssembly-compatible, async, and lightweight.</para>
 /// </remarks>
 internal sealed class RebalanceExecutor<TRange, TData, TDomain>
     where TRange : IComparable<TRange>
@@ -31,7 +31,6 @@ internal sealed class RebalanceExecutor<TRange, TData, TDomain>
     private readonly CacheState<TRange, TData, TDomain> _state;
     private readonly CacheDataExtensionService<TRange, TData, TDomain> _cacheExtensionService;
     private readonly ICacheDiagnostics _cacheDiagnostics;
-    private readonly SemaphoreSlim _executionSemaphore = new SemaphoreSlim(1, 1);
 
     public RebalanceExecutor(
         CacheState<TRange, TData, TDomain> state,
@@ -46,6 +45,7 @@ internal sealed class RebalanceExecutor<TRange, TData, TDomain>
 
     /// <summary>
     /// Executes rebalance by normalizing the cache to the desired range.
+    /// Called exclusively by RebalanceExecutionController actor (single-threaded).
     /// This is the ONLY component that mutates cache state (single-writer architecture).
     /// </summary>
     /// <param name="intent">The intent with data that was actually assembled in UserPath and the requested range.</param>
@@ -70,9 +70,9 @@ internal sealed class RebalanceExecutor<TRange, TData, TDomain>
     /// This executor is intentionally simple - no analytical decisions, no necessity checks.
     /// Decision logic has been validated by DecisionEngine before invocation.
     /// </para>
-    /// <para><strong>Serialization:</strong> Uses semaphore to ensure only one execution can write to cache at a time.
-    /// Semaphore is acquired before I/O operations to prevent queue buildup while allowing cancellation to propagate.
-    /// If cancelled during wait, the operation exits cleanly without acquiring the semaphore.</para>
+    /// <para><strong>Serialization:</strong> RebalanceExecutionController actor guarantees single-threaded
+    /// execution via Channel-based sequential processing. No semaphore needed - the actor ensures only one
+    /// execution runs at a time. Cancellation allows fast exit from superseded operations.</para>
     /// </remarks>
     public async Task ExecuteAsync(
         Intent<TRange, TData, TDomain> intent,
@@ -83,43 +83,30 @@ internal sealed class RebalanceExecutor<TRange, TData, TDomain>
         // Use delivered data as the base - this is what the user received
         var baseRangeData = intent.AvailableRangeData;
 
-        // Acquire semaphore to serialize execution - ensures only one rebalance writes to cache at a time
-        // This prevents race conditions even when multiple rebalance operations are scheduled concurrently
-        await _executionSemaphore.WaitAsync(cancellationToken).ConfigureAwait(false);
+        // Cancellation check before expensive I/O
+        // Satisfies Invariant 34a: "Rebalance Execution MUST yield to User Path requests immediately"
+        cancellationToken.ThrowIfCancellationRequested();
 
-        try
-        {
-            // Cancellation check after acquiring semaphore but before expensive I/O
-            // Satisfies Invariant 34a: "Rebalance Execution MUST yield to User Path requests immediately"
-            cancellationToken.ThrowIfCancellationRequested();
+        // Phase 1: Extend delivered data to cover desired range (fetch only truly missing data)
+        // Use delivered data as base instead of current cache to ensure consistency
+        var extended = await _cacheExtensionService.ExtendCacheAsync(baseRangeData, desiredRange, cancellationToken)
+            .ConfigureAwait(false);
 
-            // Phase 1: Extend delivered data to cover desired range (fetch only truly missing data)
-            // Use delivered data as base instead of current cache to ensure consistency
-            var extended = await _cacheExtensionService.ExtendCacheAsync(baseRangeData, desiredRange, cancellationToken)
-                .ConfigureAwait(false);
+        // Cancellation check after I/O but before mutation
+        // If User Path cancelled us, don't apply the rebalance result
+        cancellationToken.ThrowIfCancellationRequested();
 
-            // Cancellation check after I/O but before mutation
-            // If User Path cancelled us, don't apply the rebalance result
-            cancellationToken.ThrowIfCancellationRequested();
+        // Phase 2: Trim to desired range (rebalancing-specific: discard data outside desired range)
+        baseRangeData = extended[desiredRange];
 
-            // Phase 2: Trim to desired range (rebalancing-specific: discard data outside desired range)
-            baseRangeData = extended[desiredRange];
+        // Final cancellation check before applying mutation
+        // Ensures we don't apply obsolete rebalance results
+        cancellationToken.ThrowIfCancellationRequested();
 
-            // Final cancellation check before applying mutation
-            // Ensures we don't apply obsolete rebalance results
-            cancellationToken.ThrowIfCancellationRequested();
+        // Phase 3: Apply cache state mutations
+        UpdateCacheState(baseRangeData, intent.RequestedRange, desiredNoRebalanceRange);
 
-            // Phase 3: Apply cache state mutations
-            UpdateCacheState(baseRangeData, intent.RequestedRange, desiredNoRebalanceRange);
-
-            _cacheDiagnostics.RebalanceExecutionCompleted();
-        }
-        finally
-        {
-            // Always release semaphore, even if cancelled or exception occurred
-            // This ensures subsequent rebalance operations can proceed
-            _executionSemaphore.Release();
-        }
+        _cacheDiagnostics.RebalanceExecutionCompleted();
     }
 
     /// <summary>

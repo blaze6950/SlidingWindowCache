@@ -45,13 +45,6 @@ internal sealed class PendingRebalance<TRange>
     /// </summary>
     public CancellationToken CancellationToken { get; }
 
-    /// <summary>
-    /// Gets the execution task for this pending rebalance operation.
-    /// External callers can await this task to wait for rebalance completion.
-    /// Set by scheduler after scheduling background execution.
-    /// </summary>
-    public Task? ExecutionTask { get; internal set; }
-
     private readonly CancellationTokenSource? _cts;
 
     /// <summary>

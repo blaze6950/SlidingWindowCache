@@ -74,10 +74,13 @@ public static class WasmCompilationValidator
 
         // Perform a GetDataAsync call with Range from Intervals.NET
         var range = Intervals.NET.Factories.Range.Closed<int>(0, 10);
-        var data = await cache.GetDataAsync(range, CancellationToken.None);
+        var result = await cache.GetDataAsync(range, CancellationToken.None);
 
         // Wait for background operations to complete
         await cache.WaitForIdleAsync();
+
+        // Use result to avoid unused variable warning
+        _ = result.Length;
 
         // Compilation successful if this code builds for net8.0-browser
     }

@@ -1,7 +1,7 @@
 ﻿using Intervals.NET;
 using Intervals.NET.Domain.Abstractions;
 using SlidingWindowCache.Core.Planning;
-using SlidingWindowCache.Core.Rebalance.Intent;
+using SlidingWindowCache.Core.Rebalance.Execution;
 using SlidingWindowCache.Core.State;
 
 namespace SlidingWindowCache.Core.Rebalance.Decision;
@@ -60,7 +60,7 @@ internal sealed class RebalanceDecisionEngine<TRange, TDomain>
     /// </summary>
     /// <param name="requestedRange">The range requested by the user.</param>
     /// <param name="currentCacheState">The current cache state snapshot.</param>
-    /// <param name="pendingRebalance">The pending rebalance state, if any.</param>
+    /// <param name="lastExecutionRequest">The last rebalance execution request, if any.</param>
     /// <returns>A decision indicating whether to schedule rebalance with explicit reasoning.</returns>
     /// <remarks>
     /// <para><strong>Multi-Stage Validation Pipeline:</strong></para>
@@ -72,7 +72,7 @@ internal sealed class RebalanceDecisionEngine<TRange, TDomain>
     public RebalanceDecision<TRange> Evaluate<TData>(
         Range<TRange> requestedRange,
         CacheState<TRange, TData, TDomain> currentCacheState,
-        PendingRebalance<TRange>? pendingRebalance)
+        ExecutionRequest<TRange, TData, TDomain>? lastExecutionRequest)
     {
         // Stage 1: Current Cache Stability Check (fast path)
         // If requested range is fully contained within current NoRebalanceRange, skip rebalancing
@@ -85,8 +85,8 @@ internal sealed class RebalanceDecisionEngine<TRange, TDomain>
         // Stage 2: Pending Rebalance Stability Check (anti-thrashing)
         // If there's a pending rebalance AND requested range will be covered by its NoRebalanceRange,
         // skip scheduling a new rebalance to avoid cancellation storms
-        if (pendingRebalance?.DesiredNoRebalanceRange != null &&
-            !_policy.ShouldRebalance(pendingRebalance.DesiredNoRebalanceRange.Value, requestedRange))
+        if (lastExecutionRequest?.DesiredNoRebalanceRange != null &&
+            !_policy.ShouldRebalance(lastExecutionRequest.DesiredNoRebalanceRange.Value, requestedRange))
         {
             return RebalanceDecision<TRange>.Skip(RebalanceReason.WithinPendingNoRebalanceRange);
         }

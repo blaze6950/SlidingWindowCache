@@ -1,4 +1,4 @@
-﻿using BenchmarkDotNet.Attributes;
+using BenchmarkDotNet.Attributes;
 using Intervals.NET;
 using Intervals.NET.Domain.Default.Numeric;
 using Intervals.NET.Domain.Extensions.Fixed;
@@ -229,7 +229,7 @@ public class RebalanceFlowBenchmarks
     public void IterationCleanup()
     {
         // Ensure cache is idle before next iteration
-        _cache?.WaitForIdleAsync(TimeSpan.FromSeconds(5)).GetAwaiter().GetResult();
+        _cache?.WaitForIdleAsync().GetAwaiter().GetResult();
     }
 
     /// <summary>
@@ -250,7 +250,7 @@ public class RebalanceFlowBenchmarks
 
             // Explicitly measure rebalance cycle completion
             // This captures the rematerialization cost we're benchmarking
-            await _cache.WaitForIdleAsync(timeout: TimeSpan.FromSeconds(10));
+            await _cache.WaitForIdleAsync();
         }
     }
 }

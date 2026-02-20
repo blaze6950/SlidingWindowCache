@@ -1,4 +1,4 @@
-﻿using Intervals.NET;
+using Intervals.NET;
 using Intervals.NET.Domain.Default.Numeric;
 using Intervals.NET.Domain.Extensions.Fixed;
 using SlidingWindowCache.Integration.Tests.TestInfrastructure;
@@ -79,8 +79,8 @@ public sealed class RandomRangeRobustnessTests : IAsyncDisposable
         for (var i = 0; i < iterations; i++)
         {
             var range = GenerateRandomRange();
-            var data = await cache.GetDataAsync(range, CancellationToken.None);
-            Assert.Equal((int)range.Span(_domain), data.Length);
+            var result = await cache.GetDataAsync(range, CancellationToken.None);
+            Assert.Equal((int)range.Span(_domain), result.Length);
         }
 
         // ASSERT - Verify IDataSource was called and no malformed ranges requested
@@ -105,10 +105,10 @@ public sealed class RandomRangeRobustnessTests : IAsyncDisposable
         for (var i = 0; i < iterations; i++)
         {
             var range = GenerateRandomRange();
-            var data = await cache.GetDataAsync(range, CancellationToken.None);
+            var result = await cache.GetDataAsync(range, CancellationToken.None);
 
             var start = (int)range.Start;
-            var array = data.ToArray(); // Convert to array to avoid ref struct in async
+            var array = result.ToArray(); // Convert to array to avoid ref struct in async
 
             for (var j = 0; j < array.Length; j++)
             {
@@ -133,8 +133,8 @@ public sealed class RandomRangeRobustnessTests : IAsyncDisposable
             var overlapEnd = overlapStart + _random.Next(10, 40);
             var range = Intervals.NET.Factories.Range.Closed<int>(overlapStart, overlapEnd);
 
-            var data = await cache.GetDataAsync(range, CancellationToken.None);
-            Assert.Equal((int)range.Span(_domain), data.Length);
+            var result = await cache.GetDataAsync(range, CancellationToken.None);
+            Assert.Equal((int)range.Span(_domain), result.Length);
         }
     }
 
@@ -157,8 +157,8 @@ public sealed class RandomRangeRobustnessTests : IAsyncDisposable
                 currentPosition + rangeLength - 1
             );
 
-            var data = await cache.GetDataAsync(range, CancellationToken.None);
-            var array = data.ToArray();
+            var result = await cache.GetDataAsync(range, CancellationToken.None);
+            var array = result.ToArray();
             Assert.Equal(rangeLength, array.Length);
             Assert.Equal(currentPosition, array[0]);
         }
@@ -198,8 +198,8 @@ public sealed class RandomRangeRobustnessTests : IAsyncDisposable
                 range = Intervals.NET.Factories.Range.Closed<int>(start, start + 25);
             }
 
-            var data = await cache.GetDataAsync(range, CancellationToken.None);
-            Assert.Equal((int)range.Span(_domain), data.Length);
+            var result = await cache.GetDataAsync(range, CancellationToken.None);
+            Assert.Equal((int)range.Span(_domain), result.Length);
         }
 
         // ASSERT - Comprehensive validation of IDataSource interactions

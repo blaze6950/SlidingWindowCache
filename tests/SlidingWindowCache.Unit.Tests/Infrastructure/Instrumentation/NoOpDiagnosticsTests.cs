@@ -1,4 +1,4 @@
-﻿using SlidingWindowCache.Infrastructure.Instrumentation;
+using SlidingWindowCache.Infrastructure.Instrumentation;
 
 namespace SlidingWindowCache.Unit.Tests.Infrastructure.Instrumentation;
 

@@ -1,4 +1,4 @@
-﻿using SlidingWindowCache.Public.Configuration;
+using SlidingWindowCache.Public.Configuration;
 
 namespace SlidingWindowCache.Unit.Tests.Public.Configuration;
 

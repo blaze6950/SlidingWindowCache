@@ -1,4 +1,4 @@
-﻿using Intervals.NET.Domain.Default.Numeric;
+using Intervals.NET.Domain.Default.Numeric;
 using SlidingWindowCache.Integration.Tests.TestInfrastructure;
 using SlidingWindowCache.Infrastructure.Instrumentation;
 using SlidingWindowCache.Public;
@@ -67,12 +67,12 @@ public sealed class DataSourceRangePropagationTests : IAsyncDisposable
         var userRange = Intervals.NET.Factories.Range.Closed<int>(100, 110);
 
         // ACT
-        var data = await cache.GetDataAsync(userRange, CancellationToken.None);
+        var result = await cache.GetDataAsync(userRange, CancellationToken.None);
 
         // ASSERT - Data is correct
-        Assert.Equal(11, data.Length);
-        Assert.Equal(100, data.Span[0]);
-        Assert.Equal(110, data.Span[^1]);
+        Assert.Equal(11, result.Length);
+        Assert.Equal(100, result.Span[0]);
+        Assert.Equal(110, result.Span[^1]);
 
         // ASSERT - IDataSource received exact user range on cold start
         var requestedRanges = _dataSource.GetAllRequestedRanges();
@@ -90,10 +90,10 @@ public sealed class DataSourceRangePropagationTests : IAsyncDisposable
         var userRange = Intervals.NET.Factories.Range.Closed<int>(0, 999);
 
         // ACT
-        var data = await cache.GetDataAsync(userRange, CancellationToken.None);
+        var result = await cache.GetDataAsync(userRange, CancellationToken.None);
 
         // ASSERT
-        Assert.Equal(1000, data.Length);
+        Assert.Equal(1000, result.Length);
 
         // ASSERT - IDataSource received exact large range
         var requestedRanges = _dataSource.GetAllRequestedRanges();
@@ -121,17 +121,17 @@ public sealed class DataSourceRangePropagationTests : IAsyncDisposable
 
         // First request: [100, 120] will expand to approximately [37, 183] with 3x coefficient
         await cache.GetDataAsync(Intervals.NET.Factories.Range.Closed<int>(100, 120), CancellationToken.None);
-        await _cache!.WaitForIdleAsync();
+        await cache.WaitForIdleAsync();
 
         _dataSource.Reset();
 
         // ACT - Request subset that should be fully cached: [110, 115]
         var subsetRange = Intervals.NET.Factories.Range.Closed<int>(110, 115);
-        var data = await cache.GetDataAsync(subsetRange, CancellationToken.None);
+        var result = await cache.GetDataAsync(subsetRange, CancellationToken.None);
 
         // ASSERT - Data is correct
-        Assert.Equal(6, data.Length);
-        Assert.Equal(110, data.Span[0]);
+        Assert.Equal(6, result.Length);
+        Assert.Equal(110, result.Span[0]);
 
         // ASSERT - No additional fetch should occur (cache hit)
         var newFetches = _dataSource.GetAllRequestedRanges();
@@ -156,18 +156,18 @@ public sealed class DataSourceRangePropagationTests : IAsyncDisposable
 
         // First request establishes cache [200, 210] - 11 items, cache after rebalance [189, 221]
         await cache.GetDataAsync(Intervals.NET.Factories.Range.Closed<int>(200, 210), CancellationToken.None);
-        await _cache!.WaitForIdleAsync();
+        await cache.WaitForIdleAsync();
 
         _dataSource.Reset();
 
         // ACT - Extend to right [220, 230] - overlaps existing [189, 221]
         var rightExtension = Intervals.NET.Factories.Range.Closed<int>(220, 230);
-        var data = await cache.GetDataAsync(rightExtension, CancellationToken.None);
+        var result = await cache.GetDataAsync(rightExtension, CancellationToken.None);
 
         // ASSERT - Data is correct
-        Assert.Equal(11, data.Length);
-        Assert.Equal(220, data.Span[0]);
-        Assert.Equal(230, data.Span[^1]);
+        Assert.Equal(11, result.Length);
+        Assert.Equal(220, result.Span[0]);
+        Assert.Equal(230, result.Span[^1]);
 
         // ASSERT - IDataSource should fetch only missing right segment (221, 230]
         _dataSource.AssertRangeRequested(Intervals.NET.Factories.Range.OpenClosed<int>(221, 230));
@@ -191,18 +191,18 @@ public sealed class DataSourceRangePropagationTests : IAsyncDisposable
 
         // First request establishes cache [300, 310] - 11 items, cache after rebalance [289, 321]
         await cache.GetDataAsync(Intervals.NET.Factories.Range.Closed<int>(300, 310), CancellationToken.None);
-        await _cache!.WaitForIdleAsync();
+        await cache.WaitForIdleAsync();
 
         _dataSource.Reset();
 
         // ACT - Extend to left [280, 290] - overlaps existing [289, 321]
         var leftExtension = Intervals.NET.Factories.Range.Closed<int>(280, 290);
-        var data = await cache.GetDataAsync(leftExtension, CancellationToken.None);
+        var result = await cache.GetDataAsync(leftExtension, CancellationToken.None);
 
         // ASSERT - Data is correct
-        Assert.Equal(11, data.Length);
-        Assert.Equal(280, data.Span[0]);
-        Assert.Equal(290, data.Span[^1]);
+        Assert.Equal(11, result.Length);
+        Assert.Equal(280, result.Span[0]);
+        Assert.Equal(290, result.Span[^1]);
 
         // ASSERT - IDataSource should fetch only missing left segment [280, 289)
         _dataSource.AssertRangeRequested(Intervals.NET.Factories.Range.ClosedOpen(280, 289));
@@ -336,18 +336,18 @@ public sealed class DataSourceRangePropagationTests : IAsyncDisposable
 
         // Establish cache [100, 110] - 11 items, cache after rebalance [89, 121]
         await cache.GetDataAsync(Intervals.NET.Factories.Range.Closed<int>(100, 110), CancellationToken.None);
-        await _cache!.WaitForIdleAsync();
+        await cache.WaitForIdleAsync();
 
         _dataSource.Reset();
 
         // ACT - Request [80, 130] which extends both left and right
         var extendedRange = Intervals.NET.Factories.Range.Closed<int>(80, 130);
-        var data = await cache.GetDataAsync(extendedRange, CancellationToken.None);
+        var result = await cache.GetDataAsync(extendedRange, CancellationToken.None);
 
         // ASSERT - Data is correct
-        Assert.Equal(51, data.Length);
-        Assert.Equal(80, data.Span[0]);
-        Assert.Equal(130, data.Span[^1]);
+        Assert.Equal(51, result.Length);
+        Assert.Equal(80, result.Span[0]);
+        Assert.Equal(130, result.Span[^1]);
 
         // ASSERT - Should fetch both missing segments
         // Left segment [80, 89) and right segment (121, 130]
@@ -370,18 +370,18 @@ public sealed class DataSourceRangePropagationTests : IAsyncDisposable
 
         // Establish cache at [100, 110]
         await cache.GetDataAsync(Intervals.NET.Factories.Range.Closed<int>(100, 110), CancellationToken.None);
-        await _cache!.WaitForIdleAsync();
+        await cache.WaitForIdleAsync();
 
         _dataSource.Reset();
 
         // ACT - Jump to non-overlapping [500, 510]
         var jumpRange = Intervals.NET.Factories.Range.Closed<int>(500, 510);
-        var data = await cache.GetDataAsync(jumpRange, CancellationToken.None);
+        var result = await cache.GetDataAsync(jumpRange, CancellationToken.None);
 
         // ASSERT - Data is correct
-        Assert.Equal(11, data.Length);
-        Assert.Equal(500, data.Span[0]);
-        Assert.Equal(510, data.Span[^1]);
+        Assert.Equal(11, result.Length);
+        Assert.Equal(500, result.Span[0]);
+        Assert.Equal(510, result.Span[^1]);
 
         // ASSERT - Should fetch entire new range
         _dataSource.AssertRangeRequested(Intervals.NET.Factories.Range.Closed<int>(500, 510));
@@ -406,18 +406,18 @@ public sealed class DataSourceRangePropagationTests : IAsyncDisposable
 
         // Establish cache [100, 110]
         await cache.GetDataAsync(Intervals.NET.Factories.Range.Closed<int>(100, 110), CancellationToken.None);
-        await _cache!.WaitForIdleAsync();
+        await cache.WaitForIdleAsync();
 
         _dataSource.Reset();
 
         // ACT - Request adjacent right range [111, 120]
         var adjacentRange = Intervals.NET.Factories.Range.Closed<int>(111, 120);
-        var data = await cache.GetDataAsync(adjacentRange, CancellationToken.None);
+        var result = await cache.GetDataAsync(adjacentRange, CancellationToken.None);
 
         // ASSERT - Data is correct
-        Assert.Equal(10, data.Length);
-        Assert.Equal(111, data.Span[0]);
-        Assert.Equal(120, data.Span[^1]);
+        Assert.Equal(10, result.Length);
+        Assert.Equal(111, result.Span[0]);
+        Assert.Equal(120, result.Span[^1]);
 
         // ASSERT - Should fetch only the new adjacent segment
         var requestedRanges = _dataSource.GetAllRequestedRanges();
@@ -443,18 +443,18 @@ public sealed class DataSourceRangePropagationTests : IAsyncDisposable
 
         // Establish cache [100, 110]
         await cache.GetDataAsync(Intervals.NET.Factories.Range.Closed<int>(100, 110), CancellationToken.None);
-        await _cache!.WaitForIdleAsync();
+        await cache.WaitForIdleAsync();
 
         _dataSource.Reset();
 
         // ACT - Request adjacent left range [90, 99]
         var adjacentRange = Intervals.NET.Factories.Range.Closed<int>(90, 99);
-        var data = await cache.GetDataAsync(adjacentRange, CancellationToken.None);
+        var result = await cache.GetDataAsync(adjacentRange, CancellationToken.None);
 
         // ASSERT - Data is correct
-        Assert.Equal(10, data.Length);
-        Assert.Equal(90, data.Span[0]);
-        Assert.Equal(99, data.Span[^1]);
+        Assert.Equal(10, result.Length);
+        Assert.Equal(90, result.Span[0]);
+        Assert.Equal(99, result.Span[^1]);
 
         // ASSERT - Should fetch only the new adjacent segment
         var requestedRanges = _dataSource.GetAllRequestedRanges();

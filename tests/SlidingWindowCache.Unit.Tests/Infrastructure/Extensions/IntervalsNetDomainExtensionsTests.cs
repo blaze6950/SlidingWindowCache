@@ -1,4 +1,4 @@
-﻿using Intervals.NET.Domain.Abstractions;
+using Intervals.NET.Domain.Abstractions;
 using Intervals.NET.Domain.Default.Numeric;
 using Moq;
 using SlidingWindowCache.Infrastructure.Extensions;

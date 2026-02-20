@@ -1,4 +1,4 @@
-﻿using Intervals.NET;
+using Intervals.NET;
 using Intervals.NET.Domain.Default.Numeric;
 using SlidingWindowCache.Infrastructure.Instrumentation;
 using SlidingWindowCache.Public;
@@ -65,11 +65,11 @@ public class RebalanceExceptionHandlingTests : IDisposable
         );
 
         // Act: Make a request that will trigger a rebalance
-        var data = await cache.GetDataAsync(Intervals.NET.Factories.Range.Closed<int>(100, 110),
+        await cache.GetDataAsync(Intervals.NET.Factories.Range.Closed<int>(100, 110),
             CancellationToken.None);
 
         // Wait for background rebalance to fail
-        await cache.WaitForIdleAsync(TimeSpan.FromSeconds(5));
+        await cache.WaitForIdleAsync();
 
         // Assert: Verify the failure was recorded
         Assert.Equal(1, _diagnostics.UserRequestServed);
@@ -122,12 +122,12 @@ public class RebalanceExceptionHandlingTests : IDisposable
         // Act: First request succeeds, triggers failed rebalance
         var data1 = await cache.GetDataAsync(Intervals.NET.Factories.Range.Closed<int>(100, 110),
             CancellationToken.None);
-        await cache.WaitForIdleAsync(TimeSpan.FromSeconds(5));
+        await cache.WaitForIdleAsync();
 
         // Second request should still work (user path bypasses failed rebalance)
         var data2 = await cache.GetDataAsync(Intervals.NET.Factories.Range.Closed<int>(200, 210),
             CancellationToken.None);
-        await cache.WaitForIdleAsync(TimeSpan.FromSeconds(5));
+        await cache.WaitForIdleAsync();
 
         // Assert: Both requests succeeded despite rebalance failure
         Assert.Equal(2, _diagnostics.UserRequestServed);
@@ -185,7 +185,7 @@ public class RebalanceExceptionHandlingTests : IDisposable
 
         // Act: Trigger a rebalance failure
         await cache.GetDataAsync(Intervals.NET.Factories.Range.Closed<int>(100, 110), CancellationToken.None);
-        await cache.WaitForIdleAsync(TimeSpan.FromSeconds(5));
+        await cache.WaitForIdleAsync();
 
         // Assert: Exception was properly logged
         Assert.True(loggedExceptions.Count >= 1,

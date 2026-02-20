@@ -1,4 +1,4 @@
-﻿using Intervals.NET.Data.Extensions;
+using Intervals.NET.Data.Extensions;
 using Intervals.NET.Domain.Default.Numeric;
 using SlidingWindowCache.Infrastructure.Storage;
 using SlidingWindowCache.Public.Configuration;
@@ -545,7 +545,7 @@ public class CopyOnReadStorageTests
 
         // ASSERT
         Assert.Equal(5, result.Length);
-        Assert.Equal(new[] { 2, 5, 10, 20, 50 }, result.ToArray());
+        Assert.Equal([2, 5, 10, 20, 50], result.ToArray());
     }
 
     #endregion

@@ -1,4 +1,4 @@
-﻿using Intervals.NET;
+using Intervals.NET;
 using Intervals.NET.Domain.Default.Numeric;
 using Intervals.NET.Domain.Extensions.Fixed;
 using Moq;
@@ -241,9 +241,9 @@ public static class TestHelpers
         WindowCache<int, int, IntegerFixedStepDomain> cache,
         Range<int> range)
     {
-        var data = await cache.GetDataAsync(range, CancellationToken.None);
+        var result = await cache.GetDataAsync(range, CancellationToken.None);
         await cache.WaitForIdleAsync();
-        return data;
+        return result;
     }
 
     /// <summary>

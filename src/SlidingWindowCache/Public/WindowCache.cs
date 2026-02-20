@@ -6,6 +6,7 @@ using SlidingWindowCache.Core.Rebalance.Execution;
 using SlidingWindowCache.Core.Rebalance.Intent;
 using SlidingWindowCache.Core.State;
 using SlidingWindowCache.Core.UserPath;
+using SlidingWindowCache.Infrastructure.Concurrency;
 using SlidingWindowCache.Infrastructure.Instrumentation;
 using SlidingWindowCache.Infrastructure.Storage;
 using SlidingWindowCache.Public.Configuration;
@@ -54,12 +55,39 @@ public interface IWindowCache<TRange, TData, TDomain>
     /// A cancellation token to cancel the operation.
     /// </param>
     /// <returns>
-    /// A task that represents the asynchronous operation. The task result contains a <see cref="ReadOnlyMemory{T}"/> 
-    /// of data for the specified range from the materialized cache.
+    /// A task that represents the asynchronous operation. The task result contains the data 
+    /// for the specified range as a <see cref="ReadOnlyMemory{T}"/>.
     /// </returns>
     ValueTask<ReadOnlyMemory<TData>> GetDataAsync(
         Range<TRange> requestedRange,
         CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Waits for the cache to reach an idle state (no pending intent and no executing rebalance).
+    /// </summary>
+    /// <param name="cancellationToken">
+    /// A cancellation token to cancel the wait operation.
+    /// </param>
+    /// <returns>
+    /// A task that completes when the cache reaches idle state.
+    /// </returns>
+    /// <remarks>
+    /// <para><strong>Idle State Definition:</strong></para>
+    /// <para>
+    /// The cache is considered idle when:
+    /// <list type="bullet">
+    /// <item><description>No pending intent is awaiting processing</description></item>
+    /// <item><description>No rebalance execution is currently running</description></item>
+    /// </list>
+    /// </para>
+    /// <para><strong>Use Cases:</strong></para>
+    /// <list type="bullet">
+    /// <item><description>Testing: Ensure cache has stabilized before assertions</description></item>
+    /// <item><description>Cold start synchronization: Wait for initial rebalance to complete</description></item>
+    /// <item><description>Diagnostics: Verify cache has converged to optimal state</description></item>
+    /// </list>
+    /// </remarks>
+    Task WaitForIdleAsync(CancellationToken cancellationToken = default);
 }
 
 /// <inheritdoc cref="IWindowCache{TRange,TData,TDomain}"/>
@@ -85,7 +113,9 @@ public sealed class WindowCache<TRange, TData, TDomain>
 {
     // Internal actors
     private readonly UserRequestHandler<TRange, TData, TDomain> _userRequestHandler;
-    private readonly IntentController<TRange, TData, TDomain> _intentController;
+
+    // Activity counter for tracking active intents and executions
+    private readonly AsyncActivityCounter _activityCounter = new();
 
     /// <summary>
     /// Initializes a new instance of the <see cref="WindowCache{TRange,TData,TDomain}"/> class.
@@ -123,24 +153,33 @@ public sealed class WindowCache<TRange, TData, TDomain>
         var noRebalancePlanner = new NoRebalanceRangePlanner<TRange, TDomain>(options, domain);
         var cacheFetcher = new CacheDataExtensionService<TRange, TData, TDomain>(dataSource, domain, cacheDiagnostics);
 
-        var decisionEngine = new RebalanceDecisionEngine<TRange, TDomain>(rebalancePolicy, rangePlanner, noRebalancePlanner);
+        var decisionEngine =
+            new RebalanceDecisionEngine<TRange, TDomain>(rebalancePolicy, rangePlanner, noRebalancePlanner);
         var executor =
             new RebalanceExecutor<TRange, TData, TDomain>(state, cacheFetcher, cacheDiagnostics);
 
-        // IntentController composes with Execution Scheduler to form the Rebalance Intent Manager actor
-        _intentController = new IntentController<TRange, TData, TDomain>(
-            state,
-            decisionEngine,
+        // Create execution actor (guarantees single-threaded cache mutations)
+        var executionController = new RebalanceExecutionController<TRange, TData, TDomain>(
             executor,
             options.DebounceDelay,
-            cacheDiagnostics
+            cacheDiagnostics,
+            _activityCounter
+        );
+
+        // Create intent controller actor (fast CPU-bound decision logic with cancellation support)
+        var intentController = new IntentController<TRange, TData, TDomain>(
+            state,
+            decisionEngine,
+            executionController,
+            cacheDiagnostics,
+            _activityCounter
         );
 
         // Initialize the UserRequestHandler (Fast Path Actor)
         _userRequestHandler = new UserRequestHandler<TRange, TData, TDomain>(
             state,
             cacheFetcher,
-            _intentController,
+            intentController,
             dataSource,
             cacheDiagnostics
         );
@@ -173,46 +212,26 @@ public sealed class WindowCache<TRange, TData, TDomain>
         return _userRequestHandler.HandleRequestAsync(requestedRange, cancellationToken);
     }
 
-    /// <summary>
-    /// Waits for any pending background rebalance operations to complete.
-    /// This is an infrastructure API, not part of the domain semantics.
-    /// </summary>
-    /// <param name="timeout">
-    /// Maximum time to wait for idle state. Defaults to 30 seconds.
-    /// Throws <see cref="TimeoutException"/> if background tasks do not stabilize within this period.
-    /// </param>
-    /// <returns>
-    /// A Task that completes when all scheduled background rebalance operations have finished.
-    /// </returns>
+    /// <inheritdoc cref="IWindowCache{TRange,TData,TDomain}.WaitForIdleAsync"/>
     /// <remarks>
-    /// <para><strong>Infrastructure API:</strong></para>
+    /// <para><strong>Implementation Strategy:</strong></para>
     /// <para>
-    /// This method provides deterministic synchronization with background rebalance execution
-    /// for testing, graceful shutdown, health checks, and integration scenarios. It is NOT part 
-    /// of the cache's domain semantics or normal usage patterns.
-    /// </para>
-    /// <para><strong>Use Cases:</strong></para>
+    /// Delegates to AsyncActivityCounter which tracks active operations atomically:
     /// <list type="bullet">
-    /// <item><description>Test stabilization: Ensure cache has converged before assertions</description></item>
-    /// <item><description>Graceful shutdown: Wait for background work before disposing resources</description></item>
-    /// <item><description>Health checks: Verify rebalance operations are completing successfully</description></item>
-    /// <item><description>Integration scenarios: Synchronize with background work completion</description></item>
-    /// <item><description>Diagnostic scenarios: Verify rebalance execution has finished</description></item>
+    /// <item><description>Counter increments when intent published or execution enqueued</description></item>
+    /// <item><description>Counter decrements when intent processing completes or execution finishes</description></item>
+    /// <item><description>Returns completed Task when counter reaches 0 (idle state)</description></item>
     /// </list>
-    /// <para><strong>Actor Responsibility Boundaries:</strong></para>
-    /// <para>
-    /// This method does NOT alter actor responsibilities. It is a pure delegation facade:
     /// </para>
-    /// <list type="bullet">
-    /// <item><description>UserRequestHandler remains the ONLY publisher of rebalance intents</description></item>
-    /// <item><description>IntentController remains the lifecycle authority for intent cancellation</description></item>
-    /// <item><description>RebalanceScheduler remains the authority for background Task execution</description></item>
-    /// <item><description>WindowCache remains a composition root with no business logic</description></item>
-    /// </list>
+    /// <para><strong>Idle State Definition:</strong></para>
     /// <para>
-    /// This method exists solely to expose the idle synchronization mechanism through the public API
-    /// for infrastructure purposes, maintaining the existing architectural separation.
+    /// Cache is idle when activity counter is 0, meaning:
+    /// <list type="bullet">
+    /// <item><description>No intent processing in progress</description></item>
+    /// <item><description>No rebalance execution running</description></item>
+    /// </list>
     /// </para>
     /// </remarks>
-    public Task WaitForIdleAsync(TimeSpan? timeout = null) => _intentController.WaitForIdleAsync(timeout);
+    public Task WaitForIdleAsync(CancellationToken cancellationToken = default) =>
+        _activityCounter.WaitForIdleAsync(cancellationToken);
 }
