@@ -5,6 +5,7 @@
 /// Mirrors the public API of CacheInstrumentationCounters to enable dependency injection.
 /// Used for testing and verification of system invariants.
 /// </summary>
+/// TODO revise exposed methods, probably some reconsideration is needed. Better to expose less but major events, than too many fine-grained ones that may be noisy and hard to maintain. Focus on key events that validate critical invariants and system behavior.
 public interface ICacheDiagnostics
 {
     // ============================================================================

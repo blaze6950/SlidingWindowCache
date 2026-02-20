@@ -5,6 +5,7 @@ using SlidingWindowCache.Public.Configuration;
 
 namespace SlidingWindowCache.Core.Planning;
 
+// todo add comments
 internal readonly struct ProportionalRangePlanner<TRange, TDomain>
     where TRange : IComparable<TRange>
     where TDomain : IRangeDomain<TRange>

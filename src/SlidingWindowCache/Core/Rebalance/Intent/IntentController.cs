@@ -95,7 +95,7 @@ internal sealed class IntentController<TRange, TData, TDomain>
     // Processing loop task
     private readonly Task _processingLoopTask;
 
-    // Cancellation token source for the processing loop (used during disposal)
+    // Cancellation token source for the processing loop (used during disposal) todo implement disposing
     private readonly CancellationTokenSource _loopCancellation = new();
 
     /// <summary>

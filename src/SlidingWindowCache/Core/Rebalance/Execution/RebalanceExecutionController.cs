@@ -82,6 +82,12 @@ internal record ExecutionRequest<TRange, TData, TDomain>(
 /// This allows fast exit from superseded operations, especially effective with debounce delay.
 /// </para>
 /// </remarks>
+/// TODO this class is the first strategy implemented - it uses Channel for execution serialization and cancellation.
+/// TODO another strategy is to use task chaining by creating a new task where firstly awaiting previous rebalance, then awaiting rebalance execution
+/// TODO expose these two strategies as an option to handle backpressure. You can set unbounded - then task approach is utilized as it is simple and should be sufficient for most cases.
+/// TODO You can set bounded - then channel approach is utilized with backpressure support. In this case, if the channel is full, you can choose to
+/// TODO either drop the new execution request or cancel the previous one and enqueue the new one. This allows more control over how to handle bursts
+/// TODO of intents and prevent excessive queuing of obsolete requests.
 internal sealed class RebalanceExecutionController<TRange, TData, TDomain>
     where TRange : IComparable<TRange>
     where TDomain : IRangeDomain<TRange>

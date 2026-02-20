@@ -684,3 +684,16 @@ helps improve the library's design, implementation, and documentation.
 ## License
 
 MIT
+
+--
+TODO List
+- Implement strong consistency extension method
+- Implement multi-level cache composition pattern (L1/L2/L3...). Provide out of the box builder for such combinations - wrapper for WindowCache that implements IDataSource.
+- Implement visited places cache
+- Move caches to Intervals.NET
+- Revise docs, try to simplify them - make short, but concise and informative
+- Restructure Intervals.NET repo to store many separate packages
+- Revise Intervals.NET-related libs' docs - split docs per package
+- Make the common README short and concise, with links to detailed documentation for each aspect of the library (architecture, usage, configuration, diagnostics, etc.)
+- Implement hybrid mode in the context of consistency - eventual and strong consistency is mixed during handling rebalances - for sure cold start is strong consistent, but other sequential rebalances for sequential requests are eventual consistent, but in case random access - string consistency.
+This should not be based on ICacheDiagnostics - this should be some level of abstraction, some kind of strategy when in user request handler the cache miss is handled with or without waiting for idle

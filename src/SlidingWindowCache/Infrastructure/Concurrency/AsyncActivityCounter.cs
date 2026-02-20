@@ -22,6 +22,8 @@
 /// When counter transitions from N→0, the TCS is signaled. Multiple waiters can await the same TCS.
 /// </para>
 /// </remarks>
+/// TODO try to analyze this implementation - maybe we can avoid using lock at all?
+/// TODO consider about implementing this using SemaphoreSlim. I guess we can use it for signalling and avoids TCS allocations
 internal sealed class AsyncActivityCounter
 {
     // Activity counter - incremented when work starts, decremented when work finishes
