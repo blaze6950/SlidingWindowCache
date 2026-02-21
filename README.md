@@ -84,7 +84,7 @@ User Request
              │
              ▼
 ┌─────────────────────────────────────────────────┐
-│  Decision Engine (User Thread - CPU-only)       │
+│  Decision Engine (Background Loop - CPU-only)   │
 │  Stage 1: NoRebalanceRange check                │
 │  Stage 2: Pending coverage check                │
 │  Stage 3: Desired == Current check              │

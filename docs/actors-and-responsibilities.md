@@ -57,7 +57,7 @@ The UserRequestHandler NEVER invokes directly decision logic - it just publishes
 The **sole authority for rebalance necessity determination**. Analyzes the need for rebalance through multi-stage analytical validation without mutating system state. Enables **smart eventual consistency** through work avoidance mechanisms.
 
 **Execution Context:**  
-**Lives in: User Thread** (invoked synchronously by IntentController during intent publication)
+**Lives in: Background Thread** (invoked synchronously by IntentController.ProcessIntentsAsync in intent processing loop)
 
 **Critical Execution Model:**
 ```
@@ -117,7 +117,7 @@ This logical actor is internally decomposed into two components for separation o
 - **ProportionalRangePlanner** - Computes DesiredCacheRange, plans cache geometry
 
 **Execution Context:**  
-**Lives in: User Thread** (invoked synchronously by RebalanceDecisionEngine, which itself runs in user thread)
+**Lives in: Background Thread** (invoked synchronously by RebalanceDecisionEngine within intent processing loop)
 
 **Characteristics:**  
 Pure functions, lightweight structs (value types), CPU-only, side-effect free
@@ -149,12 +149,13 @@ This logical actor is internally decomposed into two components for separation o
 
 **Execution Context:**  
 **Mixed:**
-- **User Thread**: PublishIntent(), decision evaluation, cancellation, scheduling setup (all synchronous)
-- **Background / ThreadPool**: Only the scheduled execution task (after Task.Run in Scheduler)
+- **User Thread**: PublishIntent() only (atomic ops + signal, fire-and-forget)
+- **Background Thread**: Intent processing loop, decision evaluation, cancellation, execution request enqueuing
+
 
 **Ownership Hierarchy:**
 ```
-IntentController (User Thread)
+IntentController (User Thread for PublishIntent; Background Thread for ProcessIntentsAsync)
 ├── owns DecisionEngine (invokes synchronously)
 ├── owns RebalanceScheduler (creates in constructor)
 │   └── owns RebalanceExecutor (passed to Scheduler)
@@ -164,19 +165,19 @@ IntentController (User Thread)
 **Enhanced Role (Decision-Driven Model):**
 
 Now responsible for:
-- **Receiving intents** (on every user request) [Intent Controller - User Thread]
-- **Owning and invoking DecisionEngine** [Intent Controller - User Thread, synchronous]
-- **Intent identity and versioning** via PendingRebalance snapshot [Intent Controller]
-- **Cancellation coordination** based on validation results from owned DecisionEngine [Intent Controller]
-- **Deduplication** via synchronous decision evaluation [Intent Controller - User Thread]
-- **Debouncing** [Execution Scheduler - Background]
+- **Receiving intents** (on every user request) [IntentController.PublishIntent - User Thread]
+- **Owning and invoking DecisionEngine** [IntentController - Background Thread (intent processing loop), synchronous]
+- **Intent identity and versioning** via ExecutionRequest snapshot [IntentController]
+- **Cancellation coordination** based on validation results from owned DecisionEngine [IntentController - Background Thread]
+- **Deduplication** via synchronous decision evaluation [IntentController - Background Thread (intent processing loop)]
+- **Debouncing** [Execution Controller - Background]
 - **Single-flight execution** enforcement [Both components via cancellation]
-- **Starting background tasks** [Execution Scheduler]
-- **Orchestrating the validation-driven decision pipeline**: [Intent Controller - User Thread, synchronous]
-  1. **IntentController.PublishIntent()** invokes owned DecisionEngine synchronously (User Thread)
-  2. If ALL validation stages pass → cancel old pending, schedule new via Scheduler
-  3. If validation rejects → return immediately (work avoidance, no Task.Run)
-  4. **Scheduler.ScheduleRebalance()** creates PendingRebalance, schedules Task.Run (returns synchronously)
+- **Starting background execution** [Execution Controller]
+- **Orchestrating the validation-driven decision pipeline**: [IntentController - Background Thread (intent processing loop), synchronous]
+  1. **IntentController.ProcessIntentsAsync()** invokes owned DecisionEngine synchronously (Background Thread)
+  2. If ALL validation stages pass → cancel old pending, enqueue new execution request via ExecutionController
+  3. If validation rejects → continue loop (work avoidance, no execution)
+  4. **ExecutionController.PublishExecutionRequest()** enqueues to channel (processed by separate execution loop)
   5. **Background Task** performs debounce delay + ExecuteAsync (only this part is async)
 
 **Authority:** *Owns DecisionEngine and invokes it synchronously. Owns time and concurrency, orchestrates validation-driven execution. Does NOT determine rebalance necessity (delegates to owned DecisionEngine).*

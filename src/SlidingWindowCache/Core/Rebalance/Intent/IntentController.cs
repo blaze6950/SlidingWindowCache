@@ -225,6 +225,9 @@ internal sealed class IntentController<TRange, TData, TDomain>
                         continue;
                     }
 
+                    // THREADING CONTEXT: Executing in BACKGROUND THREAD (intent processing loop)
+                    // User thread returned immediately after PublishIntent() signaled the semaphore
+                    // All decision evaluation (DecisionEngine, Planners, Policy) happens HERE in background
                     // Evaluate DecisionEngine INSIDE loop (avoids race conditions)
                     var lastExecutionRequest = _executionController.LastExecutionRequest;
                     var decision = _decisionEngine.Evaluate(

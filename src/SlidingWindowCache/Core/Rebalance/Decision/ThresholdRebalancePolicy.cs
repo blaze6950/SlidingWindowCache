@@ -14,6 +14,11 @@ namespace SlidingWindowCache.Core.Rebalance.Decision;
 /// <para><strong>Role:</strong> Rebalance Policy - Decision Evaluation</para>
 /// <para><strong>Responsibility:</strong> Determine if a requested range violates the no-rebalance zone</para>
 /// <para><strong>Characteristics:</strong> Pure function, stateless</para>
+/// <para><strong>Execution Context:</strong> Background thread (intent processing loop)</para>
+/// <para>
+/// Invoked by <see cref="RebalanceDecisionEngine"/> during Stages 1-2 (stability validation),
+/// which executes in the background intent processing loop (see <c>IntentController.ProcessIntentsAsync</c>).
+/// </para>
 /// </remarks>
 internal readonly struct ThresholdRebalancePolicy<TRange, TDomain>
     where TRange : IComparable<TRange>

@@ -18,6 +18,11 @@ namespace SlidingWindowCache.Core.Planning;
 /// Works in tandem with <see cref="ProportionalRangePlanner{TRange,TDomain}"/> to define
 /// complete cache geometry: desired cache range (expansion) and no-rebalance zone (shrinkage).
 /// </para>
+/// <para><strong>Execution Context:</strong> Background thread (intent processing loop)</para>
+/// <para>
+/// Invoked by <see cref="RebalanceDecisionEngine"/> during Stage 3 of the decision pipeline,
+/// which executes in the background intent processing loop (see <c>IntentController.ProcessIntentsAsync</c>).
+/// </para>
 /// </remarks>
 internal readonly struct NoRebalanceRangePlanner<TRange, TDomain>
     where TRange : IComparable<TRange>

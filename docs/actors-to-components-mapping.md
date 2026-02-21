@@ -38,7 +38,7 @@ User Thread
 
 ═══════════════════════════════════════════════════════════
 ═══════════════════════════════════════════════════════════
-User Thread (Synchronous)
+User Thread (Synchronous - Publish Intent Only)
 ═══════════════════════════════════════════════════════════
 
 ┌───────────────────────┐
@@ -55,15 +55,18 @@ User Thread (Synchronous)
             ▼
 ┌───────────────────────────┐
 │ IntentController          │ ← Intent Lifecycle & Orchestration
-│ (Rebalance Intent Mgr)    │   • owns DecisionEngine
-│                           │   • owns RebalanceScheduler
-└───────────┬───────────────┘   • invokes decision synchronously
+│ (Rebalance Intent Mgr)    │   • publishes intent atomically
+│                           │   • signals background loop
+└───────────┬───────────────┘   • returns immediately (fire-and-forget)
             │
-            │ invoke DecisionEngine (synchronous, CPU-only)
+            │ atomic publish + semaphore signal (returns to user)
             │
             ▼
+          RETURN TO USER (User thread ends here) ← 🔄 Background loop picks up intent
+                                                  │
+                                                  ▼
 ┌───────────────────────────┐
-│ RebalanceDecisionEngine   │ ← Pure Decision Logic (User Thread!)
+│ RebalanceDecisionEngine   │ ← Pure Decision Logic (Background Loop!)
 │                           │   • NoRebalanceRange check
 │ + CacheGeometryPolicy     │   • DesiredCacheRange computation
 └───────────┬───────────────┘   • allow/block execution
@@ -216,9 +219,9 @@ return _userRequestHandler.HandleRequestAsync(requestedRange, cancellationToken)
 
 ### Execution Context
 
-**Lives in: User Thread** (invoked synchronously by IntentController)
+**Lives in: Background Thread (Intent Processing Loop)** (invoked by IntentController.ProcessIntentsAsync)
 
-**Critical:**  Decision evaluation happens SYNCHRONOUSLY in user thread before any background scheduling.
+**Critical:** Decision evaluation happens ASYNCHRONOUSLY in background intent processing loop after PublishIntent() returns to user.
 
 ### Visibility
 
@@ -308,7 +311,7 @@ shape to target).
 
 ### Execution Context
 
-**User Thread** (invoked synchronously by RebalanceDecisionEngine during intent publication)
+**Background Thread (Intent Processing Loop)** (invoked by RebalanceDecisionEngine during intent processing)
 
 **Characteristics:**
 - Pure functions, lightweight structs (value types)
@@ -624,18 +627,18 @@ RebalanceExecutor
 
 ### Actor Execution Contexts
 
-| Actor                      | Execution Context                     | Invoked By                    |
-|----------------------------|---------------------------------------|-------------------------------|
-| UserRequestHandler         | User Thread                           | User (public API)             |
-| IntentController           | **User Thread (synchronous)**         | UserRequestHandler            |
-| RebalanceDecisionEngine    | **User Thread (synchronous)**         | IntentController              |
-| CacheGeometryPolicy        | **User Thread (synchronous)**         | RebalanceDecisionEngine       |
-| RebalanceScheduler         | **User Thread** (scheduling)          | IntentController              |
-| RebalanceScheduler (Task)  | Background/ThreadPool (execution)     | Task.Run                      |
-| RebalanceExecutor          | Background/ThreadPool                 | RebalanceScheduler background |
-| CacheStateManager          | Both (User: reads, Background: writes)| Both paths (single-writer)    |
+| Actor                      | Execution Context                           | Invoked By                       |
+|----------------------------|---------------------------------------------|----------------------------------|
+| UserRequestHandler         | User Thread                                 | User (public API)                |
+| IntentController.PublishIntent | **User Thread (atomic publish only)**   | UserRequestHandler               |
+| IntentController.ProcessIntentsAsync | **Background Loop #1 (intent processing)** | Background task (awaits semaphore) |
+| RebalanceDecisionEngine    | **Background Loop #1 (intent processing)** | IntentController.ProcessIntentsAsync |
+| CacheGeometryPolicy        | **Background Loop #1 (intent processing)** | RebalanceDecisionEngine          |
+| RebalanceExecutionController | **Background Loop #2 (execution)**        | Background task (channel reader) |
+| RebalanceExecutor          | **Background Loop #2 (execution)**         | RebalanceExecutionController     |
+| CacheStateManager          | Both (User: reads, Background #2: writes)  | Both paths (single-writer)       |
 
-**Critical:** Everything up to `Task.Run` happens synchronously in user thread. Only debounce + actual execution happen in background.
+**Critical:** User thread ends at `PublishIntent()` return (after atomic operations). Decision evaluation runs in background intent processing loop. Cache mutations run in separate background execution loop.
 
 ### Responsibilities Refixed
 

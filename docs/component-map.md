@@ -783,7 +783,7 @@ public async Task WaitForIdleAsync(TimeSpan? timeout = null)
 - Composes with RebalanceScheduler
 
 **Execution Context**: 
-- **PublishIntent() executes synchronously in User Thread** (includes decision evaluation)
+- **PublishIntent() executes synchronously in User Thread** (atomic intent storage + semaphore signal only; decision evaluation happens in background loop)
 - **Only scheduled work (background task) executes in Background ThreadPool**
 
 **State**: 
@@ -1035,7 +1035,7 @@ public Range<TRange>? GetNoRebalanceRange(Range<TRange> cacheRange)
 
 **Ownership**: Value type, copied into RebalanceDecisionEngine and RebalanceExecutor
 
-**Execution Context**: User Thread (invoked by RebalanceDecisionEngine which runs synchronously in user thread)
+**Execution Context**: Background Thread (invoked by RebalanceDecisionEngine within intent processing loop - see IntentController.ProcessIntentsAsync)
 
 **Responsibilities**:
 - Compute NoRebalanceRange (shrinks cache by threshold ratios)
@@ -1089,7 +1089,7 @@ public Range<TRange> Plan(Range<TRange> requested)
 
 **Ownership**: Value type, copied into RebalanceDecisionEngine
 
-**Execution Context**: User Thread (invoked by RebalanceDecisionEngine which runs synchronously in user thread)
+**Execution Context**: Background Thread (invoked by RebalanceDecisionEngine within intent processing loop - see IntentController.ProcessIntentsAsync)
 
 **Responsibilities**:
 - Compute DesiredCacheRange (expands requested by left/right coefficients)
@@ -1749,17 +1749,21 @@ The Sliding Window Cache follows a **single consumer model** as documented in `d
 | Component                         | Thread Context    | Notes                                                     |
 |-----------------------------------|-------------------|-----------------------------------------------------------|
 | **WindowCache**                   | Neutral           | Just delegates                                            |
-| **UserRequestHandler**            | ⚡ **User Thread** | Synchronous, fast path                                    |
-| **IntentController**              | ⚡ **User Thread** | Synchronous methods (PublishIntent, decision evaluation)  |
-| **RebalanceDecisionEngine**       | ⚡ **User Thread** | Invoked synchronously by IntentController, CPU-only logic |
-| **RebalanceScheduler (scheduling)**| ⚡ **User Thread** | ScheduleRebalance() is synchronous (creates background task) |
-| **RebalanceScheduler (execution)**| 🔄 **Background** | Background task execution - debounce + executor invocation |
+| **UserRequestHandler**                     | ⚡ **User Thread** | Synchronous, fast path (user request handling)            |
+| **IntentController.PublishIntent()**       | ⚡ **User Thread** | Atomic intent storage + semaphore signal (fire-and-forget)|
+| **IntentController.ProcessIntentsAsync()** | 🔄 **Background**  | Intent processing loop, invokes DecisionEngine            |
+| **RebalanceDecisionEngine**                | 🔄 **Background**  | Invoked in intent processing loop, CPU-only logic         |
+| **ProportionalRangePlanner**               | 🔄 **Background**  | Invoked by DecisionEngine in intent processing loop       |
+| **NoRebalanceRangePlanner**                | 🔄 **Background**  | Invoked by DecisionEngine in intent processing loop       |
+| **ThresholdRebalancePolicy**               | 🔄 **Background**  | Invoked by DecisionEngine in intent processing loop       |
+| **RebalanceExecutionController.PublishExecutionRequest()** | 🔄 **Background** | Invoked by intent loop, enqueues to channel    |
+| **RebalanceExecutionController.ProcessExecutionRequestsAsync()** | 🔄 **Background** | Execution loop, invokes Executor       |
 | **RebalanceExecutor**             | 🔄 **Background** | ThreadPool, async, I/O                                    |
 | **CacheDataExtensionService**     | Both ⚡🔄          | User Thread OR Background                                 |
 | **CacheState**                    | Both ⚡🔄          | Shared mutable (no locks!)                                |
 | **Storage (Snapshot/CopyOnRead)** | Both ⚡🔄          | Owned by CacheState                                       |
 
-**Critical:** Decision logic and scheduling are **synchronous operations in user thread** (CPU-only, lightweight). Only the actual rebalance execution (I/O) happens in background ThreadPool.
+**Critical:** PublishIntent() is a **synchronous operation in user thread** (atomic ops only, no decision logic). Decision logic (DecisionEngine, Planners, Policy) executes in **background intent processing loop**. Rebalance execution (I/O) happens in **separate background execution loop**.
 
 ### Concurrency Invariants (from `docs/invariants.md`)
 
@@ -1777,7 +1781,107 @@ The Sliding Window Cache follows a **single consumer model** as documented in `d
 
 ### How It Works
 
-#### User Request Flow (User Thread - ALL SYNCHRONOUS until background scheduling)
+---
+
+### Threading Model - Complete Flow Diagram
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│ PHASE 1: USER THREAD (Synchronous - Fast Path)                         │
+├─────────────────────────────────────────────────────────────────────────┤
+│ Component                  │ Operation                                  │
+├────────────────────────────┼────────────────────────────────────────────┤
+│ WindowCache.GetDataAsync() │ Entry point (user-facing API)              │
+│           ↓                │                                            │
+│ UserRequestHandler         │ • Read cache state (read-only)             │
+│  .HandleRequestAsync()     │ • Fetch missing data from IDataSource      │
+│                            │ • Assemble result data                     │
+│                            │ • Call IntentController.PublishIntent()    │
+│           ↓                │                                            │
+│ IntentController           │ • Interlocked.Exchange(_pendingIntent)     │
+│  .PublishIntent()          │ • _intentSignal.Release() (signal)         │
+│                            │ • Return immediately (fire-and-forget)     │
+│           ↓                │                                            │
+│ Return data to user        │ ← USER THREAD BOUNDARY ENDS HERE           │
+└─────────────────────────────────────────────────────────────────────────┘
+                                      ↓ (semaphore signal)
+┌─────────────────────────────────────────────────────────────────────────┐
+│ PHASE 2: BACKGROUND THREAD #1 (Intent Processing Loop)                 │
+├─────────────────────────────────────────────────────────────────────────┤
+│ Component                        │ Operation                            │
+├──────────────────────────────────┼──────────────────────────────────────┤
+│ IntentController                 │ • await _intentSignal.WaitAsync()    │
+│  .ProcessIntentsAsync()          │ • Interlocked.Exchange(_pendingIntent│
+│  (infinite background loop)      │ • Read intent atomically             │
+│           ↓                      │                                      │
+│ RebalanceDecisionEngine          │ Stage 1: Current NoRebalanceRange chk│
+│  .Evaluate()                     │ Stage 2: Pending NoRebalanceRange chk│
+│     ├─ Stage 3 ────────────────→ │ • ProportionalRangePlanner.Plan()    │
+│     │                            │ • NoRebalanceRangePlanner.Plan()     │
+│     ├─ ThresholdRebalancePolicy  │ Stage 4: Equality check              │
+│     └─ Return Decision           │ Stage 5: Return decision             │
+│           ↓                      │                                      │
+│ If Skip: continue loop           │ • Diagnostics event                  │
+│ If Execute: ↓                    │                                      │
+│           ↓                      │                                      │
+│ Cancel previous execution        │ • lastExecutionRequest?.Cancel()     │
+│           ↓                      │                                      │
+│ RebalanceExecutionController     │ • Create ExecutionRequest            │
+│  .PublishExecutionRequest()      │ • Channel.Writer.TryWrite(request)   │
+└─────────────────────────────────────────────────────────────────────────┘
+                                      ↓ (channel message)
+┌─────────────────────────────────────────────────────────────────────────┐
+│ PHASE 3: BACKGROUND THREAD #2 (Execution Loop)                         │
+├─────────────────────────────────────────────────────────────────────────┤
+│ Component                        │ Operation                            │
+├──────────────────────────────────┼──────────────────────────────────────┤
+│ RebalanceExecutionController     │ • await foreach (channel read)       │
+│  .ProcessExecutionRequestsAsync()│ • await Task.Delay(debounce)         │
+│  (infinite background loop)      │ • Cancellation check                 │
+│           ↓                      │                                      │
+│ RebalanceExecutor                │ • Extend cache data (I/O)            │
+│  .ExecuteAsync()                 │ • Trim to desired range              │
+│                                  │ • ┌──────────────────────────┐       │
+│                                  │   │ CACHE MUTATION           │       │
+│                                  │   │ (SINGLE WRITER)          │       │
+│                                  │   │ • Cache.Rematerialize()  │       │
+│                                  │   │ • LastRequested = ...    │       │
+│                                  │   │ • NoRebalanceRange = ... │       │
+│                                  │   └──────────────────────────┘       │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+**Key Threading Boundaries:**
+
+1. **User Thread Boundary**: Ends at `PublishIntent()` return
+   - Everything before: Synchronous, blocking user request
+   - `PublishIntent()`: Atomic ops only (microseconds), returns immediately
+
+2. **Background Thread #1**: Intent processing loop
+   - Single dedicated thread via semaphore wait loop
+   - Processes intents sequentially (one at a time)
+   - CPU-only decision logic (microseconds)
+   - No I/O operations
+
+3. **Background Thread #2**: Execution loop
+   - Single dedicated thread via channel reader loop
+   - Processes execution requests sequentially (one at a time)
+   - I/O operations (milliseconds to seconds)
+   - SOLE writer to cache state (single-writer architecture)
+
+**Concurrency Guarantees:**
+
+- ✅ User requests NEVER block on decision evaluation
+- ✅ User requests NEVER block on rebalance execution
+- ✅ At most ONE decision evaluation active at a time (sequential loop processing)
+- ✅ At most ONE rebalance execution active at a time (sequential loop processing)
+- ✅ Cache mutations are SERIALIZED (single-writer via sequential processing)
+- ✅ No race conditions on cache state (read-only user path + single writer)
+
+---
+
+
+#### User Request Flow (User Thread - Synchronous until PublishIntent returns)
 ```
 1. UserRequestHandler.HandleRequestAsync() called
 2. Read from cache or fetch missing data from IDataSource
