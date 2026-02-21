@@ -216,7 +216,7 @@ public class WindowCacheDisposalTests
 
         // ACT - Start disposal and immediately try to use cache
         var disposalTask = cache.DisposeAsync().AsTask();
-        
+
         // Try to use cache while disposal is in progress
         var exception = await Record.ExceptionAsync(
             async () => await cache.GetDataAsync(range, CancellationToken.None));
@@ -259,7 +259,7 @@ public class WindowCacheDisposalTests
         // ARRANGE
         var cache = CreateCache();
         var range = Intervals.NET.Factories.Range.Closed<int>(0, 10);
-        
+
         // Use cache to start background processing
         await cache.GetDataAsync(range, CancellationToken.None);
 
@@ -285,17 +285,17 @@ public class WindowCacheDisposalTests
         {
             var cache = CreateCache();
             weakRef = new WeakReference(cache);
-            
+
             var range = Intervals.NET.Factories.Range.Closed<int>(0, 10);
             await cache.GetDataAsync(range, CancellationToken.None);
             await cache.WaitForIdleAsync();
-            
+
             await cache.DisposeAsync();
         }
 
         // ACT
         await CreateAndDisposeCache();
-        
+
         // Force garbage collection
         GC.Collect();
         GC.WaitForPendingFinalizers();
@@ -357,10 +357,10 @@ public class WindowCacheDisposalTests
         await using var cache = CreateCache();
         var range = Intervals.NET.Factories.Range.Closed<int>(0, 10);
         var data = await cache.GetDataAsync(range, CancellationToken.None);
-        
+
         // ASSERT
         Assert.Equal(11, data.Length);
-        
+
         // DisposeAsync will be called automatically at end of scope
     }
 
@@ -390,7 +390,7 @@ public class WindowCacheDisposalTests
 
         // ACT - Start GetDataAsync but don't await
         var getDataTask = cache.GetDataAsync(range, CancellationToken.None).AsTask();
-        
+
         // Immediately dispose while operation may be in progress
         await cache.DisposeAsync();
 

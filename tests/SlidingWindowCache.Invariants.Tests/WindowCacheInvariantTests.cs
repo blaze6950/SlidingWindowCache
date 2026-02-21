@@ -35,7 +35,7 @@ public sealed class WindowCacheInvariantTests : IAsyncDisposable
         {
             // Wait for any background rebalance from current test to complete
             await _currentCache.WaitForIdleAsync();
-            
+
             // Properly dispose the cache to release resources
             await _currentCache.DisposeAsync();
         }

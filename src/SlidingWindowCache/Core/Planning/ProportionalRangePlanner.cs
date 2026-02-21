@@ -1,5 +1,7 @@
 ﻿using Intervals.NET;
 using Intervals.NET.Domain.Abstractions;
+using SlidingWindowCache.Core.Rebalance.Decision;
+using SlidingWindowCache.Core.Rebalance.Intent;
 using SlidingWindowCache.Infrastructure.Extensions;
 using SlidingWindowCache.Public.Configuration;
 
@@ -8,13 +10,11 @@ namespace SlidingWindowCache.Core.Planning;
 /// <summary>
 ///     Computes the canonical <c>DesiredCacheRange</c> for a given user <c>RequestedRange</c> and cache geometry configuration.
 /// </summary>
-/// <typeparam name="TRange">Type used for range boundaries (must be comparable)</typeparam>
-/// <typeparam name="TDomain">Range domain implementation for span calculations</typeparam>
 /// <remarks>
 /// <para><strong>Architectural Context:</strong></para>
 /// <para>
 ///   <list type="bullet">
-///     <item><description>Invoked synchronously by <c>RebalanceDecisionEngine</c> within the background intent processing loop (<see cref="IntentController.ProcessIntentsAsync"/>)</description></item>
+///     <item><description>Invoked synchronously by <c>RebalanceDecisionEngine</c> within the background intent processing loop (<see cref="IntentController{TRange,TData,TDomain}.ProcessIntentsAsync"/>)</description></item>
 ///     <item><description>Defines the shape of the sliding window cache by expanding the requested range according to configuration</description></item>
 ///     <item><description><b>Pure function:</b> Stateless, value type, no side effects, deterministic: outcome depends only on configuration and request</description></item>
 ///     <item><description>Does <b>not</b> read or mutate cache state; independent of current cache contents</description></item>
@@ -62,9 +62,9 @@ internal readonly struct ProportionalRangePlanner<TRange, TDomain>
     /// <param name="options">Immutable cache geometry configuration (see <see cref="WindowCacheOptions"/>); provides proportional left/right sizing policies.</param>
     /// <param name="domain">Domain implementation used for range arithmetic and span calculations.</param>
     /// <remarks>
-/// <para>
-///   This constructor wires the planner to a specific cache configuration and domain only; it does not perform any computation or validation. The planner is invoked by <c>RebalanceDecisionEngine</c> during Stage 3 (Desired Range Computation) of the decision evaluation pipeline, which executes in the background intent processing loop.
-/// </para>
+    /// <para>
+    ///   This constructor wires the planner to a specific cache configuration and domain only; it does not perform any computation or validation. The planner is invoked by <c>RebalanceDecisionEngine</c> during Stage 3 (Desired Range Computation) of the decision evaluation pipeline, which executes in the background intent processing loop.
+    /// </para>
     /// <para>
     ///   <b>References:</b> Invariants E.30-E.33, D.25-D.26 (see <c>docs/invariants.md</c>).
     /// </para>
@@ -92,9 +92,9 @@ internal readonly struct ProportionalRangePlanner<TRange, TDomain>
     ///     <item><description>Enforces Invariants: E.30 (function of <c>RequestedRange + config</c>), E.31 (independent of cache state), E.32 (defines canonical convergent target), D.25-D.26 (analytical/CPU-only)</description></item>
     ///   </list>
     /// </para>
-/// <para>
-///   Typical usage: Invoked during Stage 3 of the rebalance decision pipeline by <c>RebalanceDecisionEngine.Evaluate()</c>, which runs in the background intent processing loop (<c>IntentController.ProcessIntentsAsync</c>). Executes after stability checks (Stages 1-2) and before equality validation (Stage 4).
-/// </para>
+    /// <para>
+    ///   Typical usage: Invoked during Stage 3 of the rebalance decision pipeline by <c>RebalanceDecisionEngine.Evaluate()</c>, which runs in the background intent processing loop (<c>IntentController.ProcessIntentsAsync</c>). Executes after stability checks (Stages 1-2) and before equality validation (Stage 4).
+    /// </para>
     /// <para>See also:
     ///   <see cref="ThresholdRebalancePolicy{TRange,TDomain}"/>
     ///   <see cref="docs/component-map.md#proportionalrangeplanner"/>

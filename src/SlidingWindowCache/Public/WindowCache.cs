@@ -317,10 +317,10 @@ public sealed class WindowCache<TRange, TData, TDomain>
     {
         // Three-state disposal pattern for idempotency and concurrent disposal support
         // States: 0 = active, 1 = disposing, 2 = disposed
-        
+
         // Attempt to transition from active (0) to disposing (1)
         var previousState = Interlocked.CompareExchange(ref _disposeState, 1, 0);
-        
+
         if (previousState == 0)
         {
             // This thread won the race - perform disposal

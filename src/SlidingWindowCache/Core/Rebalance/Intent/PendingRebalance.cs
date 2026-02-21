@@ -77,7 +77,7 @@ internal sealed class PendingRebalance<TRange>
     public void Cancel()
     {
         if (_cts == null) return;
-        
+
         try
         {
             _cts.Cancel();
