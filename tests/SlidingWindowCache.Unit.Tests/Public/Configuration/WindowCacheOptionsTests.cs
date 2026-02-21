@@ -647,4 +647,102 @@ public class WindowCacheOptionsTests
     }
 
     #endregion
+
+    #region Constructor - RebalanceQueueCapacity Tests
+
+    [Fact]
+    public void Constructor_WithNullRebalanceQueueCapacity_UsesUnboundedStrategy()
+    {
+        // ARRANGE & ACT
+        var options = new WindowCacheOptions(
+            leftCacheSize: 1.0,
+            rightCacheSize: 2.0,
+            readMode: UserCacheReadMode.Snapshot,
+            rebalanceQueueCapacity: null
+        );
+
+        // ASSERT
+        Assert.Null(options.RebalanceQueueCapacity);
+    }
+
+    [Fact]
+    public void Constructor_WithValidRebalanceQueueCapacity_UsesBoundedStrategy()
+    {
+        // ARRANGE & ACT
+        var options = new WindowCacheOptions(
+            leftCacheSize: 1.0,
+            rightCacheSize: 2.0,
+            readMode: UserCacheReadMode.Snapshot,
+            rebalanceQueueCapacity: 10
+        );
+
+        // ASSERT
+        Assert.Equal(10, options.RebalanceQueueCapacity);
+    }
+
+    [Fact]
+    public void Constructor_WithRebalanceQueueCapacityOne_IsValid()
+    {
+        // ARRANGE & ACT
+        var options = new WindowCacheOptions(
+            leftCacheSize: 1.0,
+            rightCacheSize: 2.0,
+            readMode: UserCacheReadMode.Snapshot,
+            rebalanceQueueCapacity: 1
+        );
+
+        // ASSERT
+        Assert.Equal(1, options.RebalanceQueueCapacity);
+    }
+
+    [Fact]
+    public void Constructor_WithRebalanceQueueCapacityZero_ThrowsArgumentOutOfRangeException()
+    {
+        // ARRANGE & ACT & ASSERT
+        var exception = Record.Exception(() => new WindowCacheOptions(
+            leftCacheSize: 1.0,
+            rightCacheSize: 2.0,
+            readMode: UserCacheReadMode.Snapshot,
+            rebalanceQueueCapacity: 0
+        ));
+
+        Assert.NotNull(exception);
+        Assert.IsType<ArgumentOutOfRangeException>(exception);
+        var argException = (ArgumentOutOfRangeException)exception;
+        Assert.Equal("rebalanceQueueCapacity", argException.ParamName);
+    }
+
+    [Fact]
+    public void Constructor_WithNegativeRebalanceQueueCapacity_ThrowsArgumentOutOfRangeException()
+    {
+        // ARRANGE & ACT & ASSERT
+        var exception = Record.Exception(() => new WindowCacheOptions(
+            leftCacheSize: 1.0,
+            rightCacheSize: 2.0,
+            readMode: UserCacheReadMode.Snapshot,
+            rebalanceQueueCapacity: -5
+        ));
+
+        Assert.NotNull(exception);
+        Assert.IsType<ArgumentOutOfRangeException>(exception);
+        var argException = (ArgumentOutOfRangeException)exception;
+        Assert.Equal("rebalanceQueueCapacity", argException.ParamName);
+    }
+
+    [Fact]
+    public void Constructor_WithDefaultParameters_RebalanceQueueCapacityIsNull()
+    {
+        // ARRANGE & ACT - Test that default is null (unbounded strategy)
+        var options = new WindowCacheOptions(
+            leftCacheSize: 1.0,
+            rightCacheSize: 2.0,
+            readMode: UserCacheReadMode.Snapshot
+        );
+
+        // ASSERT
+        Assert.Null(options.RebalanceQueueCapacity);
+    }
+
+    #endregion
 }
+

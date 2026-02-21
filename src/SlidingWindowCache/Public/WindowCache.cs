@@ -182,9 +182,10 @@ public sealed class WindowCache<TRange, TData, TDomain>
             new RebalanceExecutor<TRange, TData, TDomain>(state, cacheFetcher, cacheDiagnostics);
 
         // Create execution actor (guarantees single-threaded cache mutations)
-        var executionController = new RebalanceExecutionController<TRange, TData, TDomain>(
+        // Strategy selected based on RebalanceQueueCapacity configuration
+        var executionController = CreateExecutionController(
             executor,
-            options.DebounceDelay,
+            options,
             cacheDiagnostics,
             _activityCounter
         );
@@ -208,6 +209,37 @@ public sealed class WindowCache<TRange, TData, TDomain>
         );
 
         return;
+
+        // Factory method to create the appropriate execution controller based on the specified rebalance queue capacity
+        static IRebalanceExecutionController<TRange, TData, TDomain> CreateExecutionController(
+            RebalanceExecutor<TRange, TData, TDomain> executor,
+            WindowCacheOptions options,
+            ICacheDiagnostics cacheDiagnostics,
+            AsyncActivityCounter activityCounter
+        )
+        {
+            if (options.RebalanceQueueCapacity == null)
+            {
+                // Unbounded strategy: Task-based serialization (default, recommended for most scenarios)
+                return new TaskBasedRebalanceExecutionController<TRange, TData, TDomain>(
+                    executor,
+                    options.DebounceDelay,
+                    cacheDiagnostics,
+                    activityCounter
+                );
+            }
+            else
+            {
+                // Bounded strategy: Channel-based serialization with backpressure support
+                return new ChannelBasedRebalanceExecutionController<TRange, TData, TDomain>(
+                    executor,
+                    options.DebounceDelay,
+                    cacheDiagnostics,
+                    activityCounter,
+                    options.RebalanceQueueCapacity.Value
+                );
+            }
+        }
 
         // Factory method to create the appropriate cache storage based on the specified read mode in options
         static ICacheStorage<TRange, TData, TDomain> CreateCacheStorage(

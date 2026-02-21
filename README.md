@@ -477,6 +477,33 @@ See [Understanding the Sliding Window](#-understanding-the-sliding-window) for v
 - **Typical values**: 20ms to 200ms (depending on data source latency)
 - **Trade-off**: Higher values reduce rebalance frequency but may delay cache optimization
 
+#### Execution Strategy
+
+**`rebalanceQueueCapacity`** (int?, default: null)
+
+- **Definition**: Controls the rebalance execution serialization strategy
+- **Default**: `null` (unbounded task-based strategy - recommended for most scenarios)
+- **Bounded capacity**: Set to `>= 1` to use channel-based strategy with backpressure
+- **Purpose**: Choose between lightweight task chaining or strict queue capacity control
+- **When to use bounded strategy**:
+  - High-frequency rebalance scenarios requiring backpressure
+  - Memory-constrained environments where queue growth must be limited
+  - Testing scenarios requiring deterministic queue behavior
+- **When to use unbounded strategy (default)**:
+  - Normal operation with typical rebalance frequencies
+  - Maximum performance with minimal overhead
+  - Fire-and-forget execution model preferred
+- **Trade-off**: Bounded capacity provides backpressure control but may slow intent processing when queue is full
+
+**Strategy Comparison:**
+
+| Strategy                 | Queue Capacity            | Backpressure     | Overhead        | Use Case                               |
+|--------------------------|---------------------------|------------------|-----------------|----------------------------------------|
+| **Task-based** (default) | Unbounded                 | None             | Minimal         | Recommended for most scenarios         |
+| **Channel-based**        | Bounded (`capacity >= 1`) | Blocks when full | Slightly higher | High-frequency or resource-constrained |
+
+**Note**: Both strategies guarantee single-writer architecture - only one rebalance executes at a time.
+
 ### Configuration Examples
 
 **Forward-heavy scrolling** (e.g., log viewer, video player):
@@ -510,6 +537,19 @@ var options = new WindowCacheOptions(
     leftThreshold: 0.1,    // Rebalance early to maintain large buffers
     rightThreshold: 0.1,
     debounceDelay: TimeSpan.FromMilliseconds(100)  // Wait for access pattern to stabilize
+);
+```
+
+**Bounded execution strategy** (e.g., high-frequency access with backpressure control):
+
+```csharp
+var options = new WindowCacheOptions(
+    leftCacheSize: 1.0,
+    rightCacheSize: 2.0,
+    readMode: UserCacheReadMode.Snapshot,
+    leftThreshold: 0.2,
+    rightThreshold: 0.2,
+    rebalanceQueueCapacity: 5  // Limit pending rebalance operations to 5
 );
 ```
 

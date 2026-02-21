@@ -627,16 +627,18 @@ RebalanceExecutor
 
 ### Actor Execution Contexts
 
-| Actor                      | Execution Context                           | Invoked By                       |
-|----------------------------|---------------------------------------------|----------------------------------|
-| UserRequestHandler         | User Thread                                 | User (public API)                |
-| IntentController.PublishIntent | **User Thread (atomic publish only)**   | UserRequestHandler               |
-| IntentController.ProcessIntentsAsync | **Background Loop #1 (intent processing)** | Background task (awaits semaphore) |
-| RebalanceDecisionEngine    | **Background Loop #1 (intent processing)** | IntentController.ProcessIntentsAsync |
-| CacheGeometryPolicy        | **Background Loop #1 (intent processing)** | RebalanceDecisionEngine          |
-| RebalanceExecutionController | **Background Loop #2 (execution)**        | Background task (channel reader) |
-| RebalanceExecutor          | **Background Loop #2 (execution)**         | RebalanceExecutionController     |
-| CacheStateManager          | Both (User: reads, Background #2: writes)  | Both paths (single-writer)       |
+| Actor                                    | Execution Context                                | Invoked By                                    |
+|------------------------------------------|--------------------------------------------------|-----------------------------------------------|
+| UserRequestHandler                       | User Thread                                      | User (public API)                             |
+| IntentController.PublishIntent           | **User Thread (atomic publish only)**            | UserRequestHandler                            |
+| IntentController.ProcessIntentsAsync     | **Background Loop #1 (intent processing)**       | Background task (awaits semaphore)            |
+| RebalanceDecisionEngine                  | **Background Loop #1 (intent processing)**       | IntentController.ProcessIntentsAsync          |
+| CacheGeometryPolicy                      | **Background Loop #1 (intent processing)**       | RebalanceDecisionEngine                       |
+| IRebalanceExecutionController            | **Background Execution (strategy-specific)**     | IntentController.ProcessIntentsAsync          |
+| TaskBasedRebalanceExecutionController    | **Background (ThreadPool task chain)**           | Via interface (default strategy)              |
+| ChannelBasedRebalanceExecutionController | **Background Loop #2 (channel reader)**          | Via interface (optional strategy)             |
+| RebalanceExecutor                        | **Background Execution (both strategies)**       | IRebalanceExecutionController implementations |
+| CacheStateManager                        | Both (User: reads, Background execution: writes) | Both paths (single-writer)                    |
 
 **Critical:** User thread ends at `PublishIntent()` return (after atomic operations). Decision evaluation runs in background intent processing loop. Cache mutations run in separate background execution loop.
 

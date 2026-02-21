@@ -29,12 +29,12 @@ This document provides a comprehensive map of all components in the Sliding Wind
 
 ## Component Statistics
 
-**Total Components**: 19 files in the codebase
+**Total Components**: 22 files in the codebase
 
 **By Type**:
-- 🟦 **Classes (Reference Types)**: 10
+- 🟦 **Classes (Reference Types)**: 12
 - 🟩 **Structs (Value Types)**: 3
-- 🟧 **Interfaces**: 2
+- 🟧 **Interfaces**: 3
 - 🟪 **Enums**: 1
 - 🟨 **Records**: 2
 
@@ -91,7 +91,9 @@ This document provides a comprehensive map of all components in the Sliding Wind
 └── composes (at construction):
     ├── 🟦 CacheState<TRange, TData, TDomain>              ⚠️ Shared Mutable
     ├── 🟦 IntentController<TRange, TData, TDomain>
-    │   └── owns → 🟦 RebalanceScheduler<TRange, TData, TDomain>
+    │   └── uses → 🟧 IRebalanceExecutionController<TRange, TData, TDomain>
+    │       ├── implements → 🟦 TaskBasedRebalanceExecutionController (default)
+    │       └── implements → 🟦 ChannelBasedRebalanceExecutionController (optional)
     ├── 🟦 RebalanceDecisionEngine<TRange, TDomain>
     │   ├── owns → 🟩 ThresholdRebalancePolicy<TRange, TDomain>
     │   └── owns → 🟩 ProportionalRangePlanner<TRange, TDomain>
@@ -1244,6 +1246,169 @@ public async Task ExecuteAsync(
 
 ---
 
+#### 🟧 IRebalanceExecutionController<TRange, TData, TDomain>
+```csharp
+internal interface IRebalanceExecutionController<TRange, TData, TDomain> : IAsyncDisposable
+```
+
+**File**: `src/SlidingWindowCache/Core/Rebalance/Execution/IRebalanceExecutionController.cs`
+
+**Type**: Interface
+
+**Role**: Abstraction for rebalance execution serialization strategies
+
+**Purpose**: Defines the contract for serializing rebalance execution requests. Implementations guarantee single-writer architecture by ensuring only one rebalance executes at a time.
+
+**Methods**:
+```csharp
+void PublishExecutionRequest(
+    Intent<TRange, TData, TDomain> intent,
+    Range<TRange> desiredRange,
+    Range<TRange>? desiredNoRebalanceRange,
+    CancellationToken cancellationToken);
+
+ExecutionRequest<TRange, TData, TDomain>? LastExecutionRequest { get; }
+
+ValueTask DisposeAsync();
+```
+
+**Implementations**:
+- `TaskBasedRebalanceExecutionController` - Unbounded task chaining (default, minimal overhead)
+- `ChannelBasedRebalanceExecutionController` - Bounded channel with backpressure
+
+**Strategy Selection**: Configured via `WindowCacheOptions.RebalanceQueueCapacity`
+- `null` → Task-based strategy (recommended)
+- `>= 1` → Channel-based strategy
+
+**Characteristics**:
+- ✅ Single-writer guarantee (both implementations)
+- ✅ Cancellation support
+- ✅ Async disposal for graceful shutdown
+- ✅ Strategy pattern for execution serialization
+
+---
+
+#### 🟦 TaskBasedRebalanceExecutionController<TRange, TData, TDomain>
+```csharp
+internal sealed class TaskBasedRebalanceExecutionController<TRange, TData, TDomain> : 
+    IRebalanceExecutionController<TRange, TData, TDomain>
+```
+
+**File**: `src/SlidingWindowCache/Core/Rebalance/Execution/TaskBasedRebalanceExecutionController.cs`
+
+**Type**: Class (sealed)
+
+**Role**: Unbounded execution serialization using lock-free task chaining (default strategy)
+
+**Fields**:
+- `RebalanceExecutor<TRange, TData, TDomain> _executor` (readonly)
+- `TimeSpan _debounceDelay` (readonly)
+- `ICacheDiagnostics _cacheDiagnostics` (readonly)
+- `AsyncActivityCounter _activityCounter` (readonly)
+- `Task _currentExecutionTask` (volatile write for single-writer pattern)
+- `ExecutionRequest<TRange, TData, TDomain>? _lastExecutionRequest` (volatile)
+- `int _disposeState` (Interlocked)
+
+**Serialization Mechanism**:
+```csharp
+public ValueTask PublishExecutionRequest(...)
+{
+    _lastExecutionRequest = new ExecutionRequest(...);
+    
+    // Lock-free task chaining (single-writer: intent processing loop)
+    var previousTask = _currentExecutionTask;
+    var newTask = ChainExecutionAsync(previousTask, request);
+    Volatile.Write(ref _currentExecutionTask, newTask);
+    
+    return ValueTask.CompletedTask; // Synchronous completion
+}
+
+private async Task ChainExecutionAsync(Task previousTask, ExecutionRequest request)
+{
+    await previousTask.ConfigureAwait(false);  // Sequential guarantee
+    await ExecuteRequestAsync(request).ConfigureAwait(false);
+}
+```
+
+**Characteristics**:
+- ✅ **Unbounded** - no queue capacity limit
+- ✅ **Lock-free** - volatile write for single-writer pattern
+- ✅ **Fire-and-forget** - returns `ValueTask.CompletedTask` immediately
+- ✅ **Minimal overhead** - single Task reference + volatile write
+- ✅ **Sequential execution** - `ChainExecutionAsync` ensures one at a time
+- ✅ **Cancellation** - integrated via CancellationToken
+- ✅ **Graceful disposal** - awaits final task completion
+
+**Use Cases**:
+- Normal operation with typical rebalance frequencies
+- Maximum performance with minimal overhead
+- Default/recommended strategy
+
+**Ownership**: Created by WindowCache factory method
+
+**Execution Context**: Background / ThreadPool
+
+---
+
+#### 🟦 ChannelBasedRebalanceExecutionController<TRange, TData, TDomain>
+```csharp
+internal sealed class ChannelBasedRebalanceExecutionController<TRange, TData, TDomain> : 
+    IRebalanceExecutionController<TRange, TData, TDomain>
+```
+
+**File**: `src/SlidingWindowCache/Core/Rebalance/Execution/ChannelBasedRebalanceExecutionController.cs`
+
+**Type**: Class (sealed)
+
+**Role**: Bounded execution serialization using System.Threading.Channels (optional strategy)
+
+**Fields**:
+- `Channel<ExecutionRequest<TRange, TData, TDomain>> _executionChannel` (bounded capacity)
+- `RebalanceExecutor<TRange, TData, TDomain> _executor` (readonly)
+- `TimeSpan _debounceDelay` (readonly)
+- `ICacheDiagnostics _cacheDiagnostics` (readonly)
+- `AsyncActivityCounter _activityCounter` (readonly)
+- `Task _executionLoopTask` (background loop)
+- `ExecutionRequest<TRange, TData, TDomain>? _lastExecutionRequest` (Interlocked)
+- `int _disposeState` (Interlocked)
+
+**Serialization Mechanism**:
+```csharp
+public async ValueTask PublishExecutionRequest(...)
+{
+    _lastExecutionRequest = new ExecutionRequest(...);
+    
+    // Async await creates backpressure when channel is full
+    await _executionChannel.Writer.WriteAsync(request).ConfigureAwait(false);
+}
+
+private async Task ProcessExecutionRequestsAsync()
+{
+    await foreach (var request in _executionChannel.Reader.ReadAllAsync())
+    {
+        await ExecuteRequestAsync(request).ConfigureAwait(false);
+    }
+}
+```
+
+**Characteristics**:
+- ✅ **Bounded capacity** - strict limit on pending operations
+- ✅ **Backpressure** - async await blocks intent processing when full
+- ✅ **Background loop** - processes requests sequentially
+- ✅ **Cancellation** - superseded operations cancelled before queueing
+- ✅ **Graceful disposal** - completes writer and drains remaining operations
+
+**Use Cases**:
+- High-frequency rebalance scenarios
+- Memory-constrained environments
+- Testing scenarios requiring deterministic queue behavior
+
+**Ownership**: Created by WindowCache factory method
+
+**Execution Context**: Background / ThreadPool
+
+---
+
 #### 🟦 CacheDataExtensionService<TRange, TData, TDomain>
 ```csharp
 internal sealed class CacheDataExtensionService<TRange, TData, TDomain>
@@ -1343,14 +1508,37 @@ public WindowCache(
     var decisionEngine = new RebalanceDecisionEngine<TRange, TDomain>(rebalancePolicy, rangePlanner, noRebalancePlanner);
     var executor = new RebalanceExecutor<TRange, TData, TDomain>(state, cacheFetcher, cacheDiagnostics);
     
-    var executionController = new RebalanceExecutionController<TRange, TData, TDomain>(
-        executor, options.DebounceDelay, cacheDiagnostics, _activityCounter);
+    // Factory method selects execution strategy based on configuration
+    var executionController = CreateExecutionController(
+        executor, options, cacheDiagnostics, _activityCounter);
     
     var intentController = new IntentController<TRange, TData, TDomain>(
         state, decisionEngine, executionController, cacheDiagnostics, _activityCounter);
     
     _userRequestHandler = new UserRequestHandler<TRange, TData, TDomain>(
         state, cacheFetcher, intentController, dataSource, cacheDiagnostics);
+}
+
+// Factory method for execution strategy selection
+private static IRebalanceExecutionController<TRange, TData, TDomain> CreateExecutionController(
+    RebalanceExecutor<TRange, TData, TDomain> executor,
+    WindowCacheOptions options,
+    ICacheDiagnostics cacheDiagnostics,
+    AsyncActivityCounter activityCounter)
+{
+    if (options.RebalanceQueueCapacity.HasValue)
+    {
+        // Bounded channel strategy with backpressure
+        return new ChannelBasedRebalanceExecutionController<TRange, TData, TDomain>(
+            executor, options.DebounceDelay, cacheDiagnostics, activityCounter,
+            options.RebalanceQueueCapacity.Value);
+    }
+    else
+    {
+        // Task-based strategy (default, unbounded)
+        return new TaskBasedRebalanceExecutionController<TRange, TData, TDomain>(
+            executor, options.DebounceDelay, cacheDiagnostics, activityCounter);
+    }
 }
 ```
 
@@ -1413,7 +1601,7 @@ public async ValueTask DisposeAsync()
 - Owns all internal components
 - Created by user
 - Should be disposed when no longer needed
-- Disposal cascades: WindowCache → UserRequestHandler → IntentController → RebalanceExecutionController
+- Disposal cascades: WindowCache → UserRequestHandler → IntentController → IRebalanceExecutionController (Task-based or Channel-based)
 
 **Execution Context**: Neutral (just delegates)
 
@@ -1746,22 +1934,23 @@ The Sliding Window Cache follows a **single consumer model** as documented in `d
 
 ### Thread Contexts
 
-| Component                         | Thread Context    | Notes                                                     |
-|-----------------------------------|-------------------|-----------------------------------------------------------|
-| **WindowCache**                   | Neutral           | Just delegates                                            |
-| **UserRequestHandler**                     | ⚡ **User Thread** | Synchronous, fast path (user request handling)            |
-| **IntentController.PublishIntent()**       | ⚡ **User Thread** | Atomic intent storage + semaphore signal (fire-and-forget)|
-| **IntentController.ProcessIntentsAsync()** | 🔄 **Background**  | Intent processing loop, invokes DecisionEngine            |
-| **RebalanceDecisionEngine**                | 🔄 **Background**  | Invoked in intent processing loop, CPU-only logic         |
-| **ProportionalRangePlanner**               | 🔄 **Background**  | Invoked by DecisionEngine in intent processing loop       |
-| **NoRebalanceRangePlanner**                | 🔄 **Background**  | Invoked by DecisionEngine in intent processing loop       |
-| **ThresholdRebalancePolicy**               | 🔄 **Background**  | Invoked by DecisionEngine in intent processing loop       |
-| **RebalanceExecutionController.PublishExecutionRequest()** | 🔄 **Background** | Invoked by intent loop, enqueues to channel    |
-| **RebalanceExecutionController.ProcessExecutionRequestsAsync()** | 🔄 **Background** | Execution loop, invokes Executor       |
-| **RebalanceExecutor**             | 🔄 **Background** | ThreadPool, async, I/O                                    |
-| **CacheDataExtensionService**     | Both ⚡🔄          | User Thread OR Background                                 |
-| **CacheState**                    | Both ⚡🔄          | Shared mutable (no locks!)                                |
-| **Storage (Snapshot/CopyOnRead)** | Both ⚡🔄          | Owned by CacheState                                       |
+| Component                                                                    | Thread Context    | Notes                                                                 |
+|------------------------------------------------------------------------------|-------------------|-----------------------------------------------------------------------|
+| **WindowCache**                                                              | Neutral           | Just delegates                                                        |
+| **UserRequestHandler**                                                       | ⚡ **User Thread** | Synchronous, fast path (user request handling)                        |
+| **IntentController.PublishIntent()**                                         | ⚡ **User Thread** | Atomic intent storage + semaphore signal (fire-and-forget)            |
+| **IntentController.ProcessIntentsAsync()**                                   | 🔄 **Background** | Intent processing loop, invokes DecisionEngine                        |
+| **RebalanceDecisionEngine**                                                  | 🔄 **Background** | Invoked in intent processing loop, CPU-only logic                     |
+| **ProportionalRangePlanner**                                                 | 🔄 **Background** | Invoked by DecisionEngine in intent processing loop                   |
+| **NoRebalanceRangePlanner**                                                  | 🔄 **Background** | Invoked by DecisionEngine in intent processing loop                   |
+| **ThresholdRebalancePolicy**                                                 | 🔄 **Background** | Invoked by DecisionEngine in intent processing loop                   |
+| **IRebalanceExecutionController.PublishExecutionRequest()**                  | 🔄 **Background** | Invoked by intent loop (task-based: sync, channel-based: async await) |
+| **TaskBasedRebalanceExecutionController.ChainExecutionAsync()**              | 🔄 **Background** | Task chain execution (sequential)                                     |
+| **ChannelBasedRebalanceExecutionController.ProcessExecutionRequestsAsync()** | 🔄 **Background** | Channel loop execution                                                |
+| **RebalanceExecutor**                                                        | 🔄 **Background** | ThreadPool, async, I/O                                                |
+| **CacheDataExtensionService**                                                | Both ⚡🔄          | User Thread OR Background                                             |
+| **CacheState**                                                               | Both ⚡🔄          | Shared mutable (no locks!)                                            |
+| **Storage (Snapshot/CopyOnRead)**                                            | Both ⚡🔄          | Owned by CacheState                                                   |
 
 **Critical:** PublishIntent() is a **synchronous operation in user thread** (atomic ops only, no decision logic). Decision logic (DecisionEngine, Planners, Policy) executes in **background intent processing loop**. Rebalance execution (I/O) happens in **separate background execution loop**.
 
@@ -1787,7 +1976,7 @@ The Sliding Window Cache follows a **single consumer model** as documented in `d
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
-│ PHASE 1: USER THREAD (Synchronous - Fast Path)                         │
+│ PHASE 1: USER THREAD (Synchronous - Fast Path)                          │
 ├─────────────────────────────────────────────────────────────────────────┤
 │ Component                  │ Operation                                  │
 ├────────────────────────────┼────────────────────────────────────────────┤
@@ -1806,7 +1995,7 @@ The Sliding Window Cache follows a **single consumer model** as documented in `d
 └─────────────────────────────────────────────────────────────────────────┘
                                       ↓ (semaphore signal)
 ┌─────────────────────────────────────────────────────────────────────────┐
-│ PHASE 2: BACKGROUND THREAD #1 (Intent Processing Loop)                 │
+│ PHASE 2: BACKGROUND THREAD #1 (Intent Processing Loop)                  │
 ├─────────────────────────────────────────────────────────────────────────┤
 │ Component                        │ Operation                            │
 ├──────────────────────────────────┼──────────────────────────────────────┤
@@ -1826,18 +2015,26 @@ The Sliding Window Cache follows a **single consumer model** as documented in `d
 │           ↓                      │                                      │
 │ Cancel previous execution        │ • lastExecutionRequest?.Cancel()     │
 │           ↓                      │                                      │
-│ RebalanceExecutionController     │ • Create ExecutionRequest            │
-│  .PublishExecutionRequest()      │ • Channel.Writer.TryWrite(request)   │
+│ IRebalanceExecutionController    │ • Create ExecutionRequest            │
+│  .PublishExecutionRequest()      │ • Task-based: Volatile.Write (sync)  │
+│                                  │ • Channel-based: await WriteAsync()  │
 └─────────────────────────────────────────────────────────────────────────┘
-                                      ↓ (channel message)
+                                      ↓ (strategy-specific)
 ┌─────────────────────────────────────────────────────────────────────────┐
-│ PHASE 3: BACKGROUND THREAD #2 (Execution Loop)                         │
+│ PHASE 3: BACKGROUND EXECUTION (Strategy-Specific)                       │
 ├─────────────────────────────────────────────────────────────────────────┤
 │ Component                        │ Operation                            │
 ├──────────────────────────────────┼──────────────────────────────────────┤
-│ RebalanceExecutionController     │ • await foreach (channel read)       │
-│  .ProcessExecutionRequestsAsync()│ • await Task.Delay(debounce)         │
-│  (infinite background loop)      │ • Cancellation check                 │
+│ TASK-BASED STRATEGY:             │                                      │
+│ ChainExecutionAsync()            │ • await previousTask                 │
+│  (chained async method)          │ • await ExecuteRequestAsync()        │
+│           ↓                      │                                      │
+│ OR CHANNEL-BASED STRATEGY:       │                                      │
+│ ProcessExecutionRequestsAsync()  │ • await foreach (channel read)       │
+│  (infinite background loop)      │ • Sequential processing              │
+│           ↓                      │                                      │
+│ ExecuteRequestAsync()            │ • await Task.Delay(debounce)         │
+│  (both strategies)               │ • Cancellation check                 │
 │           ↓                      │                                      │
 │ RebalanceExecutor                │ • Extend cache data (I/O)            │
 │  .ExecuteAsync()                 │ • Trim to desired range              │
@@ -1863,9 +2060,10 @@ The Sliding Window Cache follows a **single consumer model** as documented in `d
    - CPU-only decision logic (microseconds)
    - No I/O operations
 
-3. **Background Thread #2**: Execution loop
-   - Single dedicated thread via channel reader loop
-   - Processes execution requests sequentially (one at a time)
+3. **Background Execution**: Strategy-specific serialization
+   - **Task-based**: Chained async methods on ThreadPool (await previousTask pattern)
+   - **Channel-based**: Single dedicated loop via channel reader (sequential processing)
+   - Both: Process execution requests sequentially (one at a time)
    - I/O operations (milliseconds to seconds)
    - SOLE writer to cache state (single-writer architecture)
 

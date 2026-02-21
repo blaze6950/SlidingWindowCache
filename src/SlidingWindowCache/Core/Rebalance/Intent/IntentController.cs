@@ -79,7 +79,7 @@ internal sealed class IntentController<TRange, TData, TDomain>
     where TDomain : IRangeDomain<TRange>
 {
     private readonly RebalanceDecisionEngine<TRange, TDomain> _decisionEngine;
-    private readonly RebalanceExecutionController<TRange, TData, TDomain> _executionController;
+    private readonly IRebalanceExecutionController<TRange, TData, TDomain> _executionController;
     private readonly CacheState<TRange, TData, TDomain> _state;
     private readonly ICacheDiagnostics _cacheDiagnostics;
 
@@ -117,7 +117,7 @@ internal sealed class IntentController<TRange, TData, TDomain>
     public IntentController(
         CacheState<TRange, TData, TDomain> state,
         RebalanceDecisionEngine<TRange, TDomain> decisionEngine,
-        RebalanceExecutionController<TRange, TData, TDomain> executionController,
+        IRebalanceExecutionController<TRange, TData, TDomain> executionController,
         ICacheDiagnostics cacheDiagnostics,
         AsyncActivityCounter activityCounter
     )
@@ -248,11 +248,11 @@ internal sealed class IntentController<TRange, TData, TDomain>
                     // Cancel previous execution
                     lastExecutionRequest?.Cancel();
 
-                    _executionController.PublishExecutionRequest(
+                    await _executionController.PublishExecutionRequest(
                         intent: intent,
                         desiredRange: decision.DesiredRange!.Value,
                         desiredNoRebalanceRange: decision.DesiredNoRebalanceRange
-                    );
+                    ).ConfigureAwait(false);
                 }
                 catch (OperationCanceledException) when (_loopCancellation.Token.IsCancellationRequested)
                 {

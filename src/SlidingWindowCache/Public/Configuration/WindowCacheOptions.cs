@@ -18,8 +18,14 @@ public record WindowCacheOptions
     /// <param name="leftThreshold">The left threshold percentage (optional).</param>
     /// <param name="rightThreshold">The right threshold percentage (optional).</param>
     /// <param name="debounceDelay">The debounce delay for rebalance operations (optional).</param>
+    /// <param name="rebalanceQueueCapacity">
+    /// The rebalance execution queue capacity that determines the execution strategy (optional).
+    /// If null (default), uses unbounded task-based serialization (recommended for most scenarios).
+    /// If >= 1, uses bounded channel-based serialization with the specified capacity for backpressure control.
+    /// </param>
     /// <exception cref="ArgumentOutOfRangeException">
-    /// Thrown when LeftCacheSize, RightCacheSize, LeftThreshold, or RightThreshold is less than 0.
+    /// Thrown when LeftCacheSize, RightCacheSize, LeftThreshold, RightThreshold is less than 0,
+    /// or when RebalanceQueueCapacity is less than or equal to 0.
     /// </exception>
     public WindowCacheOptions(
         double leftCacheSize,
@@ -27,7 +33,8 @@ public record WindowCacheOptions
         UserCacheReadMode readMode,
         double? leftThreshold = null,
         double? rightThreshold = null,
-        TimeSpan? debounceDelay = null
+        TimeSpan? debounceDelay = null,
+        int? rebalanceQueueCapacity = null
     )
     {
         if (leftCacheSize < 0)
@@ -54,12 +61,19 @@ public record WindowCacheOptions
                 "RightThreshold must be greater than or equal to 0.");
         }
 
+        if (rebalanceQueueCapacity is <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(rebalanceQueueCapacity),
+                "RebalanceQueueCapacity must be greater than 0 or null.");
+        }
+
         LeftCacheSize = leftCacheSize;
         RightCacheSize = rightCacheSize;
         ReadMode = readMode;
         LeftThreshold = leftThreshold;
         RightThreshold = rightThreshold;
         DebounceDelay = debounceDelay ?? TimeSpan.FromMilliseconds(100);
+        RebalanceQueueCapacity = rebalanceQueueCapacity;
     }
 
     /// <summary>
@@ -106,4 +120,40 @@ public record WindowCacheOptions
     /// The read mode that determines how materialized cache data is exposed to users.
     /// </summary>
     public UserCacheReadMode ReadMode { get; }
+
+    /// <summary>
+    /// The rebalance execution queue capacity that controls the execution strategy and backpressure behavior.
+    /// </summary>
+    /// <remarks>
+    /// <para><strong>Strategy Selection:</strong></para>
+    /// <list type="bullet">
+    /// <item><description>
+    /// <strong>null (default)</strong> - Unbounded task-based serialization:
+    /// Uses task chaining for execution serialization. Lightweight with minimal overhead.
+    /// No queue capacity limits. Recommended for most scenarios (standard web APIs, IoT processing, background jobs).
+    /// </description></item>
+    /// <item><description>
+    /// <strong>>= 1</strong> - Bounded channel-based serialization:
+    /// Uses System.Threading.Channels with the specified capacity for execution serialization.
+    /// Provides backpressure by blocking intent processing when queue is full.
+    /// Recommended for high-frequency scenarios or resource-constrained environments (real-time dashboards, streaming data).
+    /// </description></item>
+    /// </list>
+    /// <para><strong>Trade-offs:</strong></para>
+    /// <para>
+    /// <strong>Unbounded (null):</strong> Simple, sufficient for typical workloads, no backpressure overhead.
+    /// May accumulate requests under extreme sustained load.
+    /// </para>
+    /// <para>
+    /// <strong>Bounded (>= 1):</strong> Predictable memory usage, natural backpressure throttles upstream.
+    /// Intent processing blocks when queue is full (intentional throttling mechanism).
+    /// </para>
+    /// <para><strong>Typical Values:</strong></para>
+    /// <list type="bullet">
+    /// <item><description>null - Most scenarios (recommended default)</description></item>
+    /// <item><description>5-10 - High-frequency updates with moderate backpressure</description></item>
+    /// <item><description>3-5 - Resource-constrained environments requiring strict memory control</description></item>
+    /// </list>
+    /// </remarks>
+    public int? RebalanceQueueCapacity { get; }
 }

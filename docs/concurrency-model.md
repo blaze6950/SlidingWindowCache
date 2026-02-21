@@ -51,9 +51,55 @@ User Path safely reads cache state without locks because:
 
 ### Execution Serialization
 
-While the single-writer architecture eliminates write-write races between User Path and Rebalance Execution, multiple rebalance operations can be scheduled concurrently. To guarantee that only one rebalance execution writes to cache state at a time, `RebalanceExecutor` uses a `SemaphoreSlim(1, 1)` for mutual exclusion.
+While the single-writer architecture eliminates write-write races between User Path and Rebalance Execution, multiple rebalance operations can be scheduled concurrently. To guarantee that only one rebalance execution writes to cache state at a time, the system uses two layers of serialization:
 
-**Serialization Mechanism:**
+1. **Execution Controller Layer**: Serializes rebalance execution requests using one of two strategies (configured via `WindowCacheOptions.RebalanceQueueCapacity`)
+2. **Executor Layer**: `RebalanceExecutor` uses `SemaphoreSlim(1, 1)` for mutual exclusion during cache mutations
+
+**Execution Controller Strategies:**
+
+The system supports two strategies for serializing rebalance execution requests:
+
+| Strategy                 | Configuration                  | Mechanism                                            | Backpressure                            | Use Case                                                      |
+|--------------------------|--------------------------------|------------------------------------------------------|-----------------------------------------|---------------------------------------------------------------|
+| **Task-based** (default) | `rebalanceQueueCapacity: null` | Lock-free task chaining with `ChainExecutionAsync()` | None (completes synchronously)          | Recommended for most scenarios - minimal overhead             |
+| **Channel-based**        | `rebalanceQueueCapacity: >= 1` | `System.Threading.Channels` with bounded capacity    | Async await on `WriteAsync()` when full | High-frequency scenarios or resource-constrained environments |
+
+**Task-Based Strategy (Default - Unbounded):**
+
+```csharp
+// Implementation: TaskBasedRebalanceExecutionController
+// Serialization: Lock-free task chaining using volatile write (single-writer pattern)
+// Backpressure: None - returns ValueTask.CompletedTask immediately
+// Overhead: Minimal - single Task reference + volatile write
+// Pattern: ChainExecutionAsync(previousTask, request) ensures sequential execution
+```
+
+- **Single-Writer Pattern**: Lock-free using volatile write (only intent processing loop writes)
+- **Execution**: Fire-and-forget (returns `ValueTask.CompletedTask` immediately, executes on ThreadPool)
+- **Cancellation**: Previous request cancelled before chaining new execution
+- **Task Chaining**: `await previousTask; await ExecuteRequestAsync(request);` ensures serial execution
+- **Disposal**: Captures task chain via volatile read and awaits completion for graceful shutdown
+
+**Channel-Based Strategy (Bounded):**
+
+```csharp
+// Implementation: ChannelBasedRebalanceExecutionController
+// Serialization: Bounded channel with single reader/writer
+// Backpressure: Async await on WriteAsync() - blocks intent loop when full
+// Overhead: Channel infrastructure + background processing loop
+// Pattern: await WriteAsync(request) creates proper backpressure
+```
+
+- **Capacity Control**: Strict limit on pending rebalance operations (bounded channel capacity)
+- **Backpressure**: `await WriteAsync()` blocks intent processing loop when channel is full (intentional throttling)
+- **Execution**: Background loop processes requests sequentially from channel (one at a time)
+- **Cancellation**: Superseded operations cancelled before new ones are enqueued
+- **Disposal**: Completes channel writer and awaits loop completion for graceful shutdown
+
+**Executor Layer (Both Strategies):**
+
+Regardless of the controller strategy, `RebalanceExecutor.ExecuteAsync()` uses `SemaphoreSlim(1, 1)` for mutual exclusion:
 
 - **`SemaphoreSlim`**: Ensures only one rebalance execution can proceed through cache mutation at a time
 - **Cancellation Token**: Provides early exit signaling - operations can be cancelled while waiting for the semaphore
@@ -66,17 +112,30 @@ While the single-writer architecture eliminates write-write races between User P
 - **SemaphoreSlim**: Mutual exclusion for cache writes (prevents concurrent execution)
 - Together: CTS signals "don't do this work anymore", semaphore enforces "only one at a time"
 
-**Design Properties:**
+**Design Properties (Both Strategies):**
 
 - ✅ **WebAssembly compatible** - async, no blocking threads
 - ✅ **Zero User Path blocking** - User Path never acquires semaphore, only rebalance execution does
 - ✅ **Production-grade** - prevents data corruption from parallel cache writes
 - ✅ **Lightweight** - semaphore rarely contended (rebalance is rare operation)
 - ✅ **Cancellation-friendly** - `WaitAsync(cancellationToken)` exits cleanly if cancelled
+- ✅ **Single-writer guarantee** - Only one rebalance executes at a time (architectural invariant)
 
 **Acquisition Point:**
 
 The semaphore is acquired at the start of `RebalanceExecutor.ExecuteAsync()`, before any I/O operations. This prevents queue buildup while allowing cancellation to propagate immediately. If cancelled during wait, the operation exits without acquiring the semaphore.
+
+**Strategy Selection Guidance:**
+
+- **Use Task-based (default)** for:
+  - Normal operation with typical rebalance frequencies
+  - Maximum performance with minimal overhead
+  - Fire-and-forget execution model
+  
+- **Use Channel-based (bounded)** for:
+  - High-frequency rebalance scenarios requiring backpressure
+  - Memory-constrained environments where queue growth must be limited
+  - Testing scenarios requiring deterministic queue behavior
 
 ### Rebalance Validation vs Cancellation
 
@@ -339,11 +398,9 @@ WindowCache.DisposeAsync()
       └─> IntentController.DisposeAsync()
           ├─> Cancel intent processing loop (CancellationTokenSource)
           ├─> Wait for processing loop to exit (Task.Wait)
-          ├─> RebalanceExecutionController.DisposeAsync()
-          │   ├─> Mark disposed (blocks new execution requests)
-          │   ├─> Complete execution channel (no new items)
-          │   ├─> Wait for execution loop to drain
-          │   └─> Cancel/dispose last pending execution
+          ├─> IRebalanceExecutionController.DisposeAsync()
+          │   ├─> Task-based: Capture task chain (volatile read) + await completion
+          │   └─> Channel-based: Complete channel writer + await loop completion
           └─> Dispose coordination resources (SemaphoreSlim, CancellationTokenSource)
 ```
 
