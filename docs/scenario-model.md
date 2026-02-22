@@ -52,7 +52,7 @@ observe-and-stabilize pattern based on Task lifecycle tracking.
 This synchronization mechanism is **not part of the domain flow** described below.
 It exists solely to enable deterministic testing without timing dependencies.
 
-See [Concurrency Model](concurrency-model.md) for implementation details.
+See [Architecture Model](architecture-model.md) for implementation details.
 
 ---
 
@@ -187,6 +187,10 @@ and violate the Cache Contiguity Rule (Invariant 9a). The cache MUST remain cont
 ---
 
 # II. REBALANCE DECISION PATH — Decision Scenarios
+
+> **📖 For architectural explanation of decision-driven execution, see:** [Architecture Model - Decision-Driven Execution](architecture-model.md#rebalance-validation-vs-cancellation)
+
+> **⚡ Execution Context:** This entire path executes in a **dedicated background thread** (IntentController.ProcessIntentsAsync loop). The user thread returns immediately after publishing the intent (fire-and-forget). See IntentController.cs:228-230 for implementation details.
 
 **Core Principle**: Rebalance necessity is determined by multi-stage analytical validation, not by intent existence.
 
@@ -500,8 +504,8 @@ All scenarios:
 ## Notes and Considerations
 
 1. Decision Path and Execution Path should not execute in the user thread.
-   Even though the Decision Path is lightweight and often results in no-op,
-   it may still involve asynchronous I/O (IDataSource access).
+   The Decision Path is lightweight, CPU-only (no I/O), and often results in no-op.
+   The Execution Path involves asynchronous I/O (IDataSource access).
 
    Using a ThreadPool-based or background scheduling approach aligns with
    the core philosophy of SlidingWindowCache:

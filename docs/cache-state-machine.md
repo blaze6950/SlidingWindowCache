@@ -2,6 +2,11 @@
 
 This document defines the formal state machine for the Sliding Window Cache, clarifying state transitions, mutation ownership, and concurrency control.
 
+> **📖 For related architectural concepts, see:**
+> - [Architecture Model](architecture-model.md) - Single-writer architecture, coordination mechanisms
+> - [Invariants](invariants.md) - State invariants and constraints
+> - [Scenario Model](scenario-model.md) - Temporal behavior and user scenarios
+
 ---
 
 ## States

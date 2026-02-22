@@ -65,6 +65,8 @@ the most recently requested range, significantly reducing the need for repeated 
 
 ### Decision-Driven Rebalance Execution
 
+> **📖 For detailed architectural explanation, see:** [Architecture Model - Decision-Driven Execution](docs/architecture-model.md#rebalance-validation-vs-cancellation)
+
 The cache uses a sophisticated **decision-driven model** where rebalance necessity is determined by analytical
 validation rather than blindly executing every user request. This prevents thrashing, reduces unnecessary I/O, and
 maintains stability under rapid access pattern changes.
@@ -123,7 +125,7 @@ User Request
 
 **For complete architectural details, see:**
 
-- [Concurrency Model](docs/concurrency-model.md) - Smart eventual consistency and synchronous decision execution
+- [Architecture Model](docs/architecture-model.md) - Smart eventual consistency and synchronous decision execution
 - [Invariants](docs/invariants.md) - Multi-stage validation pipeline specification (Section D)
 - [Scenario Model](docs/scenario-model.md) - Temporal behavior and decision scenarios
 
@@ -640,87 +642,79 @@ see [Diagnostics Guide](docs/diagnostics.md).**
 
 ## 📚 Documentation
 
-For detailed architectural documentation, see:
+### Learning Paths
 
-### Mathematical Foundations
+**Choose your path based on your needs:**
 
-- **[Intervals.NET](https://github.com/blaze6950/Intervals.NET)** - Robust interval and range handling library that
-  underpins cache logic. See README and documentation for core concepts like `Range`, `Domain`, `RangeData`, and
-  interval operations.
+#### 🚀 Path 1: Quick Start (Getting Started Fast)
 
-### Core Architecture
+**Goal**: Get up and running with working code and common patterns.
 
-- **[Invariants](docs/invariants.md)** - Complete list of system invariants and guarantees
-- **[Scenario Model](docs/scenario-model.md)** - Temporal behavior scenarios (User Path, Decision Path, Rebalance
-  Execution)
-- **[Actors & Responsibilities](docs/actors-and-responsibilities.md)** - System actors and invariant ownership mapping
-- **[Actors to Components Mapping](docs/actors-to-components-mapping.md)** - How architectural actors map to concrete
-  components
-- **[Cache State Machine](docs/cache-state-machine.md)** - Formal state machine with mutation ownership and concurrency
-  semantics
-- **[Concurrency Model](docs/concurrency-model.md)** - Single-writer architecture and eventual consistency model
+1. **[README - Quick Start](#-quick-start)** - Basic usage examples (you're already here!)
+2. **[README - Configuration Guide](#configuration)** - Understand the 5 key parameters
+3. **[Storage Strategies](docs/storage-strategies.md)** - Choose Snapshot vs CopyOnRead for your use case
+4. **[Glossary - Common Misconceptions](docs/glossary.md#common-misconceptions)** - Avoid common pitfalls
+5. **[Diagnostics](docs/diagnostics.md)** - Add optional instrumentation for visibility
 
-### Implementation Details
+**When to use this path**: Building features, integrating the cache, performance tuning.
 
-- **[Component Map](docs/component-map.md)** - Comprehensive component catalog with responsibilities and interactions
-- **[Storage Strategies](docs/storage-strategies.md)** - Detailed comparison of Snapshot vs. CopyOnRead modes and
-  multi-level cache patterns
-- **[Diagnostics](docs/diagnostics.md)** - Optional instrumentation and observability guide
+---
 
-### Testing Infrastructure
+#### 🏗️ Path 2: Deep Dive (Advanced Understanding)
 
-- **[Invariant Test Suite README](tests/SlidingWindowCache.Invariants.Tests/README.md)** - Comprehensive invariant test
-  suite with deterministic synchronization
-- **[Benchmark Suite README](benchmarks/SlidingWindowCache.Benchmarks/README.md)** - BenchmarkDotNet performance
-  benchmarks
-    - **RebalanceFlowBenchmarks** - Behavior-driven rebalance cost analysis (Fixed/Growing/Shrinking span patterns)
-    - **UserFlowBenchmarks** - User-facing API latency (Full hit, Partial hit, Full miss scenarios)
-    - **ScenarioBenchmarks** - End-to-end cold start performance
-    - **Storage Strategy Comparison** - Snapshot vs CopyOnRead allocation and performance tradeoffs across all suites
-- **Deterministic Testing**: `WaitForIdleAsync()` API provides race-free synchronization with background rebalance
-  operations for testing, graceful shutdown, health checks, and integration scenarios. Uses "was idle at some point"
-  semantics (eventual consistency model) - system converged to stable state at snapshot time.
+**Goal**: Understand architecture, invariants, and implementation details.
+
+1. **[Glossary](docs/glossary.md)** - 📖 **Start here** - Canonical term definitions with navigation guide
+2. **[Architecture Model](docs/architecture-model.md)** - Core architectural patterns (single-writer, decision-driven execution, smart eventual consistency)
+3. **[Invariants](docs/invariants.md)** - 49 system invariants with formal specifications
+4. **[Component Map](docs/component-map.md)** - Comprehensive component catalog with invariant implementation mapping
+5. **[Scenario Model](docs/scenario-model.md)** - Temporal behavior scenarios (User Path, Decision Path, Execution Path)
+6. **[Cache State Machine](docs/cache-state-machine.md)** - Formal state transitions and mutation ownership
+7. **[Actors & Responsibilities](docs/actors-and-responsibilities.md)** - Actor model with invariant ownership
+8. **[Actors to Components Mapping](docs/actors-to-components-mapping.md)** - Architectural actors → concrete components
+
+**When to use this path**: Contributing code, debugging complex issues, understanding design decisions, architectural review.
+
+---
+
+### Reference Documentation
+
+#### Mathematical Foundations
+
+- **[Intervals.NET](https://github.com/blaze6950/Intervals.NET)** - Interval/range library providing `Range`, `Domain`, `RangeData`, and interval operations
+
+#### Testing & Benchmarking
+
+- **[Invariant Test Suite](tests/SlidingWindowCache.Invariants.Tests/README.md)** - 27 automated invariant tests validating architectural contracts
+- **[Benchmark Suite](benchmarks/SlidingWindowCache.Benchmarks/README.md)** - BenchmarkDotNet performance benchmarks:
+  - **RebalanceFlowBenchmarks** - Rebalance cost analysis (Fixed/Growing/Shrinking patterns)
+  - **UserFlowBenchmarks** - User-facing API latency (Hit/Partial/Miss scenarios)
+  - **ScenarioBenchmarks** - End-to-end cold start performance
+  - **Storage Comparison** - Snapshot vs CopyOnRead tradeoffs
+
+#### Testing Infrastructure
+
+**Deterministic Synchronization**: `WaitForIdleAsync()` provides race-free synchronization with background operations for testing, shutdown, health checks. Uses "was idle at some point" semantics (eventual consistency). See [Invariants - Testing Infrastructure](docs/invariants.md#testing-infrastructure-deterministic-synchronization).
 
 ### Key Architectural Principles
 
-1. **Single-Writer Architecture**: Only Rebalance Execution writes to cache state; User Path is read-only. Multiple
-   rebalance executions are serialized via `SemaphoreSlim` to guarantee only one execution writes to cache at a time.
-   This eliminates race conditions and data corruption through architectural constraints and execution serialization.
-   See [Concurrency Model](docs/concurrency-model.md).
+> **📖 For detailed explanations, see:** [Architecture Model](docs/architecture-model.md) | [Invariants](docs/invariants.md) | [Glossary](docs/glossary.md)
 
-2. **Decision-Driven Execution**: Rebalance necessity determined by synchronous CPU-only analytical validation in user
-   thread (microseconds). Enables immediate work avoidance and prevents intent thrashing.
-   See [Invariants - Section D](docs/invariants.md#d-rebalance-decision-path-invariants).
+1. **Single-Writer Architecture**: Only Rebalance Execution writes to cache state; User Path is read-only. Eliminates race conditions through architectural constraints.
 
-3. **Multi-Stage Validation Pipeline**:
-    - Stage 1: NoRebalanceRange containment check (fast-path rejection)
-    - Stage 2: Pending rebalance coverage check (anti-thrashing)
-    - Stage 3: Desired == Current check (no-op prevention)
+2. **Decision-Driven Execution**: Rebalance necessity determined by analytical validation before execution. Enables work avoidance and prevents thrashing.
 
-   Rebalance executes ONLY if ALL stages confirm necessity.
-   See [Scenario Model - Decision Path](docs/scenario-model.md#ii-rebalance-decision-path--decision-scenarios).
+3. **Multi-Stage Validation Pipeline**: Four validation stages must all pass before rebalance executes (NoRebalanceRange check, pending coverage check, desired==current check). See [Scenario Model - Decision Path](docs/scenario-model.md#ii-rebalance-decision-path--decision-scenarios).
 
-4. **Smart Eventual Consistency**: Cache converges to optimal configuration asynchronously while avoiding unnecessary
-   work through validation. System prioritizes decision correctness and work avoidance over aggressive rebalance
-   responsiveness.
-   See [Concurrency Model - Smart Eventual Consistency](docs/concurrency-model.md#smart-eventual-consistency-model).
+4. **Smart Eventual Consistency**: Cache converges to optimal state asynchronously while avoiding unnecessary operations through validation.
 
-5. **Intent Semantics**: Intents represent observed access patterns (signals), not mandatory work (commands). Publishing
-   an intent does not guarantee rebalance execution - validation determines necessity.
-   See [Invariants C.24](docs/invariants.md).
+5. **Intent Semantics**: Intents are signals (observed access patterns), not commands (mandatory work). Validation determines execution necessity.
 
-6. **Cache Contiguity Rule**: Cache data must always remain contiguous (no gaps allowed). Non-intersecting requests
-   fully replace the cache rather than creating partial/gapped states. See [Invariants A.9a](docs/invariants.md).
+6. **Cache Contiguity**: Cache data remains contiguous without gaps. Non-intersecting requests replace cache entirely.
 
-7. **User Path Priority**: User requests always served immediately. When validation confirms new rebalance is necessary,
-   pending rebalance is cancelled and rescheduled. Cancellation is mechanical coordination (prevents concurrent
-   executions), not a decision mechanism. See [Cache State Machine](docs/cache-state-machine.md).
+7. **User Path Priority**: User requests always served immediately. Background rebalancing never blocks user operations.
 
-8. **Lock-Free Concurrency**: Intent management and idle detection use `Volatile.Read/Write`, `Interlocked` operations,
-   and `TaskCompletionSource` for atomic state coordination - no locks, no race conditions, guaranteed progress.
-   Execution serialization via `SemaphoreSlim` ensures single-writer architecture for cache mutations.
-   single-writer semantics. Thread-safety achieved through architectural constraints and atomic operations.
-   See [Concurrency Model - Lock-Free Implementation](docs/concurrency-model.md#lock-free-implementation).
+8. **Lock-Free Concurrency**: Intent management uses atomic operations (`Volatile`, `Interlocked`). Execution serialization ensures single-writer semantics.
 
 ---
 
@@ -819,16 +813,3 @@ helps improve the library's design, implementation, and documentation.
 ## License
 
 MIT
-
---
-TODO List
-- Implement strong consistency extension method
-- Implement multi-level cache composition pattern (L1/L2/L3...). Provide out of the box builder for such combinations - wrapper for WindowCache that implements IDataSource.
-- Implement visited places cache
-- Move caches to Intervals.NET
-- Revise docs, try to simplify them - make short, but concise and informative
-- Restructure Intervals.NET repo to store many separate packages
-- Revise Intervals.NET-related libs' docs - split docs per package
-- Make the common README short and concise, with links to detailed documentation for each aspect of the library (architecture, usage, configuration, diagnostics, etc.)
-- Implement hybrid mode in the context of consistency - eventual and strong consistency is mixed during handling rebalances - for sure cold start is strong consistent, but other sequential rebalances for sequential requests are eventual consistent, but in case random access - string consistency.
-This should not be based on ICacheDiagnostics - this should be some level of abstraction, some kind of strategy when in user request handler the cache miss is handled with or without waiting for idle

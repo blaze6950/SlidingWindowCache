@@ -1,14 +1,19 @@
-﻿# Sliding Window Cache - Complete Component Map
+# Sliding Window Cache - Complete Component Map
+
+> **📖 Cross-References:**  
+> - For terminology definitions, see: [Glossary](glossary.md)  
+> - For architectural overview, see: [Architecture Model](architecture-model.md)  
+> - For detailed implementation mechanics, see: **Source code XML documentation** (each component has extensive inline docs)
 
 ## Document Purpose
 
-This document provides a comprehensive map of all components in the Sliding Window Cache, including:
-- Component types (value/reference types)
-- Ownership relationships
+This document provides a comprehensive catalog of all components in the Sliding Window Cache, focusing on:
+- Component types and relationships
+- Ownership hierarchy
 - Read/write patterns
-- Data flow diagrams
 - Thread safety model
-- Rebalance Decision Model and multi-stage validation pipeline
+
+**Note:** Detailed implementation mechanics (method-level behavior, algorithms, memory model details) are documented in source code XML comments. This document focuses on architecture and component interactions.
 
 **Last Updated**: February 16, 2026
 
@@ -19,11 +24,12 @@ This document provides a comprehensive map of all components in the Sliding Wind
 1. [Component Statistics](#component-statistics)
 2. [Component Type Legend](#component-type-legend)
 3. [Component Hierarchy](#component-hierarchy)
-4. [Detailed Component Catalog](#detailed-component-catalog)
-5. [Ownership & Data Flow Diagram](#ownership--data-flow-diagram)
-6. [Read/Write Patterns](#readwrite-patterns)
-7. [Thread Safety Model](#thread-safety-model)
-8. [Type Summary Tables](#type-summary-tables)
+4. [Invariant Implementation Mapping](#invariant-implementation-mapping)
+5. [Detailed Component Catalog](#detailed-component-catalog)
+6. [Ownership & Data Flow Diagram](#ownership--data-flow-diagram)
+7. [Read/Write Patterns](#readwrite-patterns)
+8. [Thread Safety Model](#thread-safety-model)
+9. [Type Summary Tables](#type-summary-tables)
 
 ---
 
@@ -43,9 +49,9 @@ This document provides a comprehensive map of all components in the Sliding Wind
 - **Mutable**: 5 components (CacheState, IntentManager._currentIntentCts, Storage implementations)
 
 **By Execution Context**:
-- **User Thread**: 1 (UserRequestHandler)
-- **Background / ThreadPool**: 4 (Scheduler, DecisionEngine, Executor, + async parts of IntentManager)
-- **Both Contexts**: 1 (CacheDataFetcher)
+- **User Thread**: 2 (UserRequestHandler, IntentController.PublishIntent)
+- **Background / ThreadPool**: 4 (IntentController.ProcessIntentsAsync loop, DecisionEngine, IRebalanceExecutionController, Executor)
+- **Both Contexts**: 1 (CacheDataExtensionService)
 - **Neutral**: 13 (configuration, data structures, interfaces)
 
 **Shared Mutable State**:
@@ -186,8 +192,343 @@ The cache converges to optimal configuration asynchronously through decision-dri
 - ⚠️ May delay cache optimization by debounce period (acceptable for stability gains)
 
 **Related Documentation:**
-- See [Concurrency Model - Smart Eventual Consistency](concurrency-model.md#smart-eventual-consistency-model) for detailed consistency semantics
+- See [Architecture Model - Smart Eventual Consistency](architecture-model.md#smart-eventual-consistency-model) for detailed consistency semantics
 - See [Invariants - Section D](invariants.md#d-rebalance-decision-path-invariants) for multi-stage validation pipeline specification
+
+---
+
+## Invariant Implementation Mapping
+
+This section bridges architectural invariants (documented in [invariants.md](invariants.md)) to their concrete implementations in the codebase. Each invariant is enforced through specific component interactions, code patterns, or architectural constraints.
+
+**Purpose**: Provides implementation context for architectural invariants without duplicating specification details. See source code XML documentation for detailed implementation mechanics.
+
+### Single-Writer Architecture
+
+**Invariants**: A.-1, A.7, A.8, A.9, F.36
+
+**Enforcement Mechanism**:
+- **Component Design**: Only `RebalanceExecutor` has write access to `CacheState` internal setters
+- **Access Control**: User Path components (UserRequestHandler) have read-only references to state
+- **Type System**: Internal visibility modifiers prevent external mutations
+
+**Source References**:
+- `src/SlidingWindowCache/Core/State/CacheState.cs` - Internal setters restrict write access
+- `src/SlidingWindowCache/Core/Rebalance/Execution/RebalanceExecutor.cs` - Exclusive mutation authority
+- `src/SlidingWindowCache/Core/UserPath/UserRequestHandler.cs` - Read-only access pattern
+
+### Priority and Cancellation
+
+**Invariants**: A.0, A.0a, C.19, F.35a
+
+**Enforcement Mechanism**:
+- **Cancellation Protocol**: CancellationTokenSource coordination between intent publishing and execution
+- **Decision-Driven Cancellation**: RebalanceDecisionEngine validates necessity before triggering cancellation
+- **Cooperative Cancellation**: Multiple checkpoints in execution pipeline check for cancellation
+
+**Source References**:
+- `src/SlidingWindowCache/Core/Intent/IntentManager.cs` - Cancellation token lifecycle management
+- `src/SlidingWindowCache/Core/Rebalance/Decision/RebalanceDecisionEngine.cs` - Multi-stage validation gates cancellation
+- `src/SlidingWindowCache/Core/Rebalance/Execution/RebalanceExecutor.cs` - Cancellation checkpoints (ThrowIfCancellationRequested)
+
+### Intent Management and Cancellation
+
+**Invariants**: A.0a, C.17, C.20, C.21
+
+**Enforcement Mechanism**:
+- **Latest-Wins Semantics**: Interlocked.Exchange replaces previous intent atomically
+- **Intent Singularity**: Single-writer architecture for intent state (IntentManager)
+- **Early Exit Validation**: Cancellation checked after debounce delay before execution starts
+
+**Source References**:
+- `src/SlidingWindowCache/Core/Intent/IntentManager.cs` - Atomic intent replacement via Interlocked.Exchange
+- `src/SlidingWindowCache/Core/Intent/IntentController.cs` - Intent processing loop with early exit on cancellation
+
+### UserRequestHandler Responsibilities
+
+**Invariants**: A.3, A.5
+
+**Enforcement Mechanism**:
+- **Encapsulation**: Only UserRequestHandler has access to IntentController.PublishIntent interface
+- **Minimal Work Pattern**: UserRequestHandler scope limited to data assembly, no normalization logic
+
+**Source References**:
+- `src/SlidingWindowCache/Core/UserPath/UserRequestHandler.cs` - Exclusive intent publisher, minimal work implementation
+- `src/SlidingWindowCache/Core/Intent/IntentController.cs` - Intent publication interface (internal visibility)
+
+### Async Execution Model
+
+**Invariants**: A.4, G.44
+
+**Enforcement Mechanism**:
+- **Fire-and-Forget Pattern**: UserRequestHandler publishes intent and returns immediately
+- **Background Task Scheduling**: IRebalanceExecutionController schedules execution via Task.Run or channels
+- **Thread Context Separation**: User thread vs ThreadPool thread isolation
+
+**Source References**:
+- `src/SlidingWindowCache/Core/Intent/IntentController.cs` - ProcessIntentsAsync loop runs on background thread
+- `src/SlidingWindowCache/Infrastructure/Execution/TaskBasedRebalanceExecutionController.cs` - Task.Run scheduling
+- `src/SlidingWindowCache/Infrastructure/Execution/ChannelBasedRebalanceExecutionController.cs` - Channel-based background execution
+
+### Atomic Cache Updates
+
+**Invariants**: B.12, B.13
+
+**Enforcement Mechanism**:
+- **Staging Buffer Pattern**: Storage strategies build new state before atomic swap
+- **Volatile.Write**: Atomic publication of new cache state reference
+- **All-or-Nothing Updates**: Rematerialize operation succeeds completely or not at all
+
+**Source References**:
+- `src/SlidingWindowCache/Infrastructure/Storage/ArrayCacheStorage.cs` - Array.Copy + Volatile.Write for atomic swap
+- `src/SlidingWindowCache/Infrastructure/Storage/ListCacheStorage.cs` - List replacement + Volatile.Write
+- `src/SlidingWindowCache/Core/State/CacheState.cs` - Rematerialize method ensures atomicity
+
+### Consistency Under Cancellation
+
+**Invariants**: B.13, B.15, F.35b
+
+**Enforcement Mechanism**:
+- **Cancellation Before Mutation**: Final cancellation check before applying cache updates
+- **Atomic Application**: Results applied atomically or discarded entirely
+- **Exception Safety**: Try-finally blocks ensure cleanup on cancellation
+
+**Source References**:
+- `src/SlidingWindowCache/Core/Rebalance/Execution/RebalanceExecutor.cs` - ThrowIfCancellationRequested before Rematerialize call
+
+### Obsolete Result Prevention
+
+**Invariants**: B.16, C.20
+
+**Enforcement Mechanism**:
+- **Cancellation Token Identity Tracking**: Each intent has unique CancellationToken
+- **Pre-Application Validation**: Execution checks if cancellation requested before applying results
+- **Latest-Wins Semantics**: Only results from latest non-cancelled intent are applied
+
+**Source References**:
+- `src/SlidingWindowCache/Core/Rebalance/Execution/RebalanceExecutor.cs` - Cancellation validation before cache mutation
+- `src/SlidingWindowCache/Core/Intent/IntentManager.cs` - Token lifecycle management
+
+### Intent Singularity
+
+**Invariant**: C.17
+
+**Enforcement Mechanism**:
+- **Atomic Replacement**: Interlocked.Exchange ensures exactly one active intent
+- **Supersession Pattern**: New intent atomically replaces previous one
+- **No Queue Buildup**: At most one pending intent at any time
+
+**Source References**:
+- `src/SlidingWindowCache/Core/Intent/IntentManager.cs` - Interlocked.Exchange for atomic intent replacement
+
+### Cancellation Protocol
+
+**Invariant**: C.19
+
+**Enforcement Mechanism**:
+- **Cooperative Cancellation**: CancellationToken passed through entire pipeline
+- **Multiple Checkpoints**: Checks before I/O, after I/O, before mutations
+- **Result Discard**: Results from cancelled operations never applied
+
+**Source References**:
+- `src/SlidingWindowCache/Core/Rebalance/Execution/RebalanceExecutor.cs` - Multiple ThrowIfCancellationRequested calls
+- `src/SlidingWindowCache/Infrastructure/Services/CacheDataExtensionService.cs` - Cancellation token propagation to IDataSource
+
+### Early Exit Validation
+
+**Invariants**: C.20, D.29
+
+**Enforcement Mechanism**:
+- **Post-Debounce Check**: Cancellation verified after debounce delay, before execution
+- **Multi-Stage Pipeline**: Each validation stage can exit early without execution
+- **Decision Engine Authority**: All stages must pass for execution to proceed
+
+**Source References**:
+- `src/SlidingWindowCache/Core/Intent/IntentController.cs` - Cancellation check in ProcessIntentsAsync after debounce
+- `src/SlidingWindowCache/Core/Rebalance/Decision/RebalanceDecisionEngine.cs` - Multi-stage early exit logic
+
+### Serial Execution Guarantee
+
+**Invariant**: C.21
+
+**Enforcement Mechanism**:
+- **Cancellation Coordination**: Previous execution cancelled before starting new one
+- **Single Execution Controller**: Only one IRebalanceExecutionController instance per cache
+- **Sequential Processing**: Intent processing loop ensures serial execution
+
+**Source References**:
+- `src/SlidingWindowCache/Core/Intent/IntentController.cs` - Sequential intent processing loop
+- `src/SlidingWindowCache/Core/Intent/IntentManager.cs` - Cancellation of previous execution before scheduling new
+
+### Intent Data Contract
+
+**Invariant**: C.24e
+
+**Enforcement Mechanism**:
+- **Interface Requirement**: PublishIntent method signature requires deliveredData parameter
+- **Single Materialization**: UserRequestHandler materializes data once, passes to both user and intent
+- **Type Safety**: Compiler enforces data presence
+
+**Source References**:
+- `src/SlidingWindowCache/Core/Intent/IntentController.cs` - PublishIntent(requestedRange, deliveredData) signature
+- `src/SlidingWindowCache/Core/UserPath/UserRequestHandler.cs` - Single data materialization shared between paths
+
+### Pure Decision Logic
+
+**Invariants**: D.25, D.26
+
+**Enforcement Mechanism**:
+- **Stateless Design**: RebalanceDecisionEngine has no mutable fields
+- **Value-Type Policies**: Decision policies are structs with no side effects
+- **No I/O**: Decision path never calls IDataSource or modifies state
+- **Functional Architecture**: Pure function: (state, intent, config) → decision
+
+**Source References**:
+- `src/SlidingWindowCache/Core/Rebalance/Decision/RebalanceDecisionEngine.cs` - Pure evaluation logic
+- `src/SlidingWindowCache/Core/Planning/ThresholdRebalancePolicy.cs` - Stateless struct
+- `src/SlidingWindowCache/Core/Planning/ProportionalRangePlanner.cs` - Stateless struct
+
+### Decision-Execution Separation
+
+**Invariant**: D.26
+
+**Enforcement Mechanism**:
+- **Component Boundaries**: Decision components have no references to mutable state setters
+- **Read-Only Access**: Decision Engine reads CacheState but cannot modify it
+- **Interface Segregation**: Decision and Execution interfaces are distinct
+
+**Source References**:
+- `src/SlidingWindowCache/Core/Rebalance/Decision/RebalanceDecisionEngine.cs` - Read-only state access
+- `src/SlidingWindowCache/Core/Rebalance/Execution/RebalanceExecutor.cs` - Exclusive write access
+
+### Multi-Stage Decision Pipeline
+
+**Invariant**: D.29
+
+**Enforcement Mechanism**:
+- **Sequential Validation**: Five-stage pipeline with early exits
+- **Stage 1**: Current NoRebalanceRange containment check (fast path)
+- **Stage 2**: Pending NoRebalanceRange validation (thrashing prevention)
+- **Stage 3**: DesiredCacheRange computation
+- **Stage 4**: Equality check (DesiredCacheRange == CurrentCacheRange)
+- **Stage 5**: Execution scheduling (only if all stages pass)
+
+**Source References**:
+- `src/SlidingWindowCache/Core/Rebalance/Decision/RebalanceDecisionEngine.cs` - Complete pipeline implementation with stage-by-stage validation
+
+### Desired Range Computation
+
+**Invariants**: E.30, E.31
+
+**Enforcement Mechanism**:
+- **Pure Function**: ProportionalRangePlanner.CalculateDesiredRange(requestedRange, config) → desiredRange
+- **No State Access**: Range planner never reads CurrentCacheRange
+- **Deterministic**: Same inputs always produce same output
+
+**Source References**:
+- `src/SlidingWindowCache/Core/Planning/ProportionalRangePlanner.cs` - Pure range calculation logic
+
+### NoRebalanceRange Computation
+
+**Invariant**: E.34
+
+**Enforcement Mechanism**:
+- **Pure Function**: ThresholdRebalancePolicy.GetNoRebalanceRange(currentCacheRange, thresholds) → noRebalanceRange
+- **Range Shrinking**: Applies threshold percentages to current range boundaries
+- **Configuration-Driven**: Uses WindowCacheOptions threshold values
+
+**Source References**:
+- `src/SlidingWindowCache/Core/Planning/ThresholdRebalancePolicy.cs` - NoRebalanceRange computation
+
+### Cancellation Checkpoints
+
+**Invariants**: F.35, F.35a
+
+**Enforcement Mechanism**:
+- **Before I/O**: ThrowIfCancellationRequested before calling IDataSource.FetchAsync
+- **After I/O**: ThrowIfCancellationRequested after data fetching completes
+- **Before Mutations**: ThrowIfCancellationRequested before Rematerialize call
+- **Cooperative Pattern**: OperationCanceledException propagates to cleanup handlers
+
+**Source References**:
+- `src/SlidingWindowCache/Core/Rebalance/Execution/RebalanceExecutor.cs` - Multiple checkpoint locations (see XML comments for exact line references)
+
+### Cache Normalization Operations
+
+**Invariant**: F.37
+
+**Enforcement Mechanism**:
+- **Rematerialize Method**: CacheState.Rematerialize accepts arbitrary range and data
+- **Full Replacement**: Can replace entire cache contents in single operation
+- **Storage Abstraction**: ICacheStorage enables different normalization strategies
+
+**Source References**:
+- `src/SlidingWindowCache/Core/State/CacheState.cs` - Rematerialize method
+- `src/SlidingWindowCache/Infrastructure/Storage/` - Storage strategy implementations
+
+### Incremental Data Fetching
+
+**Invariant**: F.38
+
+**Enforcement Mechanism**:
+- **Gap Analysis**: CacheDataExtensionService.ExtendCacheDataAsync computes missing ranges
+- **Range Subtraction**: Uses range algebra to identify gaps (DesiredRange \ CachedRange)
+- **Batch Fetching**: Fetches only missing subranges via IDataSource
+
+**Source References**:
+- `src/SlidingWindowCache/Infrastructure/Services/CacheDataExtensionService.cs` - ExtendCacheDataAsync implementation with range gap logic
+
+### Data Preservation During Expansion
+
+**Invariant**: F.39
+
+**Enforcement Mechanism**:
+- **Union Operation**: New data merged with existing data using range union
+- **Storage Enumeration**: Existing data enumerated and preserved during rematerialization
+- **No Overwrite**: New data only fills gaps, doesn't replace existing
+
+**Source References**:
+- `src/SlidingWindowCache/Infrastructure/Services/CacheDataExtensionService.cs` - Union logic in ExtendCacheDataAsync
+- `src/SlidingWindowCache/Infrastructure/Storage/` - Storage strategies preserve existing data during enumeration
+
+### I/O Isolation
+
+**Invariant**: G.45
+
+**Enforcement Mechanism**:
+- **User Path Returns Early**: UserRequestHandler completes before any IDataSource.FetchAsync calls
+- **Background I/O**: All IDataSource interactions happen in RebalanceExecutor on background thread
+- **Fire-and-Forget**: Intent published without awaiting I/O completion
+
+**Source References**:
+- `src/SlidingWindowCache/Core/UserPath/UserRequestHandler.cs` - No IDataSource calls in user path
+- `src/SlidingWindowCache/Core/Rebalance/Execution/RebalanceExecutor.cs` - IDataSource calls only in background execution
+
+### Activity Counter Ordering
+
+**Invariant**: H.47
+
+**Enforcement Mechanism**:
+- **Increment-Before-Publish**: Activity counter incremented BEFORE semaphore signal, channel write, or volatile write
+- **Ordering Discipline**: All publication sites follow strict ordering pattern
+- **Documentation**: XML comments verify ordering at each publication site
+
+**Source References**:
+- `src/SlidingWindowCache/Core/Intent/IntentController.cs` - Increment before semaphore.Release
+- `src/SlidingWindowCache/Infrastructure/Execution/` - Increment before channel.Writer.WriteAsync or Task.Run
+
+### Activity Counter Cleanup
+
+**Invariant**: H.48
+
+**Enforcement Mechanism**:
+- **Finally Blocks**: Decrement in finally blocks ensures unconditional execution
+- **Exception Safety**: Decrement occurs regardless of success, failure, or cancellation
+- **Catch Blocks**: Manual decrement in catch blocks for pre-execution failures
+
+**Source References**:
+- `src/SlidingWindowCache/Core/Intent/IntentController.cs` - Finally block in ProcessIntentsAsync loop
+- `src/SlidingWindowCache/Infrastructure/Execution/` - Finally blocks in execution controllers
 
 ---
 
@@ -204,13 +545,13 @@ public record WindowCacheOptions
 
 **Type**: Record (reference type with value semantics)
 
-**Properties** (all readonly):
-- `double LeftCacheSize` - Coefficient for left cache size (≥0)
-- `double RightCacheSize` - Coefficient for right cache size (≥0)
-- `double? LeftThreshold` - Left rebalance threshold percentage (optional, ≥0)
-- `double? RightThreshold` - Right rebalance threshold percentage (optional, ≥0)
-- `TimeSpan DebounceDelay` - Debounce delay for rebalance operations (default: 100ms)
-- `UserCacheReadMode ReadMode` - Cache read strategy (Snapshot or CopyOnRead)
+**Configuration Aspects**:
+- Cache size coefficients for left and right windows
+- Rebalance threshold percentages (optional)
+- Debounce delay for rebalance timing
+- Cache read strategy selection (see UserCacheReadMode)
+
+> **See**: `src/SlidingWindowCache/Public/Configuration/WindowCacheOptions.cs` for property details.
 
 **Ownership**: Created by user, passed to WindowCache constructor
 
@@ -262,11 +603,12 @@ public interface IDataSource<TRangeType, TDataType>
 
 **Type**: Interface (contract)
 
-**Methods**:
-- `Task<IEnumerable<TDataType>> FetchAsync(Range<TRangeType> range, CancellationToken ct)`
-  - Required: Fetch data for a single range
-- `Task<IEnumerable<RangeChunk<TRangeType, TDataType>>> FetchAsync(IEnumerable<Range<TRangeType>> ranges, CancellationToken ct)`
-  - Optional override: Batch fetch optimization
+**Contract**:
+- Single range fetch (required)
+- Batch range fetch (optional, with default parallel implementation)
+- CancellationToken support for cooperative cancellation
+
+> **See**: `src/SlidingWindowCache/IDataSource.cs` for method signatures.
 
 **Ownership**: User provides implementation
 
@@ -354,21 +696,12 @@ internal sealed class SnapshotReadStorage<TRange, TData, TDomain> : ICacheStorag
 
 **Type**: Class (sealed)
 
-**Fields**:
-- `TDomain _domain` (readonly) - Domain for range calculations
-- ✏️ `TData[] _storage` - Mutable array holding cached data
-- ✏️ `Range<TRange> Range` (property) - Current cache range
+**Storage Strategy**: Array-based with atomic replacement
 
 **Operations**:
-- `Rematerialize()` ⊲ **WRITE**
-  - Allocates new array
-  - Replaces `_storage` completely
-  - Updates `Range`
-- `Read()` ⊳ **READ**
-  - Returns `ReadOnlyMemory<TData>` view over internal array
-  - **Zero allocation** (slice of existing array)
-- `ToRangeData()` ⊳ **READ**
-  - Creates RangeData from current array
+- **Rematerialize**: Allocates new array, replaces storage completely
+- **Read**: Returns zero-allocation view over internal array (ReadOnlyMemory)
+- **ToRangeData**: Creates snapshot from current array
 
 **Characteristics**:
 - ✅ Zero-allocation reads (fast)
@@ -394,31 +727,18 @@ internal sealed class CopyOnReadStorage<TRange, TData, TDomain> : ICacheStorage<
 
 **Type**: Class (sealed)
 
-**Fields**:
-- `TDomain _domain` (readonly) - Domain for range calculations
-- ✏️ `List<TData> _activeStorage` - Active storage (immutable during reads)
-- ✏️ `List<TData> _stagingBuffer` - Staging buffer (write-only during rematerialization)
-- ✏️ `Range<TRange> Range` (property) - Current cache range
+**Storage Strategy**: Dual-buffer pattern (active storage + staging buffer)
 
 **Staging Buffer Pattern**:
-- Two internal buffers: active storage + staging buffer
-- Active storage never mutated during enumeration
-- Staging buffer cleared, filled, then swapped with active
-- Buffers may grow but never shrink (capacity reuse)
+- Active storage: Never mutated during enumeration (immutable reads)
+- Staging buffer: Used for building new state during rematerialization
+- Swap mechanism: Staging becomes active after rematerialization completes
+- Capacity reuse: Buffers grow but never shrink (amortized performance)
 
 **Operations**:
-- `Rematerialize()` ⊲ **WRITE**
-  - Clears staging buffer (preserves capacity)
-  - Enumerates range data into staging (single-pass)
-  - Atomically swaps staging ↔ active
-  - Updates `Range`
-- `Read()` ⊳ **READ**
-  - Allocates new `TData[]` array
-  - Copies from active storage
-  - Returns as `ReadOnlyMemory<TData>`
-- `ToRangeData()` ⊳ **READ**
-  - Returns lazy enumerable over active storage
-  - Safe because active storage is immutable during reads
+- **Rematerialize**: Clears staging, fills with new data, swaps with active, updates range
+- **Read**: Allocates and copies from active storage (returns ReadOnlyMemory)
+- **ToRangeData**: Returns lazy enumerable over active storage
 
 **Characteristics**:
 - ✅ Cheap rematerialization (amortized O(1) when capacity sufficient)
@@ -522,9 +842,8 @@ public class EventCounterCacheDiagnostics : ICacheDiagnostics
 
 **Methods**:
 - 18 event recording methods (explicit interface implementation)
-  - All use `Interlocked.Increment` for thread-safety
-  - ~1-5 nanoseconds per event
-- `void Reset()` - Resets all counters to zero (for test isolation)
+- Thread-safe atomic counter updates
+- `void Reset()` - Resets all counters (for test isolation)
 
 **Characteristics**:
 - ✅ Thread-safe (atomic operations, no locks)
@@ -590,11 +909,11 @@ internal sealed class CacheState<TRange, TData, TDomain>
 
 **Type**: Class (sealed)
 
-**Properties** (all mutable):
-- ✏️ `ICacheStorage<TRange, TData, TDomain> Cache { get; }` - The actual cache storage
-- ✏️ `Range<TRange>? LastRequested { get; set; }` - Last requested range by user
-- ✏️ `Range<TRange>? NoRebalanceRange { get; set; }` - Range within which no rebalancing occurs
-- 🔒 `TDomain Domain { get; }` - Domain for range calculations (readonly)
+**State Components**:
+- Cache storage instance (ICacheStorage implementation)
+- Last requested range (tracks user's most recent request)
+- No-rebalance range (stable region where rebalancing is suppressed)
+- Domain instance (for range calculations)
 
 **Ownership**: 
 - Created by WindowCache constructor
@@ -635,12 +954,12 @@ internal sealed class UserRequestHandler<TRange, TData, TDomain>
 
 **Type**: Class (sealed)
 
-**Fields** (all readonly):
-- `CacheState<TRange, TData, TDomain> _state`
-- `CacheDataExtensionService<TRange, TData, TDomain> _cacheExtensionService`
-- `IntentController<TRange, TData, TDomain> _intentController`
-- `IDataSource<TRange, TData> _dataSource`
-- `ICacheDiagnostics _cacheDiagnostics`
+**Dependencies**:
+- CacheState (shared state, read-only access)
+- CacheDataExtensionService (data fetching)
+- IntentController (intent publishing)
+- IDataSource (external data access)
+- ICacheDiagnostics (instrumentation)
 
 **Main Method**:
 ```csharp
@@ -705,69 +1024,55 @@ internal sealed class IntentController<TRange, TData, TDomain>
 
 **Role**: Intent Controller — manages intent lifecycle and background intent processing loop
 
-**Fields**:
-- `IRebalanceExecutionController<TRange, TData, TDomain> _executionController` (readonly)
-- `RebalanceDecisionEngine<TRange, TDomain> _decisionEngine` (readonly)
-- `CacheState<TRange, TData, TDomain> _state` (readonly reference to shared state)
-- `ICacheDiagnostics _cacheDiagnostics` (readonly)
-- `AsyncActivityCounter _activityCounter` (readonly)
-- ✏️ `Intent<TRange, TData, TDomain>? _pendingIntent` - **Mutable**, latest unprocessed intent (written via `Interlocked.Exchange` by user thread, cleared by processing loop)
-- `SemaphoreSlim _intentSignal` - Signals processing loop that a new intent is available
-- `Task _processingLoopTask` - Background loop task (started in constructor)
-- `CancellationTokenSource _loopCancellation` - Cancels the background loop on disposal
+**Dependencies**:
+- Execution controller (rebalance execution serialization)
+- Decision engine (rebalance decision logic)
+- CacheState (shared state reference)
+- AsyncActivityCounter (idle tracking)
+- ICacheDiagnostics (instrumentation)
+
+**Internal State**:
+- Pending intent (latest unprocessed intent from user thread)
+- Intent signal (synchronization primitive for processing loop)
+- Background processing loop task
+- Loop cancellation token
 
 **Key Methods**:
 
-**`PublishIntent(Intent<TRange, TData, TDomain> intent)`** (executes in User Thread):
-```csharp
-public void PublishIntent(Intent<TRange, TData, TDomain> intent)
-{
-    // 1. Atomically replace pending intent (latest wins)
-    Interlocked.Exchange(ref _pendingIntent, intent);
-    
-    // 2. Increment activity counter before signaling
-    _activityCounter.IncrementActivity();
-    
-    // 3. Signal processing loop to wake up
-    _intentSignal.Release();
-    
-    // 4. Record diagnostic event
-    _cacheDiagnostics.RebalanceIntentPublished();
-    
+**PublishIntent** (executes in User Thread):
+- Atomically replaces pending intent (latest wins semantics)
+- Increments activity counter
+- Signals processing loop to wake up
+- Records diagnostic event
+- Returns immediately (fire-and-forget)
     // Returns immediately — decision happens in background loop
 }
 ```
 
-**`ProcessIntentsAsync()`** (background processing loop — see separate entry above):
+**ProcessIntentsAsync** (background processing loop):
+- Evaluates DecisionEngine for each intent
+- Cancels previous execution if needed
+- Enqueues new execution via execution controller
 
-Evaluates `DecisionEngine`, cancels previous execution if needed, and enqueues new execution via `_executionController.PublishExecutionRequest(...)`.
-
-**`DisposeAsync()`**:
-```csharp
-internal async ValueTask DisposeAsync()
-{
-    // 1. Mark as disposed (idempotent via Interlocked.CompareExchange)
-    // 2. Cancel loop via _loopCancellation
-    // 3. Await _processingLoopTask
-    // 4. Dispose _executionController (cascades to execution loop)
-    // 5. Dispose synchronization primitives
-}
-```
+**DisposeAsync**:
+- Marks as disposed (idempotent)
+- Cancels background loop
+- Awaits processing loop completion
+- Disposes execution controller and synchronization primitives
 
 **Characteristics**:
-- ✅ `PublishIntent()` is minimal — atomic intent store + semaphore signal only
+- ✅ PublishIntent is minimal — atomic intent store + semaphore signal only
 - ✅ Decision evaluation happens in background loop (NOT in user thread)
-- ✅ "Latest intent wins" — rapid bursts naturally collapse via `Interlocked.Exchange`
-- ✅ **Lock-free** — `Interlocked.Exchange` for intent, `SemaphoreSlim` for signaling
-- ✅ Single-flight enforcement through cancellation (cancel old execution before new)
+- ✅ "Latest intent wins" — rapid bursts naturally collapse
+- ✅ Single-flight enforcement through cancellation
 - ⚠️ **Intent does not guarantee execution** — execution is opportunistic
 - ❌ **Does NOT**: Perform debounce delay, execute cache mutations
 
 **Concurrency Model**:
-- User thread writes intent via `Interlocked.Exchange` (atomic, no locks)
-- Background loop reads intent via `Interlocked.Exchange` (also clears it atomically)
-- `SemaphoreSlim` prevents CPU spinning in the background loop
-- `AsyncActivityCounter` tracks active operations for `WaitForIdleAsync`
+- User thread writes intent atomically (no locks)
+- Background loop reads intent atomically (also clears it)
+- Semaphore prevents CPU spinning in the background loop
+- AsyncActivityCounter tracks active operations for WaitForIdleAsync
 
 **Ownership**: 
 - Owned by UserRequestHandler (via WindowCache)
@@ -778,7 +1083,7 @@ internal async ValueTask DisposeAsync()
 - **`ProcessIntentsAsync()` executes in Background Thread** (decision, cancellation, execution enqueue)
 
 **State**: 
-- `_pendingIntent` (mutable, nullable, written by user thread, cleared by background loop)
+- Pending intent (mutable, nullable, written by user thread, cleared by background loop)
 
 **Responsibilities**: 
 - Intent lifecycle management
@@ -801,51 +1106,25 @@ The `RebalanceScheduler` class described in older documentation **does not exist
 
 See `IRebalanceExecutionController`, `TaskBasedRebalanceExecutionController`, and `ChannelBasedRebalanceExecutionController` in Section 7 for the execution side.
 
-**`ProcessIntentsAsync()`** (private background loop inside `IntentController`):
-```csharp
-private async Task ProcessIntentsAsync()
-{
-    while (!_loopCancellation.Token.IsCancellationRequested)
-    {
-        // 1. Wait on semaphore (blocks without CPU spinning)
-        await _intentSignal.WaitAsync(_loopCancellation.Token);
-        
-        // 2. Atomically read and clear pending intent (latest wins)
-        var intent = Interlocked.Exchange(ref _pendingIntent, null);
-        if (intent == null) continue;
-        
-        // 3. Evaluate DecisionEngine (CPU-only, lightweight)
-        var lastExecutionRequest = _executionController.LastExecutionRequest;
-        var decision = _decisionEngine.Evaluate(
-            requestedRange: intent.RequestedRange,
-            currentCacheState: _state,
-            lastExecutionRequest: lastExecutionRequest
-        );
-        
-        // 4. Record reason; if skip, continue (decrement activity in finally)
-        RecordReason(decision.Reason);
-        if (!decision.ShouldSchedule) continue;
-        
-        // 5. Cancel previous execution
-        lastExecutionRequest?.Cancel();
-        
-        // 6. Enqueue execution request
-        await _executionController.PublishExecutionRequest(
-            intent: intent,
-            desiredRange: decision.DesiredRange!.Value,
-            desiredNoRebalanceRange: decision.DesiredNoRebalanceRange
-        );
-    }
-}
-```
+**ProcessIntentsAsync** (private background loop inside IntentController):
+
+**Loop Structure**:
+1. Wait on semaphore (blocks without CPU spinning)
+2. Atomically read and clear pending intent (latest wins)
+3. Evaluate DecisionEngine (CPU-only, lightweight, 5-stage validation)
+4. Record decision reason; skip if decision says no rebalance needed
+5. Cancel previous execution if new rebalance is needed
+6. Enqueue execution request to execution controller
+
+> **See**: `src/SlidingWindowCache/Core/Rebalance/Intent/IntentController.cs` for implementation details.
 
 **Characteristics**:
 - ✅ Runs in **Background Thread** (single dedicated loop task)
-- ✅ Handles burst resistance via "latest intent wins" (`Interlocked.Exchange`)
+- ✅ Handles burst resistance via "latest intent wins" semantics
 - ✅ Decision evaluation happens here (NOT in user thread)
 - ✅ Cancels previous execution before enqueuing new one
 - ✅ Semaphore prevents CPU spinning
-- ❌ Does NOT perform debounce (handled by `IRebalanceExecutionController` implementations)
+- ❌ Does NOT perform debounce (handled by IRebalanceExecutionController implementations)
 
 **Execution Context**: Background / ThreadPool (loop task started in constructor)
 
@@ -875,46 +1154,21 @@ internal sealed class RebalanceDecisionEngine<TRange, TDomain>
 
 **Role**: Pure Decision Logic - **SOLE AUTHORITY for Rebalance Necessity Determination**
 
-**Fields** (all readonly, value types):
-- `ThresholdRebalancePolicy<TRange, TDomain> _policy` (struct, copied)
-- `ProportionalRangePlanner<TRange, TDomain> _planner` (struct, copied)
-- `NoRebalanceRangePlanner<TRange, TDomain> _noRebalancePlanner` (struct, copied)
+**Dependencies** (all readonly, value types):
+- ThresholdRebalancePolicy (threshold validation logic)
+- ProportionalRangePlanner (cache range planning)
+- NoRebalanceRangePlanner (no-rebalance range planning)
 
-**Key Method**:
-```csharp
-public RebalanceDecision<TRange> Evaluate<TData>(
-    Range<TRange> requestedRange,
-    CacheState<TRange, TData, TDomain> currentCacheState,
-    ExecutionRequest<TRange, TData, TDomain>? lastExecutionRequest)
-{
-    // Stage 1: Current Cache Stability Check (fast path)
-    if (currentCacheState.NoRebalanceRange.HasValue &&
-        !_policy.ShouldRebalance(currentCacheState.NoRebalanceRange.Value, requestedRange))
-    {
-        return RebalanceDecision<TRange>.Skip(RebalanceReason.WithinCurrentNoRebalanceRange);
-    }
-    
-    // Stage 2: Pending Rebalance Stability Check (anti-thrashing)
-    if (lastExecutionRequest?.DesiredNoRebalanceRange != null &&
-        !_policy.ShouldRebalance(lastExecutionRequest.DesiredNoRebalanceRange.Value, requestedRange))
-    {
-        return RebalanceDecision<TRange>.Skip(RebalanceReason.WithinPendingNoRebalanceRange);
-    }
-    
-    // Stage 3: Desired Range Computation
-    var desiredCacheRange = _planner.Plan(requestedRange);
-    var desiredNoRebalanceRange = _noRebalancePlanner.Plan(desiredCacheRange);
-    
-    // Stage 4: Equality Short Circuit
-    if (desiredCacheRange.Equals(currentCacheState.Cache.Range))
-    {
-        return RebalanceDecision<TRange>.Skip(RebalanceReason.DesiredEqualsCurrent);
-    }
-    
-    // Stage 5: Rebalance Required
-    return RebalanceDecision<TRange>.Execute(desiredCacheRange, desiredNoRebalanceRange);
-}
-```
+**Key Method - Evaluate**:
+
+**Five-Stage Decision Pipeline**:
+1. **Current Cache Stability Check** (fast path): Skip if requested range within current NoRebalanceRange
+2. **Pending Rebalance Stability Check** (anti-thrashing): Skip if requested range within pending NoRebalanceRange
+3. **Desired Range Computation**: Calculate desired cache range and desired no-rebalance range
+4. **Equality Short Circuit**: Skip if desired range equals current range
+5. **Rebalance Required**: Return execute decision with desired ranges
+
+> **See**: `src/SlidingWindowCache/Core/Rebalance/Decision/RebalanceDecisionEngine.cs` for implementation details.
 
 **Characteristics**:
 - ✅ **Pure function** (no side effects, CPU-only, no I/O)
@@ -970,27 +1224,9 @@ internal readonly struct ThresholdRebalancePolicy<TRange, TDomain>
 
 **Role**: Cache Geometry Policy - Threshold Rules (component 1 of 2)
 
-**Fields** (all readonly):
-- `WindowCacheOptions _options`
-- `TDomain _domain`
-
 **Key Methods**:
-
-**`ShouldRebalance(Range<TRange> noRebalanceRange, Range<TRange> requested)`**:
-```csharp
-public bool ShouldRebalance(Range<TRange> noRebalanceRange, Range<TRange> requested)
-    => !noRebalanceRange.Contains(requested);
-```
-
-**`GetNoRebalanceRange(Range<TRange> cacheRange)`**:
-```csharp
-public Range<TRange>? GetNoRebalanceRange(Range<TRange> cacheRange)
-    => cacheRange.ExpandByRatio(
-        domain: _domain,
-        leftRatio: -(_options.LeftThreshold ?? 0),  // Negate to shrink
-        rightRatio: -(_options.RightThreshold ?? 0)  // Negate to shrink
-    );
-```
+- **ShouldRebalance**: Determines if requested range is outside no-rebalance range
+- **GetNoRebalanceRange**: Computes no-rebalance range by shrinking cache range using threshold ratios
 
 **Characteristics**:
 - ✅ **Value type** (struct, passed by value)
@@ -1024,26 +1260,10 @@ internal readonly struct ProportionalRangePlanner<TRange, TDomain>
 
 **Role**: Cache Geometry Policy - Shape Planning (component 2 of 2)
 
-**Fields** (all readonly):
-- `WindowCacheOptions _options`
-- `TDomain _domain`
-
-**Key Method**:
-```csharp
-public Range<TRange> Plan(Range<TRange> requested)
-{
-    var size = requested.Span(_domain);
-    
-    var left = size.Value * _options.LeftCacheSize;
-    var right = size.Value * _options.RightCacheSize;
-    
-    return requested.Expand(
-        domain: _domain,
-        left: (long)left,
-        right: (long)right
-    );
-}
-```
+**Key Method - Plan**:
+- Computes desired cache range by expanding requested range
+- Uses left and right cache size coefficients from configuration
+- Pure function: same input → same output
 
 **Characteristics**:
 - ✅ **Value type** (struct, passed by value)
@@ -1117,61 +1337,25 @@ internal sealed class RebalanceExecutor<TRange, TData, TDomain>
 
 **Role**: Mutating Actor (sole component responsible for cache normalization)
 
-**Fields** (all readonly):
-- `CacheState<TRange, TData, TDomain> _state`
-- `CacheDataExtensionService<TRange, TData, TDomain> _cacheExtensionService`
-- `ICacheDiagnostics _cacheDiagnostics`
-- `SemaphoreSlim _executionSemaphore` (initialized to `new SemaphoreSlim(1, 1)`)
+**Dependencies** (all readonly):
+- CacheState (shared state - ONLY component that writes to it)
+- CacheDataExtensionService (data fetching)
+- ICacheDiagnostics (instrumentation)
 
-**Concurrency Model**:
-- Uses `SemaphoreSlim(1, 1)` to serialize execution - ensures only one rebalance can write to cache state at a time
-- Semaphore acquired at start of `ExecuteAsync()`, before any I/O operations
-- Released in `finally` block to guarantee release even on cancellation or exception
-- Works with `CancellationToken` - operations can be cancelled while waiting for semaphore
+**Execution Serialization**:
+- Provided by the active `IRebalanceExecutionController` implementation (NOT by RebalanceExecutor itself)
+- **TaskBasedRebalanceExecutionController** (default): Lock-free task chaining ensures sequential execution
+- **ChannelBasedRebalanceExecutionController** (optional): Bounded channel with single reader loop ensures sequential execution
+- CancellationToken provides early exit signaling throughout execution phases
 - WebAssembly-compatible, async, zero User Path blocking
 
-**Key Method**:
-```csharp
-public async Task ExecuteAsync(
-    Intent<TRange, TData, TDomain> intent,
-    Range<TRange> desiredRange,
-    Range<TRange>? desiredNoRebalanceRange,
-    CancellationToken cancellationToken)
-{
-    // Acquire semaphore to serialize execution
-    await _executionSemaphore.WaitAsync(cancellationToken).ConfigureAwait(false);
-    
-    try
-    {
-        // Get delivered data from intent
-        var baseRangeData = intent.AvailableRangeData;
-        
-        // Cancellation check after acquiring semaphore
-        cancellationToken.ThrowIfCancellationRequested();
-        
-        // Phase 1: Extend to cover desired range
-        var extended = await _cacheExtensionService.ExtendCacheAsync(
-            baseRangeData, desiredRange, cancellationToken).ConfigureAwait(false);
-        
-        // Cancellation check after I/O
-        cancellationToken.ThrowIfCancellationRequested();
-        
-        // Phase 2: Trim to desired range
-        baseRangeData = extended[desiredRange];
-        
-        // Cancellation check before mutation
-        cancellationToken.ThrowIfCancellationRequested();
-        
-        // Phase 3: Update cache state atomically
-        UpdateCacheState(baseRangeData, intent.RequestedRange, desiredNoRebalanceRange);
-    }
-    finally
-    {
-        // Always release semaphore
-        _executionSemaphore.Release();
-    }
-}
-```
+**Key Method** (high-level description - see source code for implementation details):
+- **ExecuteAsync**: Normalizes cache to desired range using delivered data from intent
+  - Phase 1: Extend delivered data to cover desired range (may fetch missing segments via IDataSource)
+  - Phase 2: Trim to desired range (discard excess data outside target)
+  - Phase 3: Update cache state atomically (sole writer - single-writer architecture)
+  - Multiple cancellation checks between phases (cancellation-safe)
+  - Uses delivered data from intent as authoritative source (avoids redundant fetches)
 
 **Reads from**:
 - ⊳ `intent.AvailableRangeData` (delivered data from User Path)
@@ -1225,17 +1409,9 @@ internal interface IRebalanceExecutionController<TRange, TData, TDomain> : IAsyn
 **Purpose**: Defines the contract for serializing rebalance execution requests. Implementations guarantee single-writer architecture by ensuring only one rebalance executes at a time.
 
 **Methods**:
-```csharp
-ValueTask PublishExecutionRequest(
-    Intent<TRange, TData, TDomain> intent,
-    Range<TRange> desiredRange,
-    Range<TRange>? desiredNoRebalanceRange,
-    CancellationToken cancellationToken);
-
-ExecutionRequest<TRange, TData, TDomain>? LastExecutionRequest { get; }
-
-ValueTask DisposeAsync();
-```
+- **PublishExecutionRequest**: Enqueues execution request with intent, desired range, and no-rebalance range
+- **LastExecutionRequest**: Property exposing most recent execution request (for decision engine validation)
+- **DisposeAsync**: Async disposal for graceful shutdown
 
 **Implementations**:
 - `TaskBasedRebalanceExecutionController` - Unbounded task chaining (default, minimal overhead)
@@ -1265,42 +1441,29 @@ internal sealed class TaskBasedRebalanceExecutionController<TRange, TData, TDoma
 
 **Role**: Unbounded execution serialization using lock-free task chaining (default strategy)
 
-**Fields**:
-- `RebalanceExecutor<TRange, TData, TDomain> _executor` (readonly)
-- `TimeSpan _debounceDelay` (readonly)
-- `ICacheDiagnostics _cacheDiagnostics` (readonly)
-- `AsyncActivityCounter _activityCounter` (readonly)
-- `Task _currentExecutionTask` (volatile write for single-writer pattern)
-- `ExecutionRequest<TRange, TData, TDomain>? _lastExecutionRequest` (volatile)
-- `int _disposeState` (Interlocked)
+**Dependencies**:
+- RebalanceExecutor (execution logic)
+- Debounce delay (from configuration)
+- AsyncActivityCounter (idle tracking)
+- ICacheDiagnostics (instrumentation)
+
+**Internal State**:
+- Current execution task (for task chaining)
+- Last execution request (for decision engine validation)
+- Dispose state (for idempotent disposal)
 
 **Serialization Mechanism**:
-```csharp
-public ValueTask PublishExecutionRequest(...)
-{
-    _lastExecutionRequest = new ExecutionRequest(...);
-    
-    // Lock-free task chaining (single-writer: intent processing loop)
-    var previousTask = _currentExecutionTask;
-    var newTask = ChainExecutionAsync(previousTask, request);
-    Volatile.Write(ref _currentExecutionTask, newTask);
-    
-    return ValueTask.CompletedTask; // Synchronous completion
-}
+- Task chaining ensures sequential execution (previous task must complete before next starts)
+- Lock-free coordination using atomic operations
+- Unbounded queue (no backpressure, requests always accepted)
 
-private async Task ChainExecutionAsync(Task previousTask, ExecutionRequest request)
-{
-    await previousTask.ConfigureAwait(false);  // Sequential guarantee
-    await ExecuteRequestAsync(request).ConfigureAwait(false);
-}
-```
+> **See**: `src/SlidingWindowCache/Core/Rebalance/Execution/TaskBasedRebalanceExecutionController.cs` for implementation details.
 
 **Characteristics**:
 - ✅ **Unbounded** - no queue capacity limit
-- ✅ **Lock-free** - volatile write for single-writer pattern
-- ✅ **Fire-and-forget** - returns `ValueTask.CompletedTask` immediately
-- ✅ **Minimal overhead** - single Task reference + volatile write
-- ✅ **Sequential execution** - `ChainExecutionAsync` ensures one at a time
+- ✅ **Fire-and-forget** - returns completed ValueTask immediately
+- ✅ **Minimal overhead** - single Task reference coordination
+- ✅ **Sequential execution** - task chaining ensures one at a time
 - ✅ **Cancellation** - integrated via CancellationToken
 - ✅ **Graceful disposal** - awaits final task completion
 
@@ -1327,34 +1490,25 @@ internal sealed class ChannelBasedRebalanceExecutionController<TRange, TData, TD
 
 **Role**: Bounded execution serialization using System.Threading.Channels (optional strategy)
 
-**Fields**:
-- `Channel<ExecutionRequest<TRange, TData, TDomain>> _executionChannel` (bounded capacity)
-- `RebalanceExecutor<TRange, TData, TDomain> _executor` (readonly)
-- `TimeSpan _debounceDelay` (readonly)
-- `ICacheDiagnostics _cacheDiagnostics` (readonly)
-- `AsyncActivityCounter _activityCounter` (readonly)
-- `Task _executionLoopTask` (background loop)
-- `ExecutionRequest<TRange, TData, TDomain>? _lastExecutionRequest` (Interlocked)
-- `int _disposeState` (Interlocked)
+**Dependencies**:
+- Bounded channel (execution queue)
+- RebalanceExecutor (execution logic)
+- Debounce delay (from configuration)
+- AsyncActivityCounter (idle tracking)
+- ICacheDiagnostics (instrumentation)
+
+**Internal State**:
+- Execution channel (bounded capacity queue)
+- Background execution loop task
+- Last execution request (for decision engine validation)
+- Dispose state (for idempotent disposal)
 
 **Serialization Mechanism**:
-```csharp
-public async ValueTask PublishExecutionRequest(...)
-{
-    _lastExecutionRequest = new ExecutionRequest(...);
-    
-    // Async await creates backpressure when channel is full
-    await _executionChannel.Writer.WriteAsync(request).ConfigureAwait(false);
-}
+- Channel provides natural serialization (single reader loop)
+- Bounded capacity creates backpressure when queue is full
+- Async write blocks when capacity reached (backpressure signal)
 
-private async Task ProcessExecutionRequestsAsync()
-{
-    await foreach (var request in _executionChannel.Reader.ReadAllAsync())
-    {
-        await ExecuteRequestAsync(request).ConfigureAwait(false);
-    }
-}
-```
+> **See**: `src/SlidingWindowCache/Core/Rebalance/Execution/ChannelBasedRebalanceExecutionController.cs` for implementation details.
 
 **Characteristics**:
 - ✅ **Bounded capacity** - strict limit on pending operations
@@ -1385,27 +1539,16 @@ internal sealed class CacheDataExtensionService<TRange, TData, TDomain>
 
 **Role**: Data Fetcher (used by both User Path and Rebalance Path)
 
-**Fields** (all readonly):
-- `IDataSource<TRange, TData> _dataSource` (user-provided)
-- `TDomain _domain`
+**Dependencies** (all readonly):
+- IDataSource (user-provided external data access)
+- Domain instance (for range calculations)
 
-**Key Method**:
-```csharp
-public async Task<RangeData<TRange, TData, TDomain>> ExtendCacheAsync(
-    RangeData<TRange, TData, TDomain> current,
-    Range<TRange> requested,
-    CancellationToken ct)
-{
-    // Step 1: Calculate missing ranges
-    var missingRanges = CalculateMissingRanges(current.Range, requested);
-    
-    // Step 2: Fetch missing data from data source
-    var fetchedResults = await _dataSource.FetchAsync(missingRanges, ct);
-    
-    // Step 3: Union fetched data with current cache
-    return UnionAll(current, fetchedResults, _domain);
-}
-```
+**Key Method - ExtendCacheAsync**:
+1. Calculate missing ranges (gaps between current and requested)
+2. Fetch missing data from data source
+3. Union fetched data with current cache (merge without trimming)
+
+> **See**: `src/SlidingWindowCache/Core/Rebalance/Execution/CacheDataExtensionService.cs` for implementation details.
 
 **Uses**:
 - ◇ `_dataSource.FetchAsync()` - external I/O to fetch data
@@ -1449,110 +1592,45 @@ public sealed class WindowCache<TRange, TData, TDomain> : IWindowCache<TRange, T
 
 **Role**: Public Facade, Composition Root, Resource Manager
 
-**Fields**:
-- `UserRequestHandler<TRange, TData, TDomain> _userRequestHandler` (readonly, private)
-- `AsyncActivityCounter _activityCounter` (readonly, private)
-- `int _disposeState` (mutable, private) - Lock-free disposal state tracking (0=active, 1=disposing, 2=disposed)
+**Internal State**:
+- UserRequestHandler (delegates user requests)
+- AsyncActivityCounter (idle tracking)
+- Dispose state (for idempotent disposal)
 
-**Constructor**: Creates and wires all internal components:
-```csharp
-public WindowCache(
-    IDataSource<TRange, TData> dataSource,
-    TDomain domain,
-    WindowCacheOptions options,
-    ICacheDiagnostics? cacheDiagnostics = null)
-{
-    var cacheStorage = CreateCacheStorage(domain, options);
-    var state = new CacheState<TRange, TData, TDomain>(cacheStorage, domain);
-    
-    var rebalancePolicy = new ThresholdRebalancePolicy<TRange, TDomain>();
-    var rangePlanner = new ProportionalRangePlanner<TRange, TDomain>(options, domain);
-    var noRebalancePlanner = new NoRebalanceRangePlanner<TRange, TDomain>(options, domain);
-    var cacheFetcher = new CacheDataExtensionService<TRange, TData, TDomain>(dataSource, domain, cacheDiagnostics);
-    
-    var decisionEngine = new RebalanceDecisionEngine<TRange, TDomain>(rebalancePolicy, rangePlanner, noRebalancePlanner);
-    var executor = new RebalanceExecutor<TRange, TData, TDomain>(state, cacheFetcher, cacheDiagnostics);
-    
-    // Factory method selects execution strategy based on configuration
-    var executionController = CreateExecutionController(
-        executor, options, cacheDiagnostics, _activityCounter);
-    
-    var intentController = new IntentController<TRange, TData, TDomain>(
-        state, decisionEngine, executionController, cacheDiagnostics, _activityCounter);
-    
-    _userRequestHandler = new UserRequestHandler<TRange, TData, TDomain>(
-        state, cacheFetcher, intentController, dataSource, cacheDiagnostics);
-}
+**Constructor - Composition Root**:
+Creates and wires all internal components in dependency order:
+1. Creates cache storage strategy (based on configuration)
+2. Creates CacheState with storage and domain
+3. Creates decision policies (threshold, range planner, no-rebalance planner)
+4. Creates data fetcher (CacheDataExtensionService)
+5. Creates decision engine (composes policies)
+6. Creates rebalance executor
+7. Selects and creates execution controller strategy (task-based or channel-based)
+8. Creates intent controller (composes decision engine and execution controller)
+9. Creates user request handler (composes state, fetcher, intent controller)
 
-// Factory method for execution strategy selection
-private static IRebalanceExecutionController<TRange, TData, TDomain> CreateExecutionController(
-    RebalanceExecutor<TRange, TData, TDomain> executor,
-    WindowCacheOptions options,
-    ICacheDiagnostics cacheDiagnostics,
-    AsyncActivityCounter activityCounter)
-{
-    if (options.RebalanceQueueCapacity.HasValue)
-    {
-        // Bounded channel strategy with backpressure
-        return new ChannelBasedRebalanceExecutionController<TRange, TData, TDomain>(
-            executor, options.DebounceDelay, cacheDiagnostics, activityCounter,
-            options.RebalanceQueueCapacity.Value);
-    }
-    else
-    {
-        // Task-based strategy (default, unbounded)
-        return new TaskBasedRebalanceExecutionController<TRange, TData, TDomain>(
-            executor, options.DebounceDelay, cacheDiagnostics, activityCounter);
-    }
-}
-```
+> **See**: `src/SlidingWindowCache/WindowCache.cs` constructor for wiring details.
 
 **Public API**:
-```csharp
-// Primary domain API
-public ValueTask<ReadOnlyMemory<TData>> GetDataAsync(
-    Range<TRange> requestedRange,
-    CancellationToken cancellationToken)
-{
-    // Throws ObjectDisposedException if disposed
-    if (Volatile.Read(ref _disposeState) != 0)
-        throw new ObjectDisposedException(...);
-    
-    return _userRequestHandler.HandleRequestAsync(requestedRange, cancellationToken);
-}
 
-// Infrastructure API (synchronization)
-public Task WaitForIdleAsync(CancellationToken cancellationToken = default)
-{
-    // Throws ObjectDisposedException if disposed
-    if (Volatile.Read(ref _disposeState) != 0)
-        throw new ObjectDisposedException(...);
-    
-    return _activityCounter.WaitForIdleAsync(cancellationToken);
-}
+**GetDataAsync** (primary domain API):
+- Validates cache not disposed
+- Delegates to UserRequestHandler.HandleRequestAsync
+- Throws ObjectDisposedException if disposed
 
-// Resource management API
-public async ValueTask DisposeAsync()
-{
-    // Three-state disposal: 0=active, 1=disposing, 2=disposed
-    // Uses Interlocked.CompareExchange for lock-free idempotency
-    var previousState = Interlocked.CompareExchange(ref _disposeState, 1, 0);
-    
-    if (previousState == 0)
-    {
-        // First disposal - perform cleanup
-        await _userRequestHandler.DisposeAsync();
-        Volatile.Write(ref _disposeState, 2);
-    }
-    else if (previousState == 1)
-    {
-        // Another thread is disposing - spin-wait until complete
-        while (Volatile.Read(ref _disposeState) == 1)
-            SpinWait.SpinOnce();
-    }
-    // previousState == 2: already disposed, return immediately
-}
-```
+**WaitForIdleAsync** (infrastructure API for synchronization):
+- Validates cache not disposed
+- Delegates to AsyncActivityCounter
+- Completes when system was idle at some point
+- Throws ObjectDisposedException if disposed
+
+**DisposeAsync** (resource management):
+- Three-state disposal pattern for concurrent safety (active → disposing → disposed)
+- Idempotent (safe to call multiple times)
+- Cascades disposal to all internal components
+- Graceful shutdown (doesn't force-terminate tasks)
+
+> **See**: `src/SlidingWindowCache/WindowCache.cs` for public API implementation details.
 
 **Characteristics**:
 - ✅ **Pure facade** (no business logic)
@@ -1891,7 +1969,7 @@ public async ValueTask DisposeAsync()
 
 ### Concurrency Philosophy
 
-The Sliding Window Cache follows a **single consumer model** as documented in `docs/concurrency-model.md`:
+The Sliding Window Cache follows a **single consumer model** as documented in `docs/architecture-model.md`:
 
 > "A cache instance is **not thread-safe**, is **not designed for concurrent access**, and assumes a single, coherent access pattern. This is an **ideological requirement**, not merely an architectural or technical limitation."
 
@@ -2195,16 +2273,18 @@ var sharedCache = new WindowCache<int, Data, IntDomain>(...);
 ### By Execution Context
 
 **User Thread (Synchronous, Fast)**:
-- WindowCache - Facade, delegates
-- UserRequestHandler - Serve requests, trigger intents
-- IntentController - Intent lifecycle, decision orchestration (synchronous methods)
-- RebalanceDecisionEngine - Pure decision logic (CPU-only, synchronous)
+- WindowCache - Facade, delegates to UserRequestHandler
+- UserRequestHandler - Serves user requests, publishes intents (fire-and-forget)
+- IntentController.PublishIntent - Intent publishing (fire-and-forget, returns immediately)
+
+**Background Thread (Intent Processing Loop)**:
+- IntentController.ProcessIntentsAsync - Intent processing loop, decision orchestration
+- RebalanceDecisionEngine - Pure decision logic (CPU-only, deterministic)
 - ThresholdRebalancePolicy - Threshold validation (value type, inline)
 - ProportionalRangePlanner - Cache geometry planning (value type, inline)
 
-**Background / ThreadPool (Asynchronous, Heavy)**:
-- RebalanceScheduler - Timing, debounce, orchestration (execution only, scheduling is sync)
-- RebalanceExecutor - Cache normalization, I/O
+**Background ThreadPool (Execution)**:
+- RebalanceExecutor - Cache normalization, I/O operations
 
 **Both Contexts**:
 - CacheDataExtensionService - Data fetching (called by both paths)
@@ -2272,7 +2352,7 @@ Entire architecture assumes one logical consumer, avoiding traditional concurren
 - **Invariants**: `docs/invariants.md`
 - **Scenarios**: `docs/scenario-model.md`
 - **State Machine**: `docs/cache-state-machine.md`
-- **Concurrency Model**: `docs/concurrency-model.md`
+- **Architecture Model**: `docs/architecture-model.md`
 - **Storage Strategies**: `docs/storage-strategies.md`
 - **Cache Hit/Miss Tracking**: `docs/cache-hit-miss-tracking-implementation.md`
 

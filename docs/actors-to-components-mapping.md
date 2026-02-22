@@ -3,6 +3,11 @@
 This document maps the **conceptual system actors** defined by the Scenario Model
 to **concrete architectural components** of the Sliding Window Cache library.
 
+> **📖 For detailed architectural explanations, see:**
+> - [Architecture Model](architecture-model.md) - Threading model, execution contexts, coordination mechanisms
+> - [Component Map](component-map.md) - Complete component catalog with relationships
+> - [Actors and Responsibilities](actors-and-responsibilities.md) - Invariant ownership by actor
+
 The purpose of this document is:
 
 - to fix architectural intent
@@ -369,7 +374,7 @@ but externally appears as a unified policy concept.
 
 ### Mapped Actor
 
-**Rebalance Intent Manager**
+**IntentController Actor**
 
 ### Implementation
 
@@ -402,7 +407,7 @@ but externally appears as a unified policy concept.
 
 ### Enhanced Role (Decision-Driven Model)
 
-The Rebalance Intent Manager actor is responsible for:
+The IntentController actor is responsible for:
 
 - **Receiving intents** (on every user request) [`IntentController.PublishIntent()` - User Thread, atomic only]
 - **Owning and invoking DecisionEngine** [`IntentController` owns; invokes in `ProcessIntentsAsync` background loop]
@@ -659,7 +664,7 @@ RebalanceExecutor
 
 #### RebalanceIntentManager (Enhanced Role)
 
-The Rebalance Intent Manager ACTOR (implemented via `IntentController` + `IRebalanceExecutionController`) is the **orchestrator** responsible for:
+The IntentController ACTOR (implemented via `IntentController` + `IRebalanceExecutionController`) is the **orchestrator** responsible for:
 
 - ✅ Receiving intent on **every user request** [`IntentController.PublishIntent()`]
 - ✅ Deduplication and debouncing [`IRebalanceExecutionController`]

@@ -2,6 +2,11 @@
 
 This document maps **system actors** to the invariants they enforce or guarantee.
 
+> **📖 For detailed architectural explanations, see:**
+> - [Architecture Model](architecture-model.md) - Threading model, decision-driven execution, single-writer architecture
+> - [Invariants](invariants.md) - Complete invariant specifications
+> - [Component Map](component-map.md) - Component relationships and structure
+
 ---
 
 ## 1. User Path (Fast Path / Read Path Actor)
@@ -130,7 +135,7 @@ Pure functions, lightweight structs (value types), CPU-only, side-effect free
 
 ---
 
-## 4. Rebalance Intent Manager (Intent & Concurrency Actor)
+## 4. IntentController (Intent & Concurrency Actor)
 
 **Role:**  
 Manages lifecycle of rebalance intents, orchestrates decision pipeline, and coordinates cancellation based on validation results.
@@ -189,7 +194,7 @@ Now responsible for:
 
 **Responsibility Type:** controls and coordinates intent execution based on validation results
 
-**Note:** Internally decomposed into Intent Controller + Execution Scheduler,
+**Note:** Internally decomposed into IntentController + RebalanceExecutionController,
 but externally appears as a single unified actor.
 
 ---
@@ -264,7 +269,7 @@ Ensures atomicity and internal consistency of cache state, coordinates cancellat
 
 - **User Path:** speed and availability
 - **Decision Engine:** pure logic
-- **Intent Manager:** temporal correctness and concurrency
+- **IntentController:** temporal correctness and concurrency
 - **Executor:** mutation
 - **State Manager:** correctness and consistency
 - **Geometry Policy:** deterministic cache shape
@@ -275,7 +280,7 @@ Ensures atomicity and internal consistency of cache state, coordinates cancellat
 
 This table maps **actors** to the scenarios they participate in and clarifies **read/write responsibilities**.
 
-| Scenario                                | User Path                                                                                                               | Decision Engine                                  | Geometry Policy            | Intent Manager                           | Rebalance Executor                                                                     | Cache State Manager                                    | Notes                                      |
+| Scenario                                | User Path                                                                                                               | Decision Engine                                  | Geometry Policy            | IntentController                         | Rebalance Executor                                                                     | Cache State Manager                                    | Notes                                      |
 |-----------------------------------------|-------------------------------------------------------------------------------------------------------------------------|--------------------------------------------------|----------------------------|------------------------------------------|----------------------------------------------------------------------------------------|--------------------------------------------------------|--------------------------------------------|
 | **U1 – Cold Cache**                     | Requests data from IDataSource, returns data to user, publishes rebalance intent                                        | –                                                | Computes DesiredCacheRange | Receives intent                          | Executes rebalance asynchronously (writes LastRequested, CurrentCacheRange, CacheData) | Validates atomic update of CacheData/CurrentCacheRange | User served directly                       |
 | **U2 – Full Cache Hit (Exact)**         | Reads from cache, publishes rebalance intent                                                                            | Checks NoRebalanceRange                          | Computes DesiredCacheRange | Receives intent                          | Executes if rebalance required                                                         | Monitors consistency                                   | Minimal I/O                                |

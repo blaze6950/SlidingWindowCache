@@ -1,5 +1,8 @@
 ﻿# Sliding Window Cache - Storage Strategies Guide
 
+> **📖 For component implementation details, see:**
+> - [Component Map - Storage Section](component-map.md#3-storage-implementations) - SnapshotReadStorage and CopyOnReadStorage architecture
+
 ## Overview
 
 The WindowCache supports two distinct storage strategies, selectable via `WindowCacheOptions.ReadMode`:

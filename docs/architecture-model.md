@@ -1,4 +1,23 @@
-# Concurrency Model
+# System Architecture Model
+
+## What This Document Covers
+
+This document describes the **complete architectural model** of SlidingWindowCache, including:
+
+1. **Threading Model** — Single consumer principle, internal concurrency, execution contexts
+2. **Single-Writer Architecture** — Read-only User Path, exclusive writer pattern, lock-free coordination
+3. **Decision-Driven Execution** — Multi-stage validation pipeline, work avoidance, smart consistency
+4. **Resource Management** — Disposal, graceful shutdown, lock-free coordination mechanisms
+
+**Note**: This document was previously titled "Concurrency Model" but has been renamed to better reflect its broader scope beyond just threading concerns. It covers the fundamental architectural patterns that define how SlidingWindowCache operates.
+
+**Related Documentation**:
+- [invariants.md](invariants.md) — Formal specifications for architectural concepts described here
+- [component-map.md](component-map.md) — Implementation details and component structure
+- [scenario-model.md](scenario-model.md) — Temporal behavior and execution flows
+- [glossary.md](glossary.md) — Canonical term definitions
+
+---
 
 ## Core Principle
 
