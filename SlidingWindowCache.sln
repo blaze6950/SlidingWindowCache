@@ -15,10 +15,11 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "docs", "docs", "{B0276F89-7
 		docs\actors-and-responsibilities.md = docs\actors-and-responsibilities.md
 		docs\cache-state-machine.md = docs\cache-state-machine.md
 		docs\actors-to-components-mapping.md = docs\actors-to-components-mapping.md
-		docs\concurrency-model.md = docs\concurrency-model.md
 		docs\component-map.md = docs\component-map.md
 		docs\storage-strategies.md = docs\storage-strategies.md
 		docs\diagnostics.md = docs\diagnostics.md
+		docs\architecture-model.md = docs\architecture-model.md
+		docs\glossary.md = docs\glossary.md
 	EndProjectSection
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "src", "src", "{2126ACFB-75E0-4E60-A84C-463EBA8A8799}"
