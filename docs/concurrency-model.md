@@ -167,29 +167,31 @@ The Decision Engine determines necessity through analytical validation (work avo
 Cache state converges to optimal configuration asynchronously through **decision-driven rebalance execution**:
 
 1. **User Path** returns correct data immediately (from cache or IDataSource)
-2. **User Path** publishes intent with delivered data (**synchronously in user thread**)
-3. **Rebalance Decision Engine** validates rebalance necessity through multi-stage analytical pipeline (**synchronously in user thread - CPU-only, side-effect free, lightweight**)
-4. **Scheduling** creates PendingRebalance and schedules background Task (**synchronously in user thread**)
-5. **Work avoidance**: Rebalance skipped if validation determines it's unnecessary (NoRebalanceRange containment, Desired==Current, pending rebalance coverage) - **all happens synchronously before background scheduling**
-6. **Background execution** (only part that runs in ThreadPool): debounce delay + actual rebalance I/O operations
-7. **Debounce delay** controls convergence timing and prevents thrashing (background)
-8. **User correctness** never depends on cache state being up-to-date
+2. **User Path** publishes intent with delivered data (**synchronously in user thread** — lightweight signal only)
+3. **Intent processing loop** (background) wakes on semaphore signal, reads latest intent via `Interlocked.Exchange`
+4. **Rebalance Decision Engine** validates rebalance necessity through multi-stage analytical pipeline (**in background intent loop — CPU-only, side-effect free, lightweight**)
+5. **Work avoidance**: Rebalance skipped if validation determines it's unnecessary (NoRebalanceRange containment, Desired==Current, pending rebalance coverage) — **all happens in background intent loop before scheduling**
+6. **Scheduling**: if execution required, cancels prior execution request and publishes new one (**in background intent loop**)
+7. **Background execution** (rebalance loop): debounce delay + actual rebalance I/O operations
+8. **Debounce delay** controls convergence timing and prevents thrashing (background)
+9. **User correctness** never depends on cache state being up-to-date
 
 **Key insight:** User always receives correct data, regardless of whether cache has converged yet.
 
 **"Smart" characteristic:** The system avoids unnecessary work through multi-stage validation rather than blindly executing every intent. This prevents thrashing, reduces redundant I/O, and maintains stability under rapidly changing access patterns while ensuring eventual convergence to optimal configuration.
 
-**Critical Architectural Detail - Intent Processing is Synchronous:**
+**Critical Architectural Detail - Intent Processing is in Background Loop:**
 
-The decision logic (multi-stage validation) and scheduling are **NOT background operations**. They execute **synchronously in the user thread** before returning control to the user. Only the actual rebalance execution (I/O operations) happens in background via background task scheduling.
+The decision logic (multi-stage validation) and scheduling execute in a **dedicated background intent processing loop** (`IntentController.ProcessIntentsAsync`), NOT synchronously in the user thread. The user thread only performs a lightweight `Interlocked.Exchange` + semaphore release when publishing an intent, then returns immediately.
 
 This design is intentional and critical for handling user request bursts:
-- ✅ **CPU-only validation** in user thread (math, conditions, no I/O)
-- ✅ **Side-effect free** - just calculations
-- ✅ **Lightweight** - completes in microseconds
-- ✅ **Prevents intent thrashing** - validates necessity immediately, skips if not needed
-- ✅ **No background queue buildup** - decisions made synchronously
-- ⚠️ Only actual **I/O operations** (data fetching, cache mutation) happen in background
+- ✅ **User thread returns immediately** after publishing intent (signal only)
+- ✅ **CPU-only validation** in background loop (math, conditions, no I/O)
+- ✅ **Side-effect free** decision — just calculations
+- ✅ **Lightweight** — completes in microseconds
+- ✅ **Prevents intent thrashing** — validates necessity before scheduling, skips if not needed
+- ✅ **Latest-wins** — `Interlocked.Exchange` ensures only the most recent intent is acted upon
+- ⚠️ Only actual **I/O operations** (data fetching, cache mutation) happen in the rebalance execution loop
 
 ---
 
@@ -293,19 +295,21 @@ usage patterns or domain semantics.
 
 ### Implementation
 
-**Mechanism**: Task lifecycle tracking via observe-and-stabilize pattern
+**Mechanism**: `AsyncActivityCounter` — TCS-based lock-free idle detection
 
-- `RebalanceScheduler` maintains `_idleTask` field tracking latest background Task
-- `WaitForIdleAsync()` implements:
-  ```
-  1. Volatile.Read(_idleTask) → observe current Task
-  2. await observedTask → wait for completion
-  3. Re-check if _idleTask changed → detect new rebalance
-  4. Loop until Task reference stabilizes
-  ```
-- Guarantees: No rebalance execution running when method returns
-- Safety: Handles concurrent intent cancellation and rescheduling correctly
-- Use cases: Testing, graceful shutdown, health checks, integration scenarios
+`AsyncActivityCounter` tracks all in-flight activity (user requests + background loops). When the counter reaches zero, the current `TaskCompletionSource` is completed, unblocking all waiters:
+
+```
+WaitForIdleAsync():
+  1. Volatile.Read(_idleTcs) → observe current TCS
+  2. await observedTcs.Task → wait for idle signal
+  3. (Re-entry prevention handled by TCS completion semantics)
+```
+
+- Guarantees: System **was idle at some point** when method returns (eventual consistency semantics)
+- Safety: Lock-free — uses only `Interlocked` and `Volatile` operations; no deadlocks
+- Multiple waiters supported: all await the same TCS
+- See "AsyncActivityCounter - Lock-Free Idle Detection" section for full architecture details
 
 ### Use Cases
 
@@ -317,10 +321,10 @@ usage patterns or domain semantics.
 
 This synchronization mechanism does **not** alter actor responsibilities:
 
-- UserRequestHandler remains sole intent publisher
-- IntentController remains lifecycle authority
-- RebalanceScheduler remains execution authority
-- WindowCache remains pure facade
+- `UserRequestHandler` remains sole intent publisher
+- `IntentController` remains lifecycle authority for intent cancellation
+- `IRebalanceExecutionController` remains execution authority
+- `WindowCache` remains pure facade
 
 Method exists only to expose idle synchronization through public API for testing purposes.
 
@@ -330,10 +334,10 @@ The system uses lock-free synchronization throughout:
 
 **IntentController** - Lock-free intent management:
 - **No locks, no `lock` statements, no mutexes**
-- Uses `Volatile.Read` and `Volatile.Write` for safe field access across threads
-- `_pendingRebalance` field accessed with memory barriers via `Volatile` operations
-- Encapsulates `CancellationTokenSource` within `PendingRebalance` domain object (DDD-style)
-- Thread-safe without blocking - guaranteed progress
+- `_pendingIntent` field updated via `Interlocked.Exchange` — atomic latest-wins semantics
+- Prior intent replaced atomically; no `Volatile.Read/Write` loop needed
+- `SemaphoreSlim` used as lightweight signal for background processing loop
+- Thread-safe without blocking — guaranteed progress
 - Zero contention overhead
 
 **AsyncActivityCounter** - Lock-free idle detection:
@@ -346,9 +350,9 @@ The system uses lock-free synchronization throughout:
 
 **Safe Visibility Pattern:**
 ```csharp
-// IntentController - Volatile operations for intent coordination
-var pending = Volatile.Read(ref _pendingRebalance);
-Volatile.Write(ref _pendingRebalance, newPending);
+// IntentController - Interlocked.Exchange for atomic intent replacement (latest-wins)
+var previousIntent = Interlocked.Exchange(ref _pendingIntent, newIntent);
+// (previousIntent is superseded; background loop picks up newIntent via another Exchange)
 
 // AsyncActivityCounter - Volatile + Interlocked for idle detection
 var newCount = Interlocked.Increment(ref _activityCount);  // Atomic counter
@@ -356,23 +360,16 @@ Volatile.Write(ref _idleTcs, newTcs);  // Publish TCS with release fence
 var tcs = Volatile.Read(ref _idleTcs);  // Observe TCS with acquire fence
 ```
 
-**Domain-Driven Cancellation:**
-- `PendingRebalance` domain object owns `CancellationTokenSource` lifecycle
-- Cancellation invoked through domain object's `Cancel()` method
-- Eliminates direct CTS management in IntentController (better encapsulation)
-
 **Testing Coverage:**
 - Lock-free behavior validated by `ConcurrencyStabilityTests`
 - Tested under concurrent load (100+ simultaneous operations)
 - No deadlocks, no race conditions, no data corruption observed
 
-This lightweight synchronization approach using `Volatile` and `Interlocked` operations ensures thread-safety 
-without the overhead and complexity of traditional locking mechanisms, while the DDD-style 
-domain object pattern provides clean encapsulation of cancellation infrastructure.
+This lightweight synchronization approach using `Volatile` and `Interlocked` operations ensures thread-safety without the overhead and complexity of traditional locking mechanisms.
 
 ### Relation to Concurrency Model
 
-The observe-and-stabilize pattern:
+The `AsyncActivityCounter` idle detection:
 - Does not introduce locking or mutual exclusion
 - Leverages existing single-writer architecture
 - Provides visibility through volatile reads

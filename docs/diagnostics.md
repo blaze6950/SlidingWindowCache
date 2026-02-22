@@ -40,7 +40,7 @@ The Sliding Window Cache provides optional diagnostics instrumentation for monit
 
 ### Interface: `ICacheDiagnostics`
 
-The diagnostics system is built around the `ICacheDiagnostics` interface, which defines 15 event recording methods corresponding to key cache behavioral events:
+The diagnostics system is built around the `ICacheDiagnostics` interface, which defines 18 event recording methods corresponding to key cache behavioral events:
 
 ```csharp
 public interface ICacheDiagnostics
@@ -66,9 +66,14 @@ public interface ICacheDiagnostics
     void RebalanceExecutionCompleted();
     void RebalanceExecutionCancelled();
     
-    // Rebalance Skip Optimization Events
-    void RebalanceSkippedNoRebalanceRange();
-    void RebalanceSkippedSameRange();
+    // Rebalance Skip / Schedule Optimization Events
+    void RebalanceSkippedCurrentNoRebalanceRange();   // Stage 1: current NoRebalanceRange
+    void RebalanceSkippedPendingNoRebalanceRange();   // Stage 2: pending NoRebalanceRange
+    void RebalanceSkippedSameRange();                 // Stage 4: desired == current range
+    void RebalanceScheduled();                        // Stage 5: execution scheduled
+    
+    // Failure Events
+    void RebalanceExecutionFailed(Exception ex);
 }
 ```
 
@@ -97,7 +102,7 @@ Console.WriteLine($"Rebalances: {diagnostics.RebalanceExecutionCompleted}");
 **Features:**
 - ✅ Thread-safe (uses `Interlocked.Increment`)
 - ✅ Low overhead (integer increment per event)
-- ✅ Read-only properties for all 16 counters (15 counters + 1 exception event)
+- ✅ Read-only properties for all 18 counters (17 counters + 1 exception event)
 - ✅ `Reset()` method for test isolation
 - ✅ Instance-based (multiple caches can have separate diagnostics)
 - ⚠️ **Warning**: Default implementation only writes RebalanceExecutionFailed to Debug output
@@ -352,7 +357,7 @@ Assert.Equal(1, diagnostics.RebalanceIntentPublished);
 
 #### `RebalanceIntentCancelled()`
 **Tracks:** Intent cancellation before or during execution  
-**Location:** `RebalanceScheduler` (three cancellation points)  
+**Location:** `IntentController.ProcessIntentsAsync` (background loop — when new intent supersedes pending intent)  
 **Invariants:** A.0 (User Path priority), A.0a (User cancels rebalance), C.20 (Obsolete intent doesn't start)  
 **Interpretation:** Single-flight execution - new request cancels previous intent
 
@@ -379,7 +384,7 @@ Assert.True(diagnostics.RebalanceIntentCancelled >= 1);
 
 #### `RebalanceExecutionStarted()`
 **Tracks:** Rebalance execution start after decision approval  
-**Location:** `RebalanceScheduler.ExecutePipelineAsync` (after DecisionEngine approval)  
+**Location:** `IntentController.ProcessIntentsAsync` (after `RebalanceDecisionEngine` approves execution)  
 **Scenarios:** Decision Scenario D3 (rebalance required)  
 **Invariant:** 28 (Rebalance triggered only if confirmed necessary)
 
@@ -411,7 +416,7 @@ Assert.Equal(1, diagnostics.RebalanceExecutionCompleted);
 
 #### `RebalanceExecutionCancelled()`
 **Tracks:** Rebalance cancellation mid-flight  
-**Location:** `RebalanceScheduler.ExecutePipelineAsync` (catch OperationCanceledException)  
+**Location:** `RebalanceExecutor.ExecuteAsync` (catch `OperationCanceledException`)  
 **Invariant:** 34a (Rebalance yields to User Path immediately)  
 **Interpretation:** User Path priority enforcement - rebalance interrupted
 
@@ -432,7 +437,7 @@ Assert.True(diagnostics.RebalanceExecutionCancelled >= 1);
 
 #### `RebalanceExecutionFailed(Exception ex)` ⚠️ CRITICAL
 **Tracks:** Rebalance execution failure due to exception  
-**Location:** `RebalanceScheduler.ExecutePipelineAsync` (catch Exception after executor call)  
+**Location:** `RebalanceExecutor.ExecuteAsync` (catch `Exception`)  
 **Interpretation:** **CRITICAL ERROR** - background rebalance operation failed
 
 **⚠️ WARNING: This event MUST be handled in production applications**
@@ -526,12 +531,12 @@ Assert.Equal(1, diagnostics.RebalanceExecutionFailed);
 
 ---
 
-### Rebalance Skip Optimization Events
+### Rebalance Skip / Schedule Optimization Events
 
-#### `RebalanceSkippedNoRebalanceRange()`
-**Tracks:** Rebalance skipped due to NoRebalanceRange policy  
-**Location:** `RebalanceScheduler.ExecutePipelineAsync` (DecisionEngine returns ShouldExecute=false)  
-**Scenarios:** Decision Scenario D1 (inside no-rebalance threshold)  
+#### `RebalanceSkippedCurrentNoRebalanceRange()`
+**Tracks:** Rebalance skipped — last requested position is within the current `NoRebalanceRange`  
+**Location:** `RebalanceDecisionEngine.Evaluate` (Stage 1 early exit)  
+**Scenarios:** Decision Scenario D1 (inside current no-rebalance threshold)  
 **Invariants:** D.26 (No rebalance if inside NoRebalanceRange), D.27 (Policy-based skip)
 
 **Example Usage:**
@@ -545,19 +550,39 @@ var options = new WindowCacheOptions(
 await cache.GetDataAsync(Range.Closed(100, 200), ct);
 await cache.WaitForIdleAsync();
 
-// Request 2 inside NoRebalanceRange - skips rebalance
+// Request 2 inside current NoRebalanceRange - skips rebalance (Stage 1)
 await cache.GetDataAsync(Range.Closed(120, 180), ct);
 await cache.WaitForIdleAsync();
 
-Assert.True(diagnostics.RebalanceSkippedNoRebalanceRange >= 1);
+Assert.True(diagnostics.RebalanceSkippedCurrentNoRebalanceRange >= 1);
+```
+
+---
+
+#### `RebalanceSkippedPendingNoRebalanceRange()`
+**Tracks:** Rebalance skipped — last requested position is within the *pending* (desired) `NoRebalanceRange` of an already-scheduled execution  
+**Location:** `RebalanceDecisionEngine.Evaluate` (Stage 2 early exit)  
+**Scenarios:** Decision Scenario D2 (pending rebalance covers the request — anti-thrashing)  
+**Invariants:** D.26a (No rebalance if pending rebalance covers request)
+
+**Example Usage:**
+```csharp
+// Request 1 publishes intent and schedules execution
+var _ = cache.GetDataAsync(Range.Closed(100, 200), ct);
+
+// Request 2 (before debounce completes) — pending execution already covers it
+await cache.GetDataAsync(Range.Closed(110, 190), ct);
+await cache.WaitForIdleAsync();
+
+Assert.True(diagnostics.RebalanceSkippedPendingNoRebalanceRange >= 1);
 ```
 
 ---
 
 #### `RebalanceSkippedSameRange()`
-**Tracks:** Rebalance skipped because ranges already match  
-**Location:** `RebalanceExecutor.ExecuteAsync` (before expensive I/O)  
-**Scenarios:** Decision Scenario D2 (DesiredCacheRange == CurrentCacheRange)  
+**Tracks:** Rebalance skipped because desired cache range equals current cache range  
+**Location:** `RebalanceDecisionEngine.Evaluate` (Stage 4 early exit)  
+**Scenarios:** Decision Scenario D3 (DesiredCacheRange == CurrentCacheRange)  
 **Invariants:** D.27 (No rebalance if same range), D.28 (Same-range optimization)
 
 **Example Usage:**
@@ -568,6 +593,23 @@ await cache.WaitForIdleAsync();
 
 // Rebalance started but detected same-range condition
 Assert.True(diagnostics.RebalanceSkippedSameRange >= 0); // May or may not occur
+```
+
+---
+
+#### `RebalanceScheduled()`
+**Tracks:** Rebalance execution successfully scheduled after all decision stages approved  
+**Location:** `IntentController.ProcessIntentsAsync` (Stage 5 — after `RebalanceDecisionEngine` returns `ShouldSchedule=true`)  
+**Scenarios:** Decision Scenario D4 (rebalance required)  
+**Invariant:** D.28 (Rebalance triggered only if confirmed necessary)
+
+**Example Usage:**
+```csharp
+await cache.GetDataAsync(Range.Closed(100, 200), ct);
+await cache.WaitForIdleAsync();
+
+// Every completed execution was preceded by a scheduling event
+Assert.True(diagnostics.RebalanceScheduled >= diagnostics.RebalanceExecutionCompleted);
 ```
 
 ---
@@ -648,7 +690,7 @@ public static void AssertPartialCacheHit(EventCounterCacheDiagnostics d, int exp
 
 ### Memory Overhead
 
-- `EventCounterCacheDiagnostics`: 60 bytes (15 integers)
+- `EventCounterCacheDiagnostics`: 72 bytes (18 integers)
 - `NoOpDiagnostics`: 0 bytes (no state)
 
 ### Recommendation

@@ -19,10 +19,10 @@ namespace SlidingWindowCache.Core.Rebalance.Execution;
 /// <para><strong>Execution Context:</strong> Background / ThreadPool (via RebalanceExecutionController actor)</para>
 /// <para><strong>Characteristics:</strong> Asynchronous, cancellable, heavyweight</para>
 /// <para><strong>Responsibility:</strong> Cache normalization (expand, trim, recompute NoRebalanceRange)</para>
-/// <para><strong>Execution Serialization:</strong> Provided by RebalanceExecutionController actor which processes
-/// execution requests sequentially via Channel. No semaphore needed - the actor's single-threaded processing
-/// guarantees that only one rebalance execution can write to cache state at a time. CancellationToken provides
-/// early exit signaling. WebAssembly-compatible, async, and lightweight.</para>
+/// <para><strong>Execution Serialization:</strong> Provided by the active <c>IRebalanceExecutionController</c> actor, which ensures
+/// only one rebalance execution runs at a time — either via task chaining (<c>TaskBasedRebalanceExecutionController</c>, default)
+/// or via bounded channel (<c>ChannelBasedRebalanceExecutionController</c>).
+/// CancellationToken provides early exit signaling. WebAssembly-compatible, async, and lightweight.</para>
 /// </remarks>
 internal sealed class RebalanceExecutor<TRange, TData, TDomain>
     where TRange : IComparable<TRange>
@@ -70,9 +70,10 @@ internal sealed class RebalanceExecutor<TRange, TData, TDomain>
     /// This executor is intentionally simple - no analytical decisions, no necessity checks.
     /// Decision logic has been validated by DecisionEngine before invocation.
     /// </para>
-    /// <para><strong>Serialization:</strong> RebalanceExecutionController actor guarantees single-threaded
-    /// execution via Channel-based sequential processing. No semaphore needed - the actor ensures only one
-    /// execution runs at a time. Cancellation allows fast exit from superseded operations.</para>
+/// <para><strong>Serialization:</strong> The active <c>IRebalanceExecutionController</c> actor guarantees single-threaded
+/// execution (via task chaining or channel-based sequential processing depending on configuration).
+/// No semaphore needed — the actor ensures only one execution runs at a time.
+/// Cancellation allows fast exit from superseded operations.</para>
     /// </remarks>
     public async Task ExecuteAsync(
         Intent<TRange, TData, TDomain> intent,

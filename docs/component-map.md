@@ -154,8 +154,8 @@ The system uses a **multi-stage rebalance decision pipeline**, not a cancellatio
 | Component | Role | Decision Authority |
 |-----------|------|-------------------|
 | **UserRequestHandler** | Read-only; publishes intents with delivered data | No decision authority |
-| **IntentController** | Manages intent lifecycle; coordinates cancellation | No decision authority |
-| **RebalanceScheduler** | Orchestrates validation pipeline timing | No decision authority |
+| **IntentController** | Manages intent lifecycle; runs background processing loop | No decision authority |
+| **IRebalanceExecutionController** | Debounce + execution serialization | No decision authority |
 | **RebalanceDecisionEngine** | **SOLE AUTHORITY** for necessity determination | **Yes - THE authority** |
 | **ThresholdRebalancePolicy** | Stage 1 validation (NoRebalanceRange check) | Analytical input |
 | **ProportionalRangePlanner** | Computes desired cache geometry | Analytical input |
@@ -230,7 +230,7 @@ public record WindowCacheOptions
 public enum UserCacheReadMode
 ```
 
-**File**: `src/SlidingWindowCache/UserCacheReadMode.cs`
+**File**: `src/SlidingWindowCache/Public/Configuration/UserCacheReadMode.cs`
 
 **Type**: Enum (value type)
 
@@ -502,31 +502,33 @@ public interface ICacheDiagnostics
 public class EventCounterCacheDiagnostics : ICacheDiagnostics
 ```
 
-**File**: `src/SlidingWindowCache/Infrastructure/Instrumentation/DefaultCacheDiagnostics.cs`
+**File**: `src/SlidingWindowCache/Infrastructure/Instrumentation/EventCounterCacheDiagnostics.cs`
 
 **Type**: Class (public, thread-safe)
 
 **Purpose**: Default thread-safe implementation using atomic counters
 
-**Fields** (15 private int counters):
+**Fields** (18 private int counters):
 - `_userRequestServed`, `_cacheExpanded`, `_cacheReplaced`
 - `_userRequestFullCacheHit`, `_userRequestPartialCacheHit`, `_userRequestFullCacheMiss`
 - `_dataSourceFetchSingleRange`, `_dataSourceFetchMissingSegments`
 - `_rebalanceIntentPublished`, `_rebalanceIntentCancelled`
 - `_rebalanceExecutionStarted`, `_rebalanceExecutionCompleted`, `_rebalanceExecutionCancelled`
-- `_rebalanceSkippedNoRebalanceRange`, `_rebalanceSkippedSameRange`
+- `_rebalanceSkippedCurrentNoRebalanceRange`, `_rebalanceSkippedPendingNoRebalanceRange`, `_rebalanceSkippedSameRange`
+- `_rebalanceScheduled`
+- `_rebalanceExecutionFailed`
 
-**Properties**: 15 read-only properties exposing counter values
+**Properties**: 18 read-only properties exposing counter values
 
 **Methods**:
-- 15 event recording methods (explicit interface implementation)
+- 18 event recording methods (explicit interface implementation)
   - All use `Interlocked.Increment` for thread-safety
   - ~1-5 nanoseconds per event
 - `void Reset()` - Resets all counters to zero (for test isolation)
 
 **Characteristics**:
 - ✅ Thread-safe (atomic operations, no locks)
-- ✅ Low overhead (~60 bytes memory, <5ns per event)
+- ✅ Low overhead (~72 bytes memory, <5ns per event)
 - ✅ Instance-based (multiple caches can have separate diagnostics)
 - ✅ Observable state for testing and monitoring
 
@@ -554,7 +556,7 @@ public class NoOpDiagnostics : ICacheDiagnostics
 
 **Purpose**: Zero-overhead no-op implementation for production use
 
-**Methods**: All 15 interface methods implemented as empty method bodies
+**Methods**: All 18 interface methods implemented as empty method bodies
 
 **Characteristics**:
 - ✅ **Absolute zero overhead** - empty methods inlined/eliminated by JIT
@@ -584,7 +586,7 @@ internal sealed class CacheState<TRange, TData, TDomain>
     where TDomain : IRangeDomain<TRange>
 ```
 
-**File**: `src/SlidingWindowCache/CacheState.cs`
+**File**: `src/SlidingWindowCache/Core/State/CacheState.cs`
 
 **Type**: Class (sealed)
 
@@ -599,24 +601,24 @@ internal sealed class CacheState<TRange, TData, TDomain>
 - **Shared by reference** across multiple components
 
 **Shared with** (read/write):
-- **UserRequestHandler** ⊲⊳
-  - Reads: `Cache.Range`, `Cache.Read()`, `Cache.ToRangeData()`
-  - Writes: `Cache.Rematerialize()`, `LastRequested`
-- **RebalanceExecutor** ⊲⊳
+- **UserRequestHandler** ⊳ (READ-ONLY)
+  - Reads: `Cache.Range`, `Cache.Read()`, `Cache.ToRangeData()`, `LastRequested`
+  - ❌ Does NOT write to CacheState
+- **RebalanceExecutor** ⊲⊳ (SOLE WRITER)
   - Reads: `Cache.Range`, `Cache.ToRangeData()`
-  - Writes: `Cache.Rematerialize()`, `NoRebalanceRange`
-- **RebalanceScheduler** ⊳ (via DecisionEngine)
-  - Reads: `NoRebalanceRange`
+  - Writes: `Cache.Rematerialize()`, `NoRebalanceRange`, `LastRequested`
+- **RebalanceDecisionEngine** ⊳ (via IntentController.ProcessIntentsAsync)
+  - Reads: `NoRebalanceRange`, `Cache.Range`
 
 **Characteristics**:
 - ⚠️ **Mutable shared state** (central coordination point)
-- ❌ **No internal locking** (single consumer model by design)
+- ❌ **No internal locking** (single-writer architecture by design)
 - ✅ **Atomic operations** (Rematerialize replaces storage atomically)
 
 **Thread Safety**: 
-- Not thread-safe (intentional)
-- Coordination via CancellationToken
-- User Path cancels rebalance before mutations
+- Single-writer architecture: only RebalanceExecutor writes to CacheState
+- User Path is strictly read-only — no coordination mechanism needed for reads
+- Write-write races prevented by single-writer invariant (not by locks)
 
 **Role**: Central point for cache data and metadata
 
@@ -629,14 +631,16 @@ internal sealed class CacheState<TRange, TData, TDomain>
 internal sealed class UserRequestHandler<TRange, TData, TDomain>
 ```
 
-**File**: `src/SlidingWindowCache/UserPath/UserRequestHandler.cs`
+**File**: `src/SlidingWindowCache/Core/UserPath/UserRequestHandler.cs`
 
 **Type**: Class (sealed)
 
 **Fields** (all readonly):
 - `CacheState<TRange, TData, TDomain> _state`
 - `CacheDataExtensionService<TRange, TData, TDomain> _cacheExtensionService`
-- `IntentController<TRange, TData, TDomain> _intentManager`
+- `IntentController<TRange, TData, TDomain> _intentController`
+- `IDataSource<TRange, TData> _dataSource`
+- `ICacheDiagnostics _cacheDiagnostics`
 
 **Main Method**:
 ```csharp
@@ -646,41 +650,41 @@ public async ValueTask<ReadOnlyMemory<TData>> HandleRequestAsync(
 ```
 
 **Operation Flow**:
-1. **Cancel pending rebalance** - `_intentManager.CancelPendingRebalance()`
-2. **Check cache coverage** - `_state.Cache.Range.Contains(requestedRange)`
-3. **Extend if needed** - `_cacheFetcher.ExtendCacheAsync()` + `_state.Cache.Rematerialize()`
-4. **Update metadata** - `_state.LastRequested = requestedRange`
-5. **Trigger rebalance** - `_intentManager.PublishIntent(requestedRange)` (fire-and-forget)
-6. **Return data** - `_state.Cache.Read(requestedRange)`
+1. **Check cold start** - `_state.LastRequested.HasValue`
+2. **Serve from cache or data source** - varies by scenario (cold start / full hit / partial hit / full miss)
+3. **Publish rebalance intent** - `_intentController.PublishIntent(intent)` with assembled data (fire-and-forget)
+4. **Return data** - return assembled `ReadOnlyMemory<TData>`
 
 **Reads from**:
 - ⊳ `_state.Cache` (Range, Read, ToRangeData)
+- ⊳ `_state.LastRequested` (cold-start detection)
+- ⊳ `_state.Domain`
 
 **Writes to**:
-- ⊲ `_state.Cache` (via Rematerialize - expands to cover requested range)
-- ⊲ `_state.LastRequested`
+- ❌ Does NOT write to CacheState (read-only with respect to cache state)
 
 **Uses**:
-- ◇ `_cacheFetcher` (to fetch missing data)
-- ◇ `_intentManager` (PublishIntent, CancelPendingRebalance)
+- ◇ `_cacheExtensionService` (to fetch missing data on partial/full miss)
+- ◇ `_dataSource` (for cold start and full miss scenarios)
+- ◇ `_intentController.PublishIntent()` (fire-and-forget, triggers background rebalance)
 
 **Characteristics**:
-- ✅ Executes in **User Thread** (synchronous)
+- ✅ Executes in **User Thread**
 - ✅ Always serves user requests (never waits for rebalance)
-- ✅ May expand cache to cover requested range
-- ✅ Always triggers rebalance intent
+- ✅ **READ-ONLY with respect to CacheState** (never writes Cache, LastRequested, or NoRebalanceRange)
+- ✅ Always triggers rebalance intent after serving
 - ❌ **Never** trims or normalizes cache
 - ❌ **Never** invokes decision logic
 - ❌ **Never** blocks on rebalance
+- ❌ **Never** calls `Cache.Rematerialize()`
 
 **Ownership**: Owned by WindowCache
 
-**Execution Context**: User Thread (synchronous)
+**Execution Context**: User Thread
 
 **Responsibilities**: Serve user requests fast, trigger rebalance intents
 
 **Invariants Enforced**:
-- A.1-0a: Cancels rebalance before cache mutations
 - 1: Always serves user requests
 - 2: Never waits for rebalance execution
 - 3: Sole source of rebalance intent
@@ -695,226 +699,166 @@ public async ValueTask<ReadOnlyMemory<TData>> HandleRequestAsync(
 internal sealed class IntentController<TRange, TData, TDomain>
 ```
 
-**File**: `src/SlidingWindowCache/CacheRebalance/IntentController.cs`
+**File**: `src/SlidingWindowCache/Core/Rebalance/Intent/IntentController.cs`
 
 **Type**: Class (sealed)
 
-**Role**: Intent Controller (component 1 of 2 in Rebalance Intent Manager actor)
+**Role**: Intent Controller — manages intent lifecycle and background intent processing loop
 
 **Fields**:
-- `RebalanceScheduler<TRange, TData, TDomain> _scheduler` (readonly)
+- `IRebalanceExecutionController<TRange, TData, TDomain> _executionController` (readonly)
 - `RebalanceDecisionEngine<TRange, TDomain> _decisionEngine` (readonly)
 - `CacheState<TRange, TData, TDomain> _state` (readonly reference to shared state)
-- ✏️ `PendingRebalance<TRange>? _pendingRebalance` - **Mutable**, tracks current pending rebalance (accessed via Volatile.Read/Write)
+- `ICacheDiagnostics _cacheDiagnostics` (readonly)
+- `AsyncActivityCounter _activityCounter` (readonly)
+- ✏️ `Intent<TRange, TData, TDomain>? _pendingIntent` - **Mutable**, latest unprocessed intent (written via `Interlocked.Exchange` by user thread, cleared by processing loop)
+- `SemaphoreSlim _intentSignal` - Signals processing loop that a new intent is available
+- `Task _processingLoopTask` - Background loop task (started in constructor)
+- `CancellationTokenSource _loopCancellation` - Cancels the background loop on disposal
 
 **Key Methods**:
 
-**`PublishIntent(Intent<TRange, TData, TDomain> intent)`**:
+**`PublishIntent(Intent<TRange, TData, TDomain> intent)`** (executes in User Thread):
 ```csharp
 public void PublishIntent(Intent<TRange, TData, TDomain> intent)
 {
-    // 1. Evaluate necessity via DecisionEngine (THE authority)
-    var pendingSnapshot = Volatile.Read(ref _pendingRebalance);
-    var decision = _decisionEngine.Evaluate(intent.RequestedRange, _state, pendingSnapshot);
+    // 1. Atomically replace pending intent (latest wins)
+    Interlocked.Exchange(ref _pendingIntent, intent);
     
-    // 2. If validation rejects, skip entirely (work avoidance)
-    if (!decision.ShouldSchedule) return;
+    // 2. Increment activity counter before signaling
+    _activityCounter.IncrementActivity();
     
-    // 3. Cancel pending via domain object (validation-driven cancellation)
-    var oldPending = Volatile.Read(ref _pendingRebalance);
-    oldPending?.Cancel();
+    // 3. Signal processing loop to wake up
+    _intentSignal.Release();
     
-    // 4. Delegate to scheduler, capture returned PendingRebalance
-    var newPending = _scheduler.ScheduleRebalance(intent, decision);
+    // 4. Record diagnostic event
+    _cacheDiagnostics.RebalanceIntentPublished();
     
-    // 5. Update snapshot for next Stage 2 validation
-    Volatile.Write(ref _pendingRebalance, newPending);
+    // Returns immediately — decision happens in background loop
 }
 ```
 
-**`CancelPendingRebalance()`**:
-```csharp
-public void CancelPendingRebalance()
-{
-    var pending = Volatile.Read(ref _pendingRebalance);
-    if (pending == null) return;
-    
-    // DDD-style cancellation through domain object
-    pending.Cancel();
-    Volatile.Write(ref _pendingRebalance, null);
-}
-```
+**`ProcessIntentsAsync()`** (background processing loop — see separate entry above):
 
-**`WaitForIdleAsync(TimeSpan? timeout = null)`** (Infrastructure/Testing):
+Evaluates `DecisionEngine`, cancels previous execution if needed, and enqueues new execution via `_executionController.PublishExecutionRequest(...)`.
+
+**`DisposeAsync()`**:
 ```csharp
-public async Task WaitForIdleAsync(TimeSpan? timeout = null)
+internal async ValueTask DisposeAsync()
 {
-    // Observe-and-stabilize pattern using PendingRebalance.ExecutionTask
-    while (stopwatch.Elapsed < maxWait)
-    {
-        var observedPending = Volatile.Read(ref _pendingRebalance);
-        if (observedPending?.ExecutionTask == null) return;
-        
-        await observedPending.ExecutionTask;
-        
-        var currentPending = Volatile.Read(ref _pendingRebalance);
-        if (ReferenceEquals(observedPending, currentPending)) return;
-    }
+    // 1. Mark as disposed (idempotent via Interlocked.CompareExchange)
+    // 2. Cancel loop via _loopCancellation
+    // 3. Await _processingLoopTask
+    // 4. Dispose _executionController (cascades to execution loop)
+    // 5. Dispose synchronization primitives
 }
 ```
 
 **Characteristics**:
-- ✅ Owns pending rebalance snapshot (`_pendingRebalance` field)
-- ✅ Single-flight enforcement (only one active intent via cancellation)
-- ✅ Exposes cancellation to User Path via `CancelPendingRebalance()`
-- ✅ **Lock-free implementation** using `Volatile.Read/Write` for safe memory visibility
-- ✅ **DDD-style cancellation** - PendingRebalance domain object encapsulates CancellationTokenSource
-- ✅ **Thread-safe without locks** - no race conditions, tested under concurrent load
-- ⚠️ **Intent does not guarantee execution** - execution is opportunistic
-- ❌ **Does NOT**: Timing, scheduling, execution logic, CTS lifecycle management
+- ✅ `PublishIntent()` is minimal — atomic intent store + semaphore signal only
+- ✅ Decision evaluation happens in background loop (NOT in user thread)
+- ✅ "Latest intent wins" — rapid bursts naturally collapse via `Interlocked.Exchange`
+- ✅ **Lock-free** — `Interlocked.Exchange` for intent, `SemaphoreSlim` for signaling
+- ✅ Single-flight enforcement through cancellation (cancel old execution before new)
+- ⚠️ **Intent does not guarantee execution** — execution is opportunistic
+- ❌ **Does NOT**: Perform debounce delay, execute cache mutations
 
 **Concurrency Model**:
-- Uses `Volatile.Read/Write` for safe memory visibility across threads
-- No locks, no `lock` statements, no mutexes
-- Memory barriers via `Volatile` operations ensure correct ordering
-- PendingRebalance domain object owns CancellationTokenSource lifecycle
-- Validated by `ConcurrencyStabilityTests` under concurrent load
+- User thread writes intent via `Interlocked.Exchange` (atomic, no locks)
+- Background loop reads intent via `Interlocked.Exchange` (also clears it atomically)
+- `SemaphoreSlim` prevents CPU spinning in the background loop
+- `AsyncActivityCounter` tracks active operations for `WaitForIdleAsync`
 
 **Ownership**: 
-- Owned by WindowCache
-- Composes with RebalanceScheduler
+- Owned by UserRequestHandler (via WindowCache)
+- Composes with `IRebalanceExecutionController`
 
 **Execution Context**: 
-- **PublishIntent() executes synchronously in User Thread** (atomic intent storage + semaphore signal only; decision evaluation happens in background loop)
-- **Only scheduled work (background task) executes in Background ThreadPool**
+- **`PublishIntent()` executes in User Thread** (minimal: atomic store + semaphore signal)
+- **`ProcessIntentsAsync()` executes in Background Thread** (decision, cancellation, execution enqueue)
 
 **State**: 
-- `_pendingRebalance` (mutable, nullable, accessed via Volatile.Read/Write)
-- Represents snapshot of current pending rebalance for Stage 2 validation
+- `_pendingIntent` (mutable, nullable, written by user thread, cleared by background loop)
 
 **Responsibilities**: 
 - Intent lifecycle management
-- Cancellation coordination
-- Identity versioning
-- Idle synchronization proxy (delegates to RebalanceScheduler for testing infrastructure)
+- Burst resistance (latest-intent-wins)
+- Background loop orchestration (decision → cancel → enqueue)
+- Idle synchronization (delegates to `AsyncActivityCounter`)
 
 **Invariants Enforced**:
-- C.17: At most one active intent
+- C.17: At most one active intent (latest wins)
 - C.18: Previous intents become obsolete
 - C.24: Intent does not guarantee execution
 
 ---
 
-#### 🟦 RebalanceScheduler<TRange, TData, TDomain>
+---
+
+#### IntentController — ProcessIntentsAsync (background loop)
+
+The `RebalanceScheduler` class described in older documentation **does not exist**. The scheduling, debounce, and pipeline orchestration responsibilities are distributed between `IntentController.ProcessIntentsAsync` (decision + cancellation) and `IRebalanceExecutionController` implementations (debounce + execution).
+
+See `IRebalanceExecutionController`, `TaskBasedRebalanceExecutionController`, and `ChannelBasedRebalanceExecutionController` in Section 7 for the execution side.
+
+**`ProcessIntentsAsync()`** (private background loop inside `IntentController`):
 ```csharp
-internal sealed class RebalanceScheduler<TRange, TData, TDomain>
-```
-
-**File**: `src/SlidingWindowCache/CacheRebalance/RebalanceScheduler.cs`
-
-**Type**: Class (sealed)
-
-**Role**: Execution Scheduler (component 2 of 2 in Rebalance Intent Manager actor)
-
-**Fields** (all readonly):
-- `CacheState<TRange, TData, TDomain> _state`
-- `RebalanceDecisionEngine<TRange, TDomain> _decisionEngine`
-- `RebalanceExecutor<TRange, TData, TDomain> _executor`
-- `TimeSpan _debounceDelay`
-- `Task _idleTask` - Tracks latest background Task for deterministic synchronization
-
-**Key Methods**:
-
-**`ScheduleRebalance(RangeData<TRange, TData, TDomain> deliveredData, CancellationToken intentToken)`**:
-```csharp
-public void ScheduleRebalance(Range<TRange> requestedRange, CancellationToken intentToken)
+private async Task ProcessIntentsAsync()
 {
-    // Fire-and-forget: background execution with ConfigureAwait(false)
-    pendingRebalance.ExecutionTask = RunAsync();
-    
-    async Task RunAsync()
+    while (!_loopCancellation.Token.IsCancellationRequested)
     {
-        try
-        {
-            await Task.Delay(_debounceDelay, intentToken)
-                .ConfigureAwait(false);
-            
-            // Intent validity check
-            if (intentToken.IsCancellationRequested)
-                return;
-            
-            // Execute pipeline
-            await ExecutePipelineAsync(requestedRange, intentToken)
-                .ConfigureAwait(false);
-        }
-        catch (OperationCanceledException)
-        {
-            // Expected when intent is cancelled
-        }
+        // 1. Wait on semaphore (blocks without CPU spinning)
+        await _intentSignal.WaitAsync(_loopCancellation.Token);
+        
+        // 2. Atomically read and clear pending intent (latest wins)
+        var intent = Interlocked.Exchange(ref _pendingIntent, null);
+        if (intent == null) continue;
+        
+        // 3. Evaluate DecisionEngine (CPU-only, lightweight)
+        var lastExecutionRequest = _executionController.LastExecutionRequest;
+        var decision = _decisionEngine.Evaluate(
+            requestedRange: intent.RequestedRange,
+            currentCacheState: _state,
+            lastExecutionRequest: lastExecutionRequest
+        );
+        
+        // 4. Record reason; if skip, continue (decrement activity in finally)
+        RecordReason(decision.Reason);
+        if (!decision.ShouldSchedule) continue;
+        
+        // 5. Cancel previous execution
+        lastExecutionRequest?.Cancel();
+        
+        // 6. Enqueue execution request
+        await _executionController.PublishExecutionRequest(
+            intent: intent,
+            desiredRange: decision.DesiredRange!.Value,
+            desiredNoRebalanceRange: decision.DesiredNoRebalanceRange
+        );
     }
 }
 ```
 
-**`ExecutePipelineAsync(Range<TRange> requestedRange, CancellationToken cancellationToken)`** (private):
-```csharp
-private async Task ExecutePipelineAsync(...)
-{
-    // Final cancellation check
-    if (cancellationToken.IsCancellationRequested)
-        return;
-    
-    // Step 1: Decision logic
-    var decision = _decisionEngine.ShouldExecuteRebalance(
-        requestedRange, _state.NoRebalanceRange);
-    
-    // Step 2: If skip, return early
-    if (!decision.ShouldExecute)
-        return;
-    
-    // Step 3: Execute if allowed
-    await _executor.ExecuteAsync(decision.DesiredRange!.Value, cancellationToken);
-}
-```
-
-**`WaitForIdleAsync(TimeSpan? timeout = null)`** (Infrastructure/Testing):
-```csharp
-public async Task WaitForIdleAsync(TimeSpan? timeout = null)
-{
-    // Observe-and-stabilize pattern (all builds)
-    // 1. Volatile.Read(_idleTask) → observe current Task
-    // 2. await observedTask → wait for completion
-    // 3. Re-check if _idleTask changed → detect new rebalance
-    // 4. Loop until Task reference stabilizes
-}
-```
-
 **Characteristics**:
-- ✅ Executes in **Background / ThreadPool**
-- ✅ Handles debounce delay
-- ✅ Orchestrates Decision → Execution pipeline
-- ✅ Checks intent validity before execution
-- ✅ Ensures single-flight through cancellation
-- ❌ **Does NOT**: Intent identity, cancellation management
+- ✅ Runs in **Background Thread** (single dedicated loop task)
+- ✅ Handles burst resistance via "latest intent wins" (`Interlocked.Exchange`)
+- ✅ Decision evaluation happens here (NOT in user thread)
+- ✅ Cancels previous execution before enqueuing new one
+- ✅ Semaphore prevents CPU spinning
+- ❌ Does NOT perform debounce (handled by `IRebalanceExecutionController` implementations)
 
-**Ownership**: Owned by IntentController
-
-**Execution Context**: Background / ThreadPool
-
-**State**: Stateless (only readonly fields, plus `_idleTask` field for deterministic synchronization)
-
-**Important Design Note**: RebalanceScheduler is intentionally stateless and does not own intent identity.
-All intent lifecycle, superseding, and cancellation semantics are delegated to the Intent Controller (IntentController).
-The scheduler receives a CancellationToken for each execution and simply checks its validity.
+**Execution Context**: Background / ThreadPool (loop task started in constructor)
 
 **Responsibilities**:
-- Timing and debounce delay
-- Pipeline orchestration (Decision → Execution)
-- Validity checking before execution starts
-- Task lifecycle tracking for deterministic synchronization (infrastructure/testing)
+- Wait for intent signals
+- Evaluate DecisionEngine (5-stage validation)
+- Cancel previous execution if new rebalance needed
+- Enqueue execution requests via `IRebalanceExecutionController`
+- Signal idle state after each intent processed
 
 **Invariants Enforced**:
-- C.20: Obsolete intents don't start execution
-- C.21: At most one execution active (via cancellation)
+- C.20: Obsolete intents don't start new executions (latest wins + cancellation)
+- C.21: At most one active rebalance scheduled at a time (cancellation before enqueue)
 
 ---
 
@@ -925,7 +869,7 @@ The scheduler receives a CancellationToken for each execution and simply checks 
 internal sealed class RebalanceDecisionEngine<TRange, TDomain>
 ```
 
-**File**: `src/SlidingWindowCache/CacheRebalance/RebalanceDecisionEngine.cs`
+**File**: `src/SlidingWindowCache/Core/Rebalance/Decision/RebalanceDecisionEngine.cs`
 
 **Type**: Class (sealed)
 
@@ -934,25 +878,41 @@ internal sealed class RebalanceDecisionEngine<TRange, TDomain>
 **Fields** (all readonly, value types):
 - `ThresholdRebalancePolicy<TRange, TDomain> _policy` (struct, copied)
 - `ProportionalRangePlanner<TRange, TDomain> _planner` (struct, copied)
+- `NoRebalanceRangePlanner<TRange, TDomain> _noRebalancePlanner` (struct, copied)
 
 **Key Method**:
 ```csharp
-public RebalanceDecision<TRange> ShouldExecuteRebalance(
+public RebalanceDecision<TRange> Evaluate<TData>(
     Range<TRange> requestedRange,
-    Range<TRange>? noRebalanceRange)
+    CacheState<TRange, TData, TDomain> currentCacheState,
+    ExecutionRequest<TRange, TData, TDomain>? lastExecutionRequest)
 {
-    // Stage 1: Current Cache NoRebalanceRange validation (fast path)
-    if (noRebalanceRange.HasValue && 
-        !_policy.ShouldRebalance(noRebalanceRange.Value, requestedRange))
+    // Stage 1: Current Cache Stability Check (fast path)
+    if (currentCacheState.NoRebalanceRange.HasValue &&
+        !_policy.ShouldRebalance(currentCacheState.NoRebalanceRange.Value, requestedRange))
     {
-        return RebalanceDecision<TRange>.Skip();
+        return RebalanceDecision<TRange>.Skip(RebalanceReason.WithinCurrentNoRebalanceRange);
     }
     
-    // Stage 3: Compute DesiredCacheRange and return for execution
-    // (Stage 2 may be handled by cancellation timing optimization)
-    var desiredRange = _planner.Plan(requestedRange);
+    // Stage 2: Pending Rebalance Stability Check (anti-thrashing)
+    if (lastExecutionRequest?.DesiredNoRebalanceRange != null &&
+        !_policy.ShouldRebalance(lastExecutionRequest.DesiredNoRebalanceRange.Value, requestedRange))
+    {
+        return RebalanceDecision<TRange>.Skip(RebalanceReason.WithinPendingNoRebalanceRange);
+    }
     
-    return RebalanceDecision<TRange>.Execute(desiredRange);
+    // Stage 3: Desired Range Computation
+    var desiredCacheRange = _planner.Plan(requestedRange);
+    var desiredNoRebalanceRange = _noRebalancePlanner.Plan(desiredCacheRange);
+    
+    // Stage 4: Equality Short Circuit
+    if (desiredCacheRange.Equals(currentCacheState.Cache.Range))
+    {
+        return RebalanceDecision<TRange>.Skip(RebalanceReason.DesiredEqualsCurrent);
+    }
+    
+    // Stage 5: Rebalance Required
+    return RebalanceDecision<TRange>.Execute(desiredCacheRange, desiredNoRebalanceRange);
 }
 ```
 
@@ -961,7 +921,7 @@ public RebalanceDecision<TRange> ShouldExecuteRebalance(
 - ✅ **Deterministic** (same inputs → same outputs)
 - ✅ **Stateless** (composes value-type policies)
 - ✅ **THE authority** for rebalance necessity determination
-- ✅ Invoked only in background
+- ✅ Invoked only in background (inside `IntentController.ProcessIntentsAsync`)
 - ❌ Not visible to User Path
 
 **Decision Authority**:
@@ -971,27 +931,30 @@ public RebalanceDecision<TRange> ShouldExecuteRebalance(
 - Executor assumes necessity already validated when invoked
 
 **Uses**:
-- ◇ `_policy.ShouldRebalance()` - Stage 1: NoRebalanceRange containment check
-- ◇ `_planner.Plan()` - Compute DesiredCacheRange for execution
+- ◇ `_policy.ShouldRebalance()` - Stage 1 & 2: NoRebalanceRange containment checks
+- ◇ `_planner.Plan()` - Stage 3: Compute DesiredCacheRange
+- ◇ `_noRebalancePlanner.Plan()` - Stage 3: Compute DesiredNoRebalanceRange
 
-**Returns**: `RebalanceDecision<TRange>` (struct)
+**Returns**: `RebalanceDecision<TRange>` (struct with `ShouldSchedule`, `DesiredRange`, `DesiredNoRebalanceRange`, `Reason`)
 
-**Ownership**: Owned by WindowCache, used by RebalanceScheduler
+**Ownership**: Owned by IntentController, invoked exclusively in `IntentController.ProcessIntentsAsync`
 
-**Execution Context**: Background / ThreadPool
+**Execution Context**: Background Thread (intent processing loop)
 
 **Responsibilities**: 
 - **THE authority** for rebalance necessity determination
-- Evaluate if rebalance is needed through multi-stage validation
-- Stage 1: Check NoRebalanceRange (fast path rejection)
-- Stage 3: Compute DesiredCacheRange (execution parameters)
-- Produce analytical decision (execute or skip)
+- 5-stage validation pipeline (stages 1–4 are guard/short-circuit stages; stage 5 is execute)
+- Stage 1: Current NoRebalanceRange containment (fast path)
+- Stage 2: Pending NoRebalanceRange containment (anti-thrashing)
+- Stage 3: Compute DesiredCacheRange and DesiredNoRebalanceRange
+- Stage 4: DesiredRange == CurrentRange equality short-circuit
+- Stage 5: Return Schedule decision
 
 **Invariants Enforced**:
 - D.25: Decision path is purely analytical (CPU-only, no I/O)
 - D.26: Never mutates cache state
-- D.27: No rebalance if inside NoRebalanceRange (Stage 1 validation)
-- D.28: No rebalance if DesiredCacheRange == CurrentCacheRange (Stage 3 validation)
+- D.27: No rebalance if inside NoRebalanceRange (Stage 1 & 2 validation)
+- D.28: No rebalance if DesiredCacheRange == CurrentCacheRange (Stage 4 validation)
 - D.29: Rebalance executes ONLY if ALL stages confirm necessity
 
 ---
@@ -1001,7 +964,7 @@ public RebalanceDecision<TRange> ShouldExecuteRebalance(
 internal readonly struct ThresholdRebalancePolicy<TRange, TDomain>
 ```
 
-**File**: `src/SlidingWindowCache/CacheRebalance/Policy/ThresholdRebalancePolicy.cs`
+**File**: `src/SlidingWindowCache/Core/Rebalance/Decision/ThresholdRebalancePolicy.cs`
 
 **Type**: Struct (readonly value type)
 
@@ -1055,7 +1018,7 @@ public Range<TRange>? GetNoRebalanceRange(Range<TRange> cacheRange)
 internal readonly struct ProportionalRangePlanner<TRange, TDomain>
 ```
 
-**File**: `src/SlidingWindowCache/DesiredRangePlanner/ProportionalRangePlanner.cs`
+**File**: `src/SlidingWindowCache/Core/Planning/ProportionalRangePlanner.cs`
 
 **Type**: Struct (readonly value type)
 
@@ -1112,30 +1075,32 @@ internal readonly struct RebalanceDecision<TRange>
     where TRange : IComparable<TRange>
 ```
 
-**File**: `src/SlidingWindowCache/CacheRebalance/RebalanceDecision.cs`
+**File**: `src/SlidingWindowCache/Core/Rebalance/Decision/RebalanceDecision.cs`
 
 **Type**: Struct (readonly value type)
 
 **Properties** (all readonly):
-- `bool ShouldExecute` - Whether rebalance should proceed
-- `Range<TRange>? DesiredRange` - Target cache range (if executing)
+- `bool ShouldSchedule` - Whether rebalance should be scheduled
+- `Range<TRange>? DesiredRange` - Target cache range (if scheduling)
+- `Range<TRange>? DesiredNoRebalanceRange` - Target no-rebalance zone (if scheduling)
+- `RebalanceReason Reason` - Explicit reason for the decision outcome
 
 **Factory Methods**:
-- `static Skip()` → Returns decision to skip rebalance
-- `static Execute(Range<TRange> desiredRange)` → Returns decision to execute with target range
+- `static Skip(RebalanceReason reason)` → Returns decision to skip rebalance with reason
+- `static Execute(Range<TRange> desiredRange, Range<TRange>? desiredNoRebalanceRange)` → Returns decision to schedule with target ranges (sets `Reason = RebalanceRequired`)
 
 **Characteristics**:
 - ✅ **Value type** (struct)
 - ✅ **Immutable**
 - ✅ Represents decision outcome
 
-**Ownership**: Created by RebalanceDecisionEngine, consumed by RebalanceScheduler
+**Ownership**: Created by RebalanceDecisionEngine, consumed by IntentController.ProcessIntentsAsync
 
 **Mutability**: Immutable
 
-**Lifetime**: Temporary (local variable in pipeline)
+**Lifetime**: Temporary (local variable in intent processing loop)
 
-**Purpose**: Encapsulates decision result (skip or execute with target range)
+**Purpose**: Encapsulates decision result (skip or schedule with target ranges and reason)
 
 ---
 
@@ -1229,7 +1194,7 @@ public async Task ExecuteAsync(
 - ✅ Trims excess data
 - ✅ Updates NoRebalanceRange
 
-**Ownership**: Owned by WindowCache, used by RebalanceScheduler
+**Ownership**: Owned by WindowCache, used by `IRebalanceExecutionController` implementations
 
 **Execution Context**: Background / ThreadPool
 
@@ -1261,7 +1226,7 @@ internal interface IRebalanceExecutionController<TRange, TData, TDomain> : IAsyn
 
 **Methods**:
 ```csharp
-void PublishExecutionRequest(
+ValueTask PublishExecutionRequest(
     Intent<TRange, TData, TDomain> intent,
     Range<TRange> desiredRange,
     Range<TRange>? desiredNoRebalanceRange,
@@ -1641,8 +1606,8 @@ public async ValueTask DisposeAsync()
 │   ├─ 🟦 CacheState ──────────────────────────┐ (shared mutable)   │
 │   ├─ 🟦 UserRequestHandler ──────────────────┼───┐                 │
 │   ├─ 🟦 CacheDataExtensionService ───────────┼───┼───┐             │
-│   ├─ 🟦 RebalanceIntentManager ──────────────┼───┼───┼───┐         │
-│   │   └─ 🟦 RebalanceScheduler ──────────────┼───┼───┼───┼───┐     │
+│   ├─ 🟦 IntentController ────────────────────┼───┼───┼───┐         │
+│   │   └─ 🟧 IRebalanceExecutionController ───┼───┼───┼───┼───┐     │
 │   ├─ 🟦 RebalanceDecisionEngine ─────────────┼───┼───┼───┼───┼───┐ │
 │   │   ├─ 🟩 ThresholdRebalancePolicy         │   │   │   │   │   │ │
 │   │   └─ 🟩 ProportionalRangePlanner          │   │   │   │   │   │ │
@@ -1656,17 +1621,19 @@ public async ValueTask DisposeAsync()
         ═════════════════════════════════════════╪═══╪═══╪═══╪═══╪═══╪═
                                                  │   │   │   │   │   │
 ┌────────────────────────────────────────────────▼───┼───┼───┼───┼───┤
-│  UserRequestHandler  [Fast Path Actor]             │   │   │   │   │
+│  UserRequestHandler  [Fast Path Actor — READ-ONLY] │   │   │   │   │
 │  🟦 CLASS (sealed)                                  │   │   │   │   │
 │                                                     │   │   │   │   │
 │  HandleRequestAsync(range, ct):                    │   │   │   │   │
-│   1. _intentManager.CancelPendingRebalance() ──────┼───┼───┼───┼───┤
-│   2. Check if cache covers range ──────────────────┼───┤   │   │   │
-│   3. If not: _cacheFetcher.ExtendCacheAsync() ─────┼───┼───┤   │   │
-│   4. If not: _state.Cache.Rematerialize() ─────────┼───┤   │   │   │
-│   5. _state.LastRequested = range ─────────────────┼───┤   │   │   │
-│   6. _intentManager.PublishIntent(range) ───────────┼───┼───┼───┼───┤
-│   7. return _state.Cache.Read(range) ───────────────┼───┤   │   │   │
+│   1. Check cold start / cache coverage ────────────┼───┤   │   │   │
+│   2. Fetch missing via _cacheExtensionService ─────┼───┼───┤   │   │
+│      or _dataSource (cold start / full miss)        │   │   │   │   │
+│   3. Publish intent with assembled data ────────────┼───┼───┼───┼───┤
+│   4. Return ReadOnlyMemory<TData> to user           │   │   │   │   │
+│                                                     │   │   │   │   │
+│  ❌ NEVER writes to CacheState                      │   │   │   │   │
+│  ❌ NEVER calls Cache.Rematerialize()               │   │   │   │   │
+│  ❌ NEVER writes LastRequested or NoRebalanceRange  │   │   │   │   │
 └─────────────────────────────────────────────────────┼───┼───┼───┼───┘
                                                       │   │   │   │
         ══════════════════════════════════════════════╪═══╪═══╪═══╪═══
@@ -1674,129 +1641,148 @@ public async ValueTask DisposeAsync()
         ══════════════════════════════════════════════╪═══╪═══╪═══╪═══
                                                       │   │   │   │
 ┌─────────────────────────────────────────────────────▼───┼───┼───┼───┐
-│  RebalanceIntentManager  [Intent Controller]            │   │   │   │
+│  IntentController  [Intent Lifecycle + Background Loop] │   │   │   │
 │  🟦 CLASS (sealed)                                       │   │   │   │
 │                                                          │   │   │   │
 │  Fields:                                                 │   │   │   │
-│   ├─ RebalanceScheduler _scheduler ─────────────────────▼───┼───┤   │
-│   └─ CancellationTokenSource? _currentIntentCts ◄───────────┤   │   │
+│   ├─ IRebalanceExecutionController _executionController ─▼───┼───┤   │
+│   └─ Intent? _pendingIntent (Interlocked.Exchange)           │   │   │
 │                                                              │   │   │
-│  PublishIntent(range):                                       │   │   │
-│   1. Cancel & dispose old _currentIntentCts                  │   │   │
-│   2. Create new CancellationTokenSource                      │   │   │
-│   3. _scheduler.ScheduleRebalance(range, token) ─────────────┼───┤   │
+│  PublishIntent(intent)  [User Thread]:                       │   │   │
+│   1. Interlocked.Exchange(_pendingIntent, intent)            │   │   │
+│   2. _activityCounter.IncrementActivity()                    │   │   │
+│   3. _intentSignal.Release()  → wakes ProcessIntentsAsync    │   │   │
 │                                                              │   │   │
-│  CancelPendingRebalance():                                   │   │   │
-│   1. Cancel & dispose _currentIntentCts                      │   │   │
+│  ProcessIntentsAsync()  [Background Loop]:                   │   │   │
+│   1. await _intentSignal.WaitAsync()                         │   │   │
+│   2. intent = Interlocked.Exchange(_pendingIntent, null)     │   │   │
+│   3. decision = _decisionEngine.Evaluate(intent, ...) ───────┼───┤   │
+│   4. if (!decision.ShouldSchedule) → skip                    │   │   │
+│   5. lastRequest?.Cancel()                                   │   │   │
+│   6. await _executionController.PublishExecutionRequest() ───┼───┤   │
 └──────────────────────────────────────────────────────────────┼───┼───┘
                                                                │   │
 ┌──────────────────────────────────────────────────────────────▼───┼───┐
-│  RebalanceScheduler  [Execution Scheduler]                       │   │
+│  RebalanceDecisionEngine  [Pure Decision Logic]                  │   │
 │  🟦 CLASS (sealed)                                                │   │
 │                                                                   │   │
-│  ScheduleRebalance(range, intentToken):                          │   │
-│   ExecutionTask = RunAsync();                                    │   │
-│     async Task RunAsync() {                                      │   │
-│       await Task.Delay(...).ConfigureAwait(false);               │   │
-│       if (!intentToken.IsCancellationRequested)                  │   │
-│         await ExecutePipelineAsync(...).ConfigureAwait(false); ──┼───┤
-│     }                                                             │   │
+│  Fields (value types):                                           │   │
+│   ├─ 🟩 ThresholdRebalancePolicy _policy                         │   │
+│   ├─ 🟩 ProportionalRangePlanner _planner                        │   │
+│   └─ 🟩 NoRebalanceRangePlanner _noRebalancePlanner              │   │
 │                                                                   │   │
-│  ExecutePipelineAsync(range, ct):                                │   │
-│   1. Check cancellation                                          │   │
-│   2. decision = _decisionEngine.ShouldExecuteRebalance() ────────┼───┤
-│   3. if (decision.ShouldExecute)                                 │   │
-│        await _executor.ExecuteAsync(desiredRange, ct); ──────────┼───┤
+│  Evaluate(requested, cacheState, lastRequest):                   │   │
+│   1. Stage 1: _policy.ShouldRebalance(noRebalanceRange) → skip  │   │
+│   2. Stage 2: _policy.ShouldRebalance(pendingNRR) → skip        │   │
+│   3. Stage 3: desiredRange = _planner.Plan(requested)            │   │
+│   4. Stage 4: desiredRange == currentRange → skip                │   │
+│   5. Stage 5: return Schedule(desiredRange, desiredNRR)          │   │
+│                                                                   │   │
+│  Returns: 🟩 RebalanceDecision<TRange>                           │   │
+│    (ShouldSchedule, DesiredRange, DesiredNoRebalanceRange, Reason)│   │
 └───────────────────────────────────────────────────────────────────┼───┘
                                                                     │
 ┌───────────────────────────────────────────────────────────────────▼──┐
-│  RebalanceDecisionEngine  [Pure Decision Logic]                       │
-│  🟦 CLASS (sealed)                                                     │
-│                                                                        │
-│  Fields (value types):                                                │
-│   ├─ 🟩 ThresholdRebalancePolicy _policy                              │
-│   └─ 🟩 ProportionalRangePlanner _planner                             │
-│                                                                        │
-│  ShouldExecuteRebalance(requested, noRebalanceRange):                 │
-│   1. Check if _policy.ShouldRebalance() → may skip                    │
-│   2. desiredRange = _planner.Plan(requested)                          │
-│   3. return Execute(desiredRange) or Skip()                           │
-│                                                                        │
-│  Returns: 🟩 RebalanceDecision<TRange>                                │
-└────────────────────────────────────────────────────────────────────────┘
-
-┌────────────────────────────────────────────────────────────────────────┐
-│  RebalanceExecutor  [Mutating Actor]                                   │
-│  🟦 CLASS (sealed)                                                      │
-│                                                                         │
-│  ExecuteAsync(desiredRange, ct):                                       │
-│   1. rangeData = _state.Cache.ToRangeData() ──────────┐               │
-│   2. if (rangeData.Range == desiredRange) return      │               │
-│   3. ct.ThrowIfCancellationRequested()                 │               │
-│   4. extended = await _cacheFetcher.ExtendCacheAsync() ┼───────────┐  │
-│   5. ct.ThrowIfCancellationRequested()                 │           │  │
-│   6. rebalanced = extended[desiredRange] (trim)        │           │  │
-│   7. ct.ThrowIfCancellationRequested()                 │           │  │
-│   8. _state.Cache.Rematerialize(rebalanced) ───────────┼───────┐   │  │
-│   9. _state.NoRebalanceRange = ... ────────────────────┼───────┤   │  │
-└────────────────────────────────────────────────────────┼───────┼───┼──┘
-                                                         │       │   │
-┌────────────────────────────────────────────────────────▼───────┼───┼──┐
-│  CacheState  [Shared Mutable State]                            │   │  │
-│  🟦 CLASS (sealed)  ⚠️ SHARED                                   │   │  │
-│                                                                 │   │  │
-│  Properties:                                                    │   │  │
-│   ├─ ICacheStorage Cache ◄──────────────────────────────────────┼───┤  │
-│   ├─ Range? LastRequested ◄─ UserRequestHandler                │   │  │
-│   ├─ Range? NoRebalanceRange ◄─ RebalanceExecutor              │   │  │
-│   └─ TDomain Domain (readonly)                                  │   │  │
-│                                                                 │   │  │
-│  Shared by:                                                     │   │  │
-│   ├─ UserRequestHandler (R/W)                                   │   │  │
-│   ├─ RebalanceExecutor (R/W)                                    │   │  │
-│   └─ RebalanceScheduler → DecisionEngine (R)                    │   │  │
-└─────────────────────────────────────────────────────────────────┼───┼──┘
+│  IRebalanceExecutionController  [Execution Serialization]            │
+│  🟧 INTERFACE                                                         │
+│                                                                       │
+│  Implementations:                                                     │
+│   ├─ 🟦 TaskBasedRebalanceExecutionController (default)              │
+│   │   • Lock-free task chaining (Volatile.Write for single-writer)   │
+│   │   • Debounce via Task.Delay before executing                     │
+│   │   • PublishExecutionRequest returns ValueTask.CompletedTask      │
+│   └─ 🟦 ChannelBasedRebalanceExecutionController                     │
+│       • Bounded Channel<ExecutionRequest> with backpressure          │
+│       • Single reader loop processes requests sequentially           │
+│                                                                       │
+│  ChainExecutionAsync / channel read loop:                            │
+│   1. await Task.Delay(debounceDelay, ct)  (cancellable)              │
+│   2. await _executor.ExecuteAsync(desiredRange, ct) ─────────────┐  │
+└──────────────────────────────────────────────────────────────────┼──┘
+                                                                   │
+┌──────────────────────────────────────────────────────────────────▼──┐
+│  RebalanceExecutor  [Mutating Actor — SOLE WRITER]                   │
+│  🟦 CLASS (sealed)                                                    │
+│                                                                       │
+│  ExecuteAsync(intent, desiredRange, desiredNRR, ct):                │
+│   1. await _executionSemaphore.WaitAsync(ct)  (serialize)           │
+│   2. baseRangeData = intent.AvailableRangeData                      │
+│   3. ct.ThrowIfCancellationRequested()                               │
+│   4. extended = await _cacheExtensionService.ExtendCacheAsync() ──┐ │
+│   5. ct.ThrowIfCancellationRequested()                               │ │
+│   6. rebalanced = extended[desiredRange] (trim)                     │ │
+│   7. ct.ThrowIfCancellationRequested()                               │ │
+│   8. UpdateCacheState(rebalanced, requestedRange, desiredNRR)      │ │
+│      └─ _state.Cache.Rematerialize(rebalanced) ────────────────┐   │ │
+│      └─ _state.NoRebalanceRange = desiredNRR ──────────────────┼───┤ │
+│      └─ _state.LastRequested = requestedRange ─────────────────┼───┤ │
+│   finally: _executionSemaphore.Release()                        │   │ │
+└─────────────────────────────────────────────────────────────────┼───┼─┘
                                                                   │   │
 ┌─────────────────────────────────────────────────────────────────▼───┼──┐
-│  ICacheStorage<TRange, TData, TDomain>                              │  │
-│  🟧 INTERFACE                                                        │  │
+│  CacheState  [Shared Mutable State]                                 │  │
+│  🟦 CLASS (sealed)  ⚠️ SHARED                                        │  │
 │                                                                      │  │
-│  Implementations:                                                   │  │
-│   ├─ 🟦 SnapshotReadStorage (TData[] array)                         │  │
-│   │   • Read: zero allocation (memory view)                         │  │
-│   │   • Write: expensive (allocates new array)                      │  │
-│   │                                                                  │  │
-│   └─ 🟦 CopyOnReadStorage (List<TData>)                             │  │
-│       • Read: allocates (copies to new array)                       │  │
-│       • Write: cheap (list operations)                              │  │
+│  Properties:                                                         │  │
+│   ├─ ICacheStorage Cache ◄─ RebalanceExecutor (SOLE WRITER) ─────────┤  │
+│   ├─ Range? LastRequested ◄─ RebalanceExecutor                      │  │
+│   ├─ Range? NoRebalanceRange ◄─ RebalanceExecutor                   │  │
+│   └─ TDomain Domain (readonly)                                       │  │
 │                                                                      │  │
-│  Methods:                                                            │  │
-│   ├─ void Rematerialize(RangeData) ⊲ WRITE                          │  │
-│   ├─ ReadOnlyMemory<TData> Read(Range) ⊳ READ                       │  │
-│   └─ RangeData ToRangeData() ⊳ READ                                 │  │
+│  Read by:                                                            │  │
+│   ├─ UserRequestHandler (Cache.Range, Cache.Read, Cache.ToRangeData, LastRequested)
+│   ├─ RebalanceExecutor (Cache.Range, Cache.ToRangeData)              │  │
+│   └─ RebalanceDecisionEngine (NoRebalanceRange, Cache.Range)         │  │
 └──────────────────────────────────────────────────────────────────────┼──┘
                                                                        │
 ┌──────────────────────────────────────────────────────────────────────▼──┐
-│  CacheDataExtensionService  [Data Fetcher]                              │
-│  🟦 CLASS (sealed)                                                       │
+│  ICacheStorage<TRange, TData, TDomain>                                  │
+│  🟧 INTERFACE                                                            │
 │                                                                          │
-│  ExtendCacheAsync(current, requested, ct):                              │
-│   1. missingRanges = CalculateMissingRanges()                           │
-│   2. fetched = await _dataSource.FetchAsync(missingRanges, ct) ◄────┐  │
-│   3. return UnionAll(current, fetched) (merge, no trim)             │  │
-│                                                                       │  │
-│  Shared by:                                                           │  │
-│   ├─ UserRequestHandler (expand to requested)                        │  │
-│   └─ RebalanceExecutor (expand to desired)                           │  │
-└───────────────────────────────────────────────────────────────────────┼──┘
-                                                                        │
-┌───────────────────────────────────────────────────────────────────────▼──┐
-│  IDataSource<TRangeType, TDataType>  [External Data Source]             │
-│  🟧 INTERFACE (user-implemented)                                         │
-│                                                                           │
-│  Methods:                                                                 │
-│   ├─ FetchAsync(Range, CT) → Task<IEnumerable<TData>>                    │
-│   └─ FetchAsync(IEnumerable<Range>, CT) → Task<IEnumerable<RangeChunk>> │
+│  Implementations:                                                        │
+│   ├─ 🟦 SnapshotReadStorage (TData[] array)                             │
+│   │   • Read: zero allocation (memory view)                             │
+│   │   • Write: expensive (allocates new array)                          │
+│   │                                                                      │
+│   └─ 🟦 CopyOnReadStorage (List<TData>)                                 │
+│       • Read: allocates (copies to new array)                           │
+│       • Write: cheap (list operations)                                  │
+│                                                                          │
+│  Methods:                                                                │
+│   ├─ void Rematerialize(RangeData) ⊲ WRITE                              │
+│   ├─ ReadOnlyMemory<TData> Read(Range) ⊳ READ                           │
+│   └─ RangeData ToRangeData() ⊳ READ                                     │
+└──────────────────────────────────────────────────────────────────────────┘
+                                                                           │
+┌──────────────────────────────────────────────────────────────────────────▼──┐
+│  CacheDataExtensionService  [Data Fetcher]                                  │
+│  🟦 CLASS (sealed)                                                           │
+│                                                                              │
+│  ExtendCacheAsync(current, requested, ct):                                  │
+│   1. missingRanges = CalculateMissingRanges()                               │
+│   2. fetched = await _dataSource.FetchAsync(missingRanges, ct) ◄────────┐  │
+│   3. return UnionAll(current, fetched) (merge, no trim)                 │  │
+│                                                                          │  │
+│  Shared by:                                                              │  │
+│   ├─ UserRequestHandler (extend to cover requested range — no mutation)  │  │
+│   └─ RebalanceExecutor (extend to desired range — feeds mutation)        │  │
+└───────────────────────────────────────────────────────────────────────────┼──┘
+                                                                            │
+┌───────────────────────────────────────────────────────────────────────────▼──┐
+│  IDataSource<TRangeType, TDataType>  [External Data Source]                  │
+│  🟧 INTERFACE (user-implemented)                                              │
+│                                                                               │
+│  Methods:                                                                     │
+│   ├─ FetchAsync(Range, CT) → Task<IEnumerable<TData>>                        │
+│   └─ FetchAsync(IEnumerable<Range>, CT) → Task<IEnumerable<RangeChunk>>     │
+│                                                                               │
+│  Characteristics:                                                             │
+│   ├─ User-provided implementation                                            │
+│   ├─ May perform I/O (network, disk, database)                               │
+│   ├─ Read-only (fetches data)                                                │
+│   └─ Should respect CancellationToken                                        │
+└───────────────────────────────────────────────────────────────────────────────┘
+```
 │                                                                           │
 │  Characteristics:                                                         │
 │   ├─ User-provided implementation                                        │
@@ -1840,7 +1826,7 @@ public async ValueTask DisposeAsync()
 - 👁️ Reads `Cache.Read(range)` - Return data to user
 - 👁️ Reads `Cache.ToRangeData()` - Get snapshot before extending
 
-**RebalanceScheduler** (via DecisionEngine):
+**RebalanceDecisionEngine** (via IntentController.ProcessIntentsAsync):
 - 👁️ Reads `NoRebalanceRange` - Decision logic (check if rebalance needed)
 
 **RebalanceExecutor**:
@@ -1867,33 +1853,31 @@ public async ValueTask DisposeAsync()
 
 ---
 
-### CancellationTokenSource (Intent Identity)
+### CancellationTokenSource (Execution Cancellation)
 
-#### Owner: IntentController
+#### Owner: IntentController.ProcessIntentsAsync (via ExecutionRequest)
 
 **Creates**:
-- In `PublishIntent()` - new CTS for each intent
+- In `ProcessIntentsAsync()` — new `CancellationTokenSource` for each `ExecutionRequest` enqueued
 
 **Cancels**:
-- In `PublishIntent()` - cancels previous CTS (supersede old intent)
-- In `CancelPendingRebalance()` - cancels current CTS (user priority)
+- In `ProcessIntentsAsync()` — cancels `lastExecutionRequest` before enqueuing a new one
+- Prevents stale execution from completing after a newer execution has been scheduled
 
 **Disposes**:
-- Immediately after cancellation (prevent resource leaks)
-- Sets to null after disposal (clean state)
+- `ExecutionRequest` lifetime — disposed when execution completes or is superseded
 
 #### Users
 
-**RebalanceScheduler**:
-- 👁️ Receives token from IntentManager
-- 👁️ Checks `IsCancellationRequested` after debounce delay
-- 👁️ Passes token to `ExecutePipelineAsync()`
-- 👁️ Passes token to `Task.Delay()` (cancellable debounce)
+**IRebalanceExecutionController implementations**:
+- 👁️ Receive `CancellationToken` via `ExecutionRequest`
+- 👁️ Pass token to `Task.Delay()` (cancellable debounce)
+- 👁️ Pass token to `RebalanceExecutor.ExecuteAsync()`
 
 **RebalanceExecutor**:
-- 👁️ Receives token from Scheduler
-- 👁️ Calls `ThrowIfCancellationRequested()` at three points:
-  1. After range equality check, before I/O
+- 👁️ Receives token from `IRebalanceExecutionController` (via `ExecutionRequest`)
+- 👁️ Calls `ThrowIfCancellationRequested()` at multiple points:
+  1. After acquiring semaphore, before I/O
   2. After `ExtendCacheAsync()`, before trim
   3. Before `Rematerialize()` (prevent applying obsolete results)
 
@@ -2079,37 +2063,47 @@ The Sliding Window Cache follows a **single consumer model** as documented in `d
 ---
 
 
-#### User Request Flow (User Thread - Synchronous until PublishIntent returns)
+#### User Request Flow (User Thread — until PublishIntent returns)
 ```
 1. UserRequestHandler.HandleRequestAsync() called
-2. Read from cache or fetch missing data from IDataSource
+2. Read from cache or fetch missing data from IDataSource (READ-ONLY)
 3. Assemble data to return to user (NO cache mutation)
-4. Return data to user immediately
-5. Publish intent with delivered data (SYNCHRONOUS in user thread):
+4. PublishIntent(intent) in user thread:
    └─> IntentController.PublishIntent(intent) ⚡ USER THREAD
-       ├─> DecisionEngine.Evaluate() ⚡ USER THREAD
-       │   └─> Multi-stage validation (CPU-only, side-effect free)
-       │       - Stage 1: NoRebalanceRange check
-       │       - Stage 2: Pending coverage check
-       │       - Stage 3: Desired==Current check
-       ├─> If validation rejects: return immediately (work avoidance)
-       ├─> If validation confirms: oldPending?.Cancel() ⚡ USER THREAD
-       └─> Scheduler.ScheduleRebalance() ⚡ USER THREAD
-           ├─> Create PendingRebalance (synchronous)
-           └─> Schedule background task ← HERE background starts 🔄
-               └─> Debounce delay 🔄 BACKGROUND
-               └─> RebalanceExecutor.ExecuteAsync() 🔄 BACKGROUND
-                   └─> I/O operations, cache mutations
+       ├─> Interlocked.Exchange(_pendingIntent, intent)  (atomic, O(1))
+       ├─> _activityCounter.IncrementActivity()
+       └─> _intentSignal.Release()  → wakes background loop
+           └─> Returns immediately
+5. Return assembled data to user
+
+--- BACKGROUND LOOP (ProcessIntentsAsync) ---
+
+6. _intentSignal.WaitAsync() unblocks 🔄 BACKGROUND
+7. Interlocked.Exchange(_pendingIntent, null) → reads intent
+8. DecisionEngine.Evaluate() 🔄 BACKGROUND
+   └─> 5-stage validation (CPU-only, side-effect free)
+       - Stage 1: CurrentNoRebalanceRange check
+       - Stage 2: PendingNoRebalanceRange check  
+       - Stage 3: Compute DesiredRange + DesiredNoRebalanceRange
+       - Stage 4: DesiredRange == CurrentRange check
+       - Stage 5: Schedule
+9. If validation rejects: continue loop (work avoidance)
+10. If schedule: lastRequest?.Cancel() + PublishExecutionRequest()
+
+--- EXECUTION (IRebalanceExecutionController) ---
+
+11. Debounce delay (Task.Delay) 🔄 BACKGROUND
+12. RebalanceExecutor.ExecuteAsync() 🔄 BACKGROUND
+    └─> I/O operations + atomic cache mutations
 ```
 
-**Key:** Everything up to background task scheduling happens **synchronously in user thread**. 
-Only debounce + actual execution happen in background.
+**Key:** Decision evaluation happens in **background loop** (NOT in user thread).
+User thread only does atomic store + semaphore signal and returns immediately.
 
 **Why This Matters:**
-- User request burst → immediate validation in user thread → work avoidance
-- No background queue buildup with pending decisions
-- Intent thrashing prevented by synchronous validation
-- Lightweight CPU-only operations don't block user thread (microseconds)
+- User request burst → latest intent wins via `Interlocked.Exchange` → burst resistance
+- Decision loop processes serially → no concurrent thrashing
+- User thread is never blocked by decision evaluation or I/O
 
 #### Rebalance Flow (Background Thread)
 ```

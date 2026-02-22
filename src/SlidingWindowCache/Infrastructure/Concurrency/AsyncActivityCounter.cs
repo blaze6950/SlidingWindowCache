@@ -118,7 +118,7 @@ internal sealed class AsyncActivityCounter
     /// <para><strong>Call Sites (verified in docs/invariants.md Section H.47):</strong></para>
     /// <list type="bullet">
     /// <item><description>IntentController.PublishIntent() - line 173 before semaphore signal at line 177</description></item>
-    /// <item><description>TaskBasedRebalanceExecutionController.PublishExecutionRequest() - line 196 before volatile write at line 220</description></item>
+    /// <item><description>TaskBasedRebalanceExecutionController.PublishExecutionRequest() - line 196 before Volatile.Write(_lastExecutionRequest) at line 214 and task chain publication at line 220</description></item>
     /// <item><description>ChannelBasedRebalanceExecutionController.PublishExecutionRequest() - line 220 before channel write at line 239</description></item>
     /// </list>
     /// </remarks>
@@ -174,7 +174,7 @@ internal sealed class AsyncActivityCounter
     /// <list type="bullet">
     /// <item><description>IntentController.ProcessIntentsAsync() - finally block at line 271</description></item>
     /// <item><description>TaskBasedRebalanceExecutionController.ExecuteRequestAsync() - finally block at line 349</description></item>
-    /// <item><description>ChannelBasedRebalanceExecutionController.ExecutionLoopAsync() - finally block at line 327</description></item>
+    /// <item><description>ChannelBasedRebalanceExecutionController.ProcessExecutionRequestsAsync() - finally block at line 327</description></item>
     /// <item><description>ChannelBasedRebalanceExecutionController.PublishExecutionRequest() - catch block at line 245 (channel write failure)</description></item>
     /// </list>
     /// <para><strong>Critical Contract:</strong></para>

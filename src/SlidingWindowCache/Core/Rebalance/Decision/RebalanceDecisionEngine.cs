@@ -15,13 +15,13 @@ namespace SlidingWindowCache.Core.Rebalance.Decision;
 /// <remarks>
 /// <para><strong>Execution Context:</strong> Background Thread (Intent Processing Loop)</para>
 /// <para>
-/// This component executes in the background intent processing loop (<see cref="IntentController.ProcessIntentsAsync"/>).
+/// This component executes in the background intent processing loop of <see cref="IntentController{TRange,TData,TDomain}"/>.
 /// Invoked synchronously within loop iteration after user thread signals intent via semaphore.
 /// Decision logic is CPU-only, side-effect free, and lightweight (completes in microseconds).
 /// This architecture enables burst resistance and work avoidance without blocking user requests.
 /// </para>
 /// <para><strong>Visibility:</strong> Not visible to external users, owned and invoked by IntentController</para>
-/// <para><strong>Invocation:</strong> Called synchronously within IntentController.ProcessIntentsAsync() background loop after semaphore signal from PublishIntent()</para>
+/// <para><strong>Invocation:</strong> Called synchronously within the background intent processing loop of <see cref="IntentController{TRange,TData,TDomain}"/> after a semaphore signal from <see cref="IntentController{TRange,TData,TDomain}.PublishIntent"/></para>
 /// <para><strong>Characteristics:</strong> Pure, deterministic, side-effect free, CPU-only (no I/O)</para>
 /// <para><strong>Decision Pipeline (5 Stages):</strong></para>
 /// <list type="number">

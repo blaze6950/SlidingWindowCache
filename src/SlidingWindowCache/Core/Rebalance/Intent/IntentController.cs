@@ -70,7 +70,7 @@ public record Intent<TRange, TData, TDomain>(
 /// </list>
 /// <para><strong>Two-Phase Pipeline:</strong></para>
 /// <list type="number">
-/// <item><description><strong>Phase 1 (Intent Processing):</strong> IntentController evaluates decision, cancels old execution, enqueues new execution request</description></item>
+/// <item><description><strong>Phase 1 (Intent Processing):</strong> IntentController reads pending intent, evaluates DecisionEngine (5-stage validation pipeline), and if rebalance is required: cancels previous execution and enqueues new execution request</description></item>
 /// <item><description><strong>Phase 2 (Execution):</strong> RebalanceExecutionController debounces, executes, mutates cache</description></item>
 /// </list>
 /// </remarks>
@@ -142,8 +142,8 @@ internal sealed class IntentController<TRange, TData, TDomain>
     /// <para>
     /// This method executes in the user thread and performs minimal work:
     /// <list type="number">
-    /// <item><description>Increment activity counter (tracks intent processing activity)</description></item>
     /// <item><description>Atomically replace _pendingIntent with new intent (latest wins)</description></item>
+    /// <item><description>Increment activity counter (tracks intent processing activity)</description></item>
     /// <item><description>Signal intent semaphore to wake up processing loop</description></item>
     /// <item><description>Record diagnostic event</description></item>
     /// <item><description>Return immediately</description></item>

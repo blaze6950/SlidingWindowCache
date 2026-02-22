@@ -29,7 +29,7 @@ namespace SlidingWindowCache.Core.UserPath;
 /// <list type="bullet">
 /// <item><description>Handles user requests synchronously</description></item>
 /// <item><description>Decides how to serve RequestedRange (from cache, from IDataSource, or mixed)</description></item>
-/// <item><description>Updates LastRequestedRange and CacheData/CurrentCacheRange only to cover RequestedRange</description></item>
+/// <item><description>Assembles data for the requested range (from cache, IDataSource, or combined) without mutating cache state</description></item>
 /// <item><description>Triggers rebalance intent (fire-and-forget)</description></item>
 /// <item><description>Never blocks on rebalance</description></item>
 /// </list>

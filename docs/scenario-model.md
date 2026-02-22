@@ -195,7 +195,8 @@ is the sole authority for determining rebalance necessity through a multi-stage 
 
 1. **Stage 1**: Current Cache NoRebalanceRange validation (fast-path rejection)
 2. **Stage 2**: Pending Desired Cache NoRebalanceRange validation (anti-thrashing)
-3. **Stage 3**: DesiredCacheRange vs CurrentCacheRange equality check (no-op prevention)
+3. **Stage 3**: Compute DesiredCacheRange from RequestedRange + configuration
+4. **Stage 4**: DesiredCacheRange vs CurrentCacheRange equality check (no-op prevention)
 
 Execution occurs **ONLY if ALL validation stages confirm necessity**. The decision path
 may determine that execution is not needed (NoRebalanceRange containment, pending
@@ -233,7 +234,7 @@ No I/O or cache mutation needed.
 
 ---
 
-## Decision Scenario D2 — Rebalance Allowed but Desired Equals Current (Stage 3 Validation)
+## Decision Scenario D2 — Rebalance Allowed but Desired Equals Current (Stage 4 Validation)
 
 ### Condition
 
@@ -244,8 +245,8 @@ No I/O or cache mutation needed.
 
 1. Decision path starts
 2. Stage 1 validation: NoRebalanceRange check — no fast return
-3. Stage 3 validation: DesiredCacheRange is computed from RequestedRange + config
-4. Desired equals Current (cache already in optimal configuration)
+3. Stage 3: DesiredCacheRange is computed from RequestedRange + config
+4. Stage 4 validation: Desired equals Current (cache already in optimal configuration)
 5. Validation rejects: rebalance unnecessary (no geometry change needed)
 6. Fast return — rebalance is skipped  
    (Execution Path is not started)
@@ -260,15 +261,15 @@ No I/O or cache mutation needed.
 ### Condition
 
 - `NoRebalanceRange.Contains(RequestedRange) == false` (Stage 1 passed)
-- `DesiredCacheRange != CurrentCacheRange` (Stage 3 confirms change needed)
+- `DesiredCacheRange != CurrentCacheRange` (Stage 4 confirms change needed)
 
 ### Sequence
 
 1. Decision path starts
 2. Stage 1 validation: NoRebalanceRange check — no fast return
 3. Stage 2 validation (if applicable): Pending Desired Cache NoRebalanceRange check — no rejection
-4. Stage 3 validation: DesiredCacheRange is computed from RequestedRange + config
-5. Desired differs from Current (cache geometry change required)
+4. Stage 3: DesiredCacheRange is computed from RequestedRange + config
+5. Stage 4 validation: Desired differs from Current (cache geometry change required)
 6. Validation confirms: rebalance necessary
 7. Execution Path is started asynchronously
 
@@ -303,9 +304,7 @@ optimally for this request. Starting a new rebalance would cancel the pending on
 potentially causing thrashing if user access pattern is rapidly changing. Better to let
 the pending rebalance complete.
 
-**Note**: This stage is conceptually part of the decision model. Current implementation
-may use cancellation timing as an optimization, but the principle remains: avoid
-redundant rebalance operations when pending execution will satisfy the request.
+**Note**: Stage 2 is fully implemented — `RebalanceDecisionEngine.Evaluate()` checks `lastExecutionRequest?.DesiredNoRebalanceRange` to determine if a pending execution already covers the requested range.
 
 ---
 

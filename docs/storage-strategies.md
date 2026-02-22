@@ -45,8 +45,8 @@ This guide explains when to use each strategy and their trade-offs.
 **Rematerialize:**
 
 ```csharp
-_storage = rangeData.Data.ToArray();  // Always allocates new array
 Range = rangeData.Range;
+_storage = rangeData.Data.ToArray();  // Always allocates new array
 ```
 
 **Read:**
@@ -154,8 +154,12 @@ Range = rangeData.Range;
 **Read:**
 
 ```csharp
+if (!Range.Contains(range))
+    throw new ArgumentOutOfRangeException(nameof(range), ...);
+
 var result = new TData[length];  // Allocates
-_activeStorage.CopyTo(offset, result, 0, length);
+for (var i = 0; i < length; i++)
+    result[i] = _activeStorage[(int)startOffset + i];
 return new ReadOnlyMemory<TData>(result);
 ```
 
@@ -208,7 +212,8 @@ var userOptions = new WindowCacheOptions(
 );
 
 // Wrap background cache as IDataSource for user cache
-IDataSource<int, byte[]> cachedDataSource = new CacheDataSourceAdapter(backgroundCache);
+// (Implement IDataSource<int, byte[]> wrapping the background cache — not provided by the library)
+IDataSource<int, byte[]> cachedDataSource = new BackgroundCacheAdapter(backgroundCache);
 
 var userCache = new WindowCache<int, byte[], IntegerFixedStepDomain>(
     cachedDataSource,  // Reads from background cache
@@ -298,7 +303,7 @@ Real-world measurements from `RebalanceFlowBenchmarks` demonstrate the allocatio
 
 **Key Observations:**
 1. **Consistent allocation advantage**: CopyOnRead shows 2-6x lower allocations across all scenarios
-2. **Baseline execution time**: ~1.05-1.07s (dominated by 1s total SynchronousDataSource delay)
+2. **Baseline execution time**: ~1.05-1.07s (cumulative rebalance + overhead for 10 operations)
 3. **LOH impact**: Snapshot mode triggers Gen2 collections at BaseSpanSize=10,000
 4. **Buffer reuse**: CopyOnRead amortizes capacity growth, reducing steady-state allocations
 

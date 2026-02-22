@@ -177,7 +177,7 @@ The cache exists in one of three states:
 
 User Path has priority but does NOT mutate cache:
 
-1. **Pre-operation cancellation:** User Path cancels active rebalance
+1. **Pre-operation cancellation:** User Path publishes new intent (atomically supersedes any prior intent); background loop cancels active rebalance execution when it processes the new intent
 2. **Read/fetch:** User Path reads from cache or fetches from IDataSource (NO mutation)
 3. **Immediate return:** User Path returns data to user (never waits)
 4. **Intent publication:** User Path emits intent with delivered data

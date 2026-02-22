@@ -119,7 +119,7 @@ This synchronization mechanism **does not alter actor responsibilities**:
 
 - ✅ UserRequestHandler remains the ONLY publisher of rebalance intents
 - ✅ IntentController remains the lifecycle authority for intent cancellation
-- ✅ RebalanceScheduler remains the authority for background Task execution
+- ✅ `IRebalanceExecutionController` remains the authority for background Task execution
 - ✅ WindowCache remains a composition root with no business logic
 
 The method exists solely to expose idle synchronization through the public API for testing,
@@ -161,7 +161,7 @@ without polling or timing dependencies.
 - *Test verifies*: Cancellation counter increments when new request arrives and rebalance validation requires rescheduling
 - *Clarification*: Cancellation is a mechanical coordination tool (single-writer architecture), not a decision mechanism. Rebalance necessity is determined by the Rebalance Decision Engine through analytical validation (NoRebalanceRange containment, DesiredRange vs CurrentRange comparison). User requests do NOT automatically trigger cancellation; validated rebalance necessity triggers cancellation + rescheduling.
 - *Note*: Cancellation prevents concurrent rebalance executions, not duplicate decision-making
-- *Implementation*: Uses `Interlocked.Exchange` for atomic read-and-clear of pending rebalance, preventing race where multiple threads could call `Cancel()` on same `PendingRebalance`
+- *Implementation*: Uses `Interlocked.Exchange` on `_pendingIntent` for atomic read-and-clear, ensuring only the latest intent is processed and prior intents are superseded atomically
 
 ### A.2 User-Facing Guarantees
 
@@ -178,7 +178,7 @@ without polling or timing dependencies.
 - *Architecture*: Encapsulation prevents other components from publishing intents
 
 **A.4** 🔵 **[Architectural]** Rebalance execution is **always performed asynchronously** relative to the User Path.
-- *Enforced by*: Background task scheduling in `RebalanceScheduler`, fire-and-forget pattern
+- *Enforced by*: Background task scheduling in `IRebalanceExecutionController`, fire-and-forget pattern
 - *Architecture*: User Path returns immediately after publishing intent
 
 **A.5** 🔵 **[Architectural]** The User Path performs **only the work necessary to return data to the user**.
@@ -264,7 +264,7 @@ without polling or timing dependencies.
 
 **C.20** 🔵 **[Architectural]** If a rebalance intent becomes obsolete before execution begins, the execution **must not start**.
 - *Enforced by*: `IsCancellationRequested` check after debounce
-- *Architecture*: Early exit in `RebalanceScheduler.ExecutePipelineAsync`
+- *Architecture*: Early exit in `IntentController.ProcessIntentsAsync` (cancellation check after debounce)
 
 **C.21** 🔵 **[Architectural]** At any point in time, **at most one rebalance execution is active**.
 - *Enforced by*: Cancellation protocol, single intent identity
@@ -301,7 +301,7 @@ without polling or timing dependencies.
 
 ### D.0 Rebalance Decision Model Overview
 
-The system uses a **multi-stage rebalance decision pipeline**, not a cancellation policy. Rebalance necessity is determined entirely in the User Path context via CPU-only analytical validation performed by the Rebalance Decision Engine.
+The system uses a **multi-stage rebalance decision pipeline**, not a cancellation policy. Rebalance necessity is determined in the background intent processing loop via CPU-only analytical validation performed by the Rebalance Decision Engine.
 
 #### Key Conceptual Distinctions
 
@@ -316,7 +316,7 @@ The system uses a **multi-stage rebalance decision pipeline**, not a cancellatio
 - Rebalance may be skipped because:
   - NoRebalanceRange containment (Stage 1 validation)
   - Pending rebalance already covers range (Stage 2 validation, anti-thrashing)
-  - Desired == Current range (Stage 3 validation)
+  - Desired == Current range (Stage 4 validation)
   - Intent superseded or cancelled before execution begins
 
 #### Multi-Stage Decision Pipeline
@@ -329,15 +329,20 @@ The Rebalance Decision Engine validates rebalance necessity through three sequen
 - **Rationale**: Current cache already provides sufficient buffer around request
 - **Performance**: O(1) range containment check, no computation needed
 
-**Stage 2 — Pending Desired Cache NoRebalanceRange Validation** (if pending rebalance exists)
+**Stage 2 — Pending Desired Cache NoRebalanceRange Validation** (if pending execution exists)
 - **Purpose**: Anti-thrashing mechanism preventing oscillation
 - **Logic**: If RequestedRange ⊆ NoRebalanceRange(PendingDesiredCacheRange), skip rebalance
 - **Rationale**: Pending rebalance execution will satisfy this request when it completes
-- **Note**: This stage is conceptually part of the decision model but may be implemented as cancellation optimization in current architecture
+- **Implementation**: Checks `lastExecutionRequest?.DesiredNoRebalanceRange` — fully implemented
 
-**Stage 3 — DesiredCacheRange vs CurrentCacheRange Equality Check**
+**Stage 3 — Compute DesiredCacheRange**
+- **Purpose**: Determine the optimal cache range for the current request
+- **Logic**: Use `ProportionalRangePlanner` to compute `DesiredCacheRange` from `RequestedRange` + configuration
+- **Performance**: Pure CPU computation, no I/O
+
+**Stage 4 — DesiredCacheRange vs CurrentCacheRange Equality Check**
 - **Purpose**: Avoid no-op rebalance operations
-- **Logic**: Compute DesiredCacheRange from RequestedRange + config; if DesiredCacheRange == CurrentCacheRange, skip rebalance
+- **Logic**: If `DesiredCacheRange == CurrentCacheRange`, skip rebalance
 - **Rationale**: Cache is already in optimal configuration for this request
 - **Performance**: Requires computing desired range but avoids I/O
 
@@ -375,15 +380,17 @@ The system prioritizes **decision correctness and work avoidance** over aggressi
 **D.28** 🟢 **[Behavioral — Test: `Invariant_D28_SkipWhenDesiredEqualsCurrentRange`]** If `DesiredCacheRange == CurrentCacheRange`, **rebalance execution is not required**.
 - *Observable via*: DEBUG counter `RebalanceSkippedSameRange` (optimization-based, see C.24c)
 - *Test verifies*: Repeated request with same range increments skip counter
-- *Implementation*: Early exit in `RebalanceExecutor.ExecuteAsync` before I/O operations
+- *Implementation*: Early exit in `RebalanceDecisionEngine.Evaluate` (Stage 4) before execution is scheduled
 
 **D.29** 🔵 **[Architectural]** Rebalance execution is triggered **only if ALL stages of the multi-stage decision pipeline confirm necessity**.
-- *Enforced by*: `RebalanceScheduler` checks decision before calling executor
+- *Enforced by*: `IntentController.ProcessIntentsAsync` checks `RebalanceDecisionEngine` result before calling executor
 - *Architecture*: Decision result gates execution
 - *Decision Pipeline Stages*:
   1. **Stage 1 — Current Cache NoRebalanceRange Validation**: If RequestedRange is contained within the NoRebalanceRange computed from CurrentCacheRange, skip rebalance (fast path)
-  2. **Stage 2 — Pending Desired Cache NoRebalanceRange Validation** (if pending rebalance exists): Validate against the NoRebalanceRange computed from the pending DesiredCacheRange to prevent thrashing/oscillation
-  3. **Stage 3 — DesiredCacheRange vs CurrentCacheRange Equality Check**: If computed DesiredCacheRange equals CurrentCacheRange, skip rebalance (no change needed)
+  2. **Stage 2 — Pending Desired Cache NoRebalanceRange Validation** (if pending execution exists): Validate against the NoRebalanceRange computed from the pending DesiredCacheRange to prevent thrashing/oscillation
+  3. **Stage 3 — Compute DesiredCacheRange**: Determine optimal cache range from RequestedRange + configuration
+  4. **Stage 4 — DesiredCacheRange vs CurrentCacheRange Equality Check**: If computed DesiredCacheRange equals CurrentCacheRange, skip rebalance (no change needed)
+  5. **Stage 5 — Schedule Execution**: All stages passed; schedule rebalance execution
 - *Critical Principle*: Rebalance executes ONLY if ALL stages pass validation. This multi-stage approach prevents unnecessary I/O, cache thrashing, and oscillating cache geometry while ensuring the system converges to optimal configuration.
 
 ---

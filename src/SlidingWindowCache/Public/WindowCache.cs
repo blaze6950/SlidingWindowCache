@@ -120,7 +120,7 @@ public interface IWindowCache<TRange, TData, TDomain> : IAsyncDisposable
 /// <para><strong>Internal Actors:</strong></para>
 /// <list type="bullet">
 /// <item><description><strong>UserRequestHandler</strong> - Fast Path Actor (User Thread)</description></item>
-/// <item><description><strong>RebalanceIntentManager</strong> - Temporal Authority (Background)</description></item>
+/// <item><description><strong>IntentController</strong> - Temporal Authority (Background)</description></item>
 /// <item><description><strong>RebalanceDecisionEngine</strong> - Pure Decision Logic (Background)</description></item>
 /// <item><description><strong>RebalanceExecutor</strong> - Mutating Actor (Background)</description></item>
 /// </list>

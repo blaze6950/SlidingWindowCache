@@ -132,15 +132,14 @@ When analyzing results, look for:
 - ✅ Only uses public `WindowCache` API
 
 ### 2. Deterministic Behavior
-- ✅ `FakeDataSource` with no randomness
+- ✅ `SynchronousDataSource` with no randomness
 - ✅ `SynchronousDataSource` for zero-latency isolation
 - ✅ Stable, predictable data generation
-- ✅ Configurable simulated latency
 - ✅ No I/O operations
 
 ### 3. Methodological Rigor
 - ✅ **No state reuse**: Fresh cache per iteration via `[IterationSetup]`
-- ✅ **Explicit rebalance handling**: `WaitForIdleAsync` in setup/cleanup, NOT in benchmark methods
+- ✅ **Explicit rebalance handling**: `WaitForIdleAsync` in setup/cleanup for `UserFlowBenchmarks`; INSIDE benchmark method for `RebalanceFlowBenchmarks` (measuring rebalance completion as part of cost)
 - ✅ **Clear separation**: Read microbenchmarks vs partial-hit vs scenario-level
 - ✅ **Isolation**: Each benchmark measures ONE thing
 - ✅ **MemoryDiagnoser** for allocation tracking
@@ -226,7 +225,7 @@ Benchmarks are organized by **execution flow** to clearly separate user-facing c
 
 **Expected Results**:
 - **Execution time**: Clusters around ~1.05-1.07 seconds across all parameters
-  - Baseline dominated by 10 × 100ms `SynchronousDataSource` delay (1 second)
+  - Cumulative rebalance overhead for 10 operations (~50-70ms each)
   - Pure rebalance overhead is ~50-70ms cumulative
 - **Allocation patterns**:
   - Fixed/Snapshot: ~224KB (BaseSpanSize=100) → ~16MB (BaseSpanSize=10,000)
@@ -260,7 +259,7 @@ Benchmarks are organized by **execution flow** to clearly separate user-facing c
 | **ColdStart** | `ColdStart_Rebalance_CopyOnRead` | Initial cache population (CopyOnRead) |
 
 **Expected Results**:
-- Cold start: ~97-98ms for initial population (dominated by 100ms `SynchronousDataSource` delay)
+- Cold start: ~97-98ms for initial population (measured end-to-end including rebalance)
 - Allocation patterns differ between modes:
   - Snapshot: Single upfront array allocation
   - CopyOnRead: List-based incremental allocation, less memory spike
@@ -369,7 +368,7 @@ var dataSource = new SynchronousDataSource(domain);
 
 ### Run All Benchmarks
 ```bash
-cd tests/SlidingWindowCache.Benchmarks
+cd benchmarks/SlidingWindowCache.Benchmarks
 dotnet run -c Release
 ```
 
@@ -392,11 +391,10 @@ dotnet run -c Release -- --filter *User_FullHit*
 dotnet run -c Release -- --filter *User_PartialHit*
 
 # Rebalance flow examples
-dotnet run -c Release -- --filter *Rebalance_AfterPartialHit*
+dotnet run -c Release -- --filter *Rebalance*
 
 # Scenario examples
 dotnet run -c Release -- --filter *ColdStart_Rebalance*
-dotnet run -c Release -- --filter *User_LocalityScenario*
 ```
 
 ---
@@ -436,7 +434,7 @@ Every iteration starts from a clean, deterministic cache state via `[IterationSe
 - **Scenario benchmarks**: Full sequential patterns, cleanup handles stabilization
 
 ### ✅ Isolation
-- `RebalanceCostBenchmarks` uses `SynchronousDataSource` to isolate cache mechanics from I/O
+- `RebalanceFlowBenchmarks` uses `SynchronousDataSource` to isolate cache mechanics from I/O
 - Each benchmark measures ONE architectural characteristic
 
 ---

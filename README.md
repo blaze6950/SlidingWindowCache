@@ -108,7 +108,7 @@ User Request
 **Key Points:**
 
 1. **User requests never block** - data returned immediately, rebalance happens later
-2. **Decision happens synchronously** - validation is CPU-only (microseconds), happens in user thread before scheduling
+2. **Decision happens in background** - validation is CPU-only (microseconds), happens in the intent processing loop before scheduling
 3. **Work avoidance prevents thrashing** - validation may skip rebalance entirely if unnecessary
 4. **Only I/O happens in background** - debounce + data fetching + cache updates run asynchronously
 5. **Smart eventual consistency** - cache converges to optimal state while avoiding unnecessary operations
@@ -469,7 +469,7 @@ See [Understanding the Sliding Window](#-understanding-the-sliding-window) for v
 
 #### Debouncing
 
-**`debounceDelay`** (TimeSpan, default: 50ms)
+**`debounceDelay`** (TimeSpan, default: 100ms)
 
 - **Definition**: Minimum time delay before executing a rebalance operation after it's triggered
 - **Purpose**: Prevents cache thrashing when user rapidly changes access patterns
