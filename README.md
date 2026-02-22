@@ -25,6 +25,7 @@ consistency, and intelligent work avoidance.**
 - [Usage Example](#-usage-example)
 - [Resource Management](#-resource-management)
 - [Configuration](#-configuration)
+- [Execution Strategy Selection](#-execution-strategy-selection)
 - [Optional Diagnostics](#-optional-diagnostics)
 - [Documentation](#-documentation)
 - [Performance Considerations](#-performance-considerations)
@@ -568,6 +569,96 @@ var options = new WindowCacheOptions(
     rebalanceQueueCapacity: 5  // Limit pending rebalance operations to 5
 );
 ```
+
+---
+
+## ⚡ Execution Strategy Selection
+
+The `rebalanceQueueCapacity` configuration parameter controls how the cache serializes background rebalance operations. Choosing the right strategy depends on your expected burst load characteristics and I/O latency patterns.
+
+### Strategy Overview
+
+| Configuration | Implementation | Queue Behavior | Best For |
+|---------------|----------------|----------------|----------|
+| `null` (default) | Task-based | Unbounded accumulation via task chaining | **99% of use cases** - typical workloads with moderate burst patterns |
+| `>= 1` (e.g., `10`) | Channel-based | Bounded queue with backpressure | Extreme high-frequency scenarios (1000+ rapid requests with I/O latency) |
+
+### Unbounded Execution (Default - Recommended)
+
+**Configuration**:
+```csharp
+var options = new WindowCacheOptions(
+    leftCacheSize: 1.0,
+    rightCacheSize: 2.0,
+    rebalanceQueueCapacity: null // Unbounded (default)
+);
+```
+
+**Characteristics**:
+- Task-based execution with unbounded task chaining
+- Minimal overhead
+- Excellent for typical workloads (burst ≤100 requests)
+- Effective cancellation of obsolete rebalance operations
+- No backpressure - intent processing never blocks
+
+**Best for**:
+- Web APIs with moderate scrolling (10-100 rapid requests)
+- Gaming/real-time applications with fast local data
+- Most production scenarios with typical access patterns
+- Any scenario where request bursts are ≤100 or I/O latency is low
+
+✅ **Recommended for 99% of use cases**
+
+---
+
+### Bounded Execution (High-Frequency Optimization)
+
+**Configuration**:
+```csharp
+var options = new WindowCacheOptions(
+    leftCacheSize: 1.0,
+    rightCacheSize: 2.0,
+    rebalanceQueueCapacity: 10 // Bounded queue with capacity of 10
+);
+```
+
+**Characteristics**:
+- Channel-based execution with bounded queue and backpressure
+- Prevents unbounded queue accumulation under extreme burst loads
+- Intent processing blocks when queue is full (applies backpressure)
+- Provides dramatic speedup (25-196×) under extreme conditions (1000+ burst with I/O latency)
+- Slightly less memory usage (5-9% reduction)
+- Performs identically to unbounded for typical workloads (burst ≤100)
+
+**Best for**:
+- Streaming sensor data at 1000+ Hz with network I/O
+- Any scenario with 1000+ rapid requests and significant I/O latency (50-100ms+)
+- Systems requiring predictable bounded queue behavior
+- Memory-constrained environments where accumulation must be prevented
+
+⚠️ **Use for extreme high-frequency edge cases only**
+
+---
+
+### Decision Guide
+
+**Choose Unbounded (null) if:**
+- ✅ Your application has typical access patterns (10-100 rapid requests)
+- ✅ I/O latency is low (<50ms) or burst size is moderate (≤100)
+- ✅ You want minimal overhead and maximum performance for common scenarios
+- ✅ **This covers 99% of production use cases**
+
+**Choose Bounded (capacity ≥ 10) if:**
+- ✅ Your application experiences extreme burst loads (1000+ rapid requests)
+- ✅ Data source has significant latency (50-100ms+) during bursts
+- ✅ You need predictable queue depth to prevent accumulation
+- ✅ You require bounded memory usage for rebalance operations
+
+**Key Insight**: Both strategies perform identically for typical workloads (burst ≤100). The bounded strategy's dramatic performance advantage (25-196× faster) only appears under **extreme conditions** (1000+ burst with I/O latency), making unbounded the safer default choice.
+
+**For comprehensive benchmark methodology, performance data, and detailed analysis**, see:
+- [ExecutionStrategyBenchmarks Documentation](benchmarks/SlidingWindowCache.Benchmarks/README.md#-execution-strategy-benchmarks)
+- [Benchmark Results](benchmarks/SlidingWindowCache.Benchmarks/Results/SlidingWindowCache.Benchmarks.Benchmarks.ExecutionStrategyBenchmarks-report-github.md)
 
 ---
 

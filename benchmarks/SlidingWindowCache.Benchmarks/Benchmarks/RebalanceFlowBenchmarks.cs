@@ -155,7 +155,8 @@ public class RebalanceFlowBenchmarks
             rightCacheSize: CacheCoefficientSize,
             readMode: readMode,
             leftThreshold: 1, // Set to 1 (100%) to ensure any request even the same range as previous triggers rebalance, isolating rebalance cost
-            rightThreshold: 0
+            rightThreshold: 0,
+            debounceDelay: TimeSpan.FromMilliseconds(10)
         );
     }
 
