@@ -73,8 +73,8 @@ public class UserFlowBenchmarks
     private Range<int> _partialHitBackwardRange;
     private Range<int> _fullMissRange;
 
-    private WindowCacheOptions _snapshotOptions;
-    private WindowCacheOptions _copyOnReadOptions;
+    private WindowCacheOptions? _snapshotOptions;
+    private WindowCacheOptions? _copyOnReadOptions;
 
     [GlobalSetup]
     public void GlobalSetup()
@@ -120,13 +120,13 @@ public class UserFlowBenchmarks
         _snapshotCache = new WindowCache<int, int, IntegerFixedStepDomain>(
             _dataSource,
             _domain,
-            _snapshotOptions
+            _snapshotOptions!
         );
 
         _copyOnReadCache = new WindowCache<int, int, IntegerFixedStepDomain>(
             _dataSource,
             _domain,
-            _copyOnReadOptions
+            _copyOnReadOptions!
         );
 
         // Prime both caches with known initial window
