@@ -200,12 +200,22 @@ internal sealed class UserRequestHandler<TRange, TData, TDomain>
                         _cacheDiagnostics.UserRequestPartialCacheHit();
 
                         // Compute actual available range (intersection of requested and assembled)
-                        // assembledData.Range is always non-null (ExtendCacheAsync returns valid RangeData)
+                        // assembledData.Range may not fully cover requestedRange if DataSource returned truncated/null chunks
+                        // (e.g., bounded source where some segments are unavailable)
                         actualRange = assembledData.Range.Intersect(requestedRange);
 
-                        // Slice to exact request
-                        var slicedData = assembledData[requestedRange];
-                        resultData = new ReadOnlyMemory<TData>(slicedData.Data.ToArray());
+                        // Slice to the actual available range (may be smaller than requestedRange)
+                        if (actualRange.HasValue)
+                        {
+                            var slicedData = assembledData[actualRange.Value];
+                            resultData = new ReadOnlyMemory<TData>(slicedData.Data.ToArray());
+                        }
+                        else
+                        {
+                            // No actual intersection after extension (defensive fallback)
+                            assembledData = default;
+                            resultData = ReadOnlyMemory<TData>.Empty;
+                        }
                     }
                     else
                     {
@@ -239,13 +249,24 @@ internal sealed class UserRequestHandler<TRange, TData, TDomain>
         }
         finally
         {
-            // If assembledData is NULL, it means an exception was thrown during data retrieval (either from cache or data source).
-            // Publishing intent doesn't make sense, the possibly redundant rebalance triggered by this failure will simply fail again during execution or next user request.
-            // So, exception should be caught and handled before proceeding to publish intent.
-            if (assembledData is not null)
+            // Always publish intent and increment counter, even for boundary misses.
+            // This ensures:
+            // 1. Consistent diagnostics - every user request is counted
+            // 2. Rebalance system is aware of access patterns (even failed attempts)
+            // 3. Intent represents "user requested this range" not "data was available"
+            // 
+            // Exception case: If assembledData is NULL due to exception during fetch,
+            // we skip publishing to avoid triggering redundant failing rebalances.
+            // In boundary miss case (actualRange = null), assembledData will be default(RangeData),
+            // which is still a valid (empty) RangeData structure we can publish.
+            var shouldPublishIntent = assembledData is not null || actualRange == null;
+            
+            if (shouldPublishIntent)
             {
-                // Create new Intent
-                var intent = new Intent<TRange, TData, TDomain>(requestedRange, assembledData);
+                // For boundary misses (actualRange = null), assembledData is null, so use default(RangeData)
+                // which represents an empty but valid RangeData structure (struct default is never null)
+                var intentData = assembledData ?? default(RangeData<TRange, TData, TDomain>);
+                var intent = new Intent<TRange, TData, TDomain>(requestedRange, intentData!);
 
                 // Publish rebalance intent with assembled data range (fire-and-forget)
                 // Rebalance Execution will use this as the authoritative source

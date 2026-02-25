@@ -44,7 +44,7 @@ ReadOnlyMemory<TData> data = result.Data;   // The data for that range
 ## RangeResult Structure
 
 ```csharp
-public readonly record struct RangeResult<TRange, TData>(
+public sealed record RangeResult<TRange, TData>(
     Range<TRange>? Range,
     ReadOnlyMemory<TData> Data
 ) where TRange : IComparable<TRange>;
@@ -83,13 +83,13 @@ public interface IDataSource<TRangeType, TDataType>
 ### RangeChunk Structure
 
 ```csharp
-public readonly record struct RangeChunk<TRange, TData>(
-    Range<TRange> Range,
+public record RangeChunk<TRange, TData>(
+    Range<TRange>? Range,
     IEnumerable<TData> Data
 ) where TRange : IComparable<TRange>;
 ```
 
-**Note**: `RangeChunk.Range` is **non-nullable** (data source perspective), but cache converts unavailable data to `RangeResult` with `Range = null` (user perspective).
+**Important:** `RangeChunk.Range` is **nullable**. IDataSource implementations MUST return `null` Range (not empty Range) to signal that no data is available for the requested range. The cache uses this to distinguish between "empty result" vs "unavailable data".
 
 ---
 

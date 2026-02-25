@@ -83,23 +83,24 @@ public interface IDataSource<TRangeType, TDataType> where TRangeType : IComparab
     /// <para><strong>Boundary Handling Examples:</strong></para>
     /// <code>
     /// // Database with records ID 100-500
-    /// public async Task&lt;IEnumerable&lt;MyData&gt;&gt; FetchAsync(Range&lt;int&gt; requested, CancellationToken ct)
+    /// public async Task&lt;RangeChunk&lt;int, MyData&gt;&gt; FetchAsync(Range&lt;int&gt; requested, CancellationToken ct)
     /// {
     ///     // Compute intersection with available range
     ///     var available = requested.Intersect(Range.Closed(MinId, MaxId));
     ///     
-    ///     // No data available - return empty
+    ///     // No data available - return RangeChunk with null Range
     ///     if (available == null)
-    ///         return Array.Empty&lt;MyData&gt;();
+    ///         return new RangeChunk&lt;int, MyData&gt;(null, Array.Empty&lt;MyData&gt;());
     ///     
     ///     // Fetch available portion
-    ///     return await Database.FetchRecordsAsync(available.LeftEndpoint, available.RightEndpoint, ct);
+    ///     var data = await Database.FetchRecordsAsync(available.LeftEndpoint, available.RightEndpoint, ct);
+    ///     return new RangeChunk&lt;int, MyData&gt;(available, data);
     /// }
     /// 
     /// // Examples:
-    /// // Request [50..150]  → Fetch [100..150] (51 records - truncated at lower bound)
-    /// // Request [400..600] → Fetch [400..500] (101 records - truncated at upper bound)
-    /// // Request [600..700] → Return empty (completely out of bounds)
+    /// // Request [50..150]  → RangeChunk([100..150], 51 records) - truncated at lower bound
+    /// // Request [400..600] → RangeChunk([400..500], 101 records) - truncated at upper bound
+    /// // Request [600..700] → RangeChunk(null, empty) - completely out of bounds
     /// </code>
     /// <para>See documentation on boundary handling for detailed guidance.</para>
     /// </remarks>

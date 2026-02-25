@@ -341,7 +341,7 @@ The cache provides explicit boundary handling through `RangeResult<TRange, TData
 ### RangeResult Structure
 
 ```csharp
-public readonly record struct RangeResult<TRange, TData>(
+public sealed record RangeResult<TRange, TData>(
     Range<TRange>? Range,        // Actual range returned (nullable)
     ReadOnlyMemory<TData> Data   // The data for that range
 );
@@ -400,7 +400,7 @@ public class BoundedDatabaseSource : IDataSource<int, Record>
         if (fulfillable == null)
         {
             return new RangeChunk<int, Record>(
-                requested, 
+                null,  // Range must be null to signal no data available
                 Array.Empty<Record>()
             );
         }
