@@ -1,6 +1,5 @@
 using Intervals.NET;
 using Intervals.NET.Domain.Default.Numeric;
-using Intervals.NET.Domain.Extensions.Fixed;
 using SlidingWindowCache.Public;
 using SlidingWindowCache.Public.Dto;
 
@@ -31,14 +30,14 @@ public sealed class SlowDataSource : IDataSource<int, int>
     /// Fetches data for a single range with simulated latency.
     /// Respects cancellation token to allow early exit during debounce or execution cancellation.
     /// </summary>
-    public async Task<IEnumerable<int>> FetchAsync(Range<int> range, CancellationToken cancellationToken)
+    public async Task<RangeChunk<int, int>> FetchAsync(Range<int> range, CancellationToken cancellationToken)
     {
         // Simulate I/O latency (network/database delay)
         // This delay is cancellable, allowing execution strategies to abort obsolete fetches
         await Task.Delay(_latency, cancellationToken).ConfigureAwait(false);
 
         // Generate data after delay completes
-        return GenerateDataForRange(range);
+        return new RangeChunk<int, int>(range, GenerateDataForRange(range));
     }
 
     /// <summary>

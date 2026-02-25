@@ -155,7 +155,7 @@ public class UserFlowBenchmarks
     public async Task<ReadOnlyMemory<int>> User_FullHit_Snapshot()
     {
         // No rebalance triggered
-        return await _snapshotCache!.GetDataAsync(_fullHitRange, CancellationToken.None);
+        return (await _snapshotCache!.GetDataAsync(_fullHitRange, CancellationToken.None)).Data;
     }
 
     [Benchmark]
@@ -163,7 +163,7 @@ public class UserFlowBenchmarks
     public async Task<ReadOnlyMemory<int>> User_FullHit_CopyOnRead()
     {
         // No rebalance triggered
-        return await _copyOnReadCache!.GetDataAsync(_fullHitRange, CancellationToken.None);
+        return (await _copyOnReadCache!.GetDataAsync(_fullHitRange, CancellationToken.None)).Data;
     }
 
     #endregion
@@ -175,7 +175,7 @@ public class UserFlowBenchmarks
     public async Task<ReadOnlyMemory<int>> User_PartialHit_ForwardShift_Snapshot()
     {
         // Rebalance triggered, handled in cleanup
-        return await _snapshotCache!.GetDataAsync(_partialHitForwardRange, CancellationToken.None);
+        return (await _snapshotCache!.GetDataAsync(_partialHitForwardRange, CancellationToken.None)).Data;
     }
 
     [Benchmark]
@@ -183,7 +183,7 @@ public class UserFlowBenchmarks
     public async Task<ReadOnlyMemory<int>> User_PartialHit_ForwardShift_CopyOnRead()
     {
         // Rebalance triggered, handled in cleanup
-        return await _copyOnReadCache!.GetDataAsync(_partialHitForwardRange, CancellationToken.None);
+        return (await _copyOnReadCache!.GetDataAsync(_partialHitForwardRange, CancellationToken.None)).Data;
     }
 
     [Benchmark]
@@ -191,7 +191,7 @@ public class UserFlowBenchmarks
     public async Task<ReadOnlyMemory<int>> User_PartialHit_BackwardShift_Snapshot()
     {
         // Rebalance triggered, handled in cleanup
-        return await _snapshotCache!.GetDataAsync(_partialHitBackwardRange, CancellationToken.None);
+        return (await _snapshotCache!.GetDataAsync(_partialHitBackwardRange, CancellationToken.None)).Data;
     }
 
     [Benchmark]
@@ -199,7 +199,7 @@ public class UserFlowBenchmarks
     public async Task<ReadOnlyMemory<int>> User_PartialHit_BackwardShift_CopyOnRead()
     {
         // Rebalance triggered, handled in cleanup
-        return await _copyOnReadCache!.GetDataAsync(_partialHitBackwardRange, CancellationToken.None);
+        return (await _copyOnReadCache!.GetDataAsync(_partialHitBackwardRange, CancellationToken.None)).Data;
     }
 
     #endregion
@@ -212,7 +212,7 @@ public class UserFlowBenchmarks
     {
         // No overlap - full cache replacement
         // Rebalance triggered, handled in cleanup
-        return await _snapshotCache!.GetDataAsync(_fullMissRange, CancellationToken.None);
+        return (await _snapshotCache!.GetDataAsync(_fullMissRange, CancellationToken.None)).Data;
     }
 
     [Benchmark]
@@ -221,7 +221,7 @@ public class UserFlowBenchmarks
     {
         // No overlap - full cache replacement
         // Rebalance triggered, handled in cleanup
-        return await _copyOnReadCache!.GetDataAsync(_fullMissRange, CancellationToken.None);
+        return (await _copyOnReadCache!.GetDataAsync(_fullMissRange, CancellationToken.None)).Data;
     }
 
     #endregion
