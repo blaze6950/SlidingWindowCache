@@ -23,6 +23,7 @@ consistency, and intelligent work avoidance.**
 - [Understanding the Sliding Window](#-understanding-the-sliding-window)
 - [Materialization for Fast Access](#-materialization-for-fast-access)
 - [Usage Example](#-usage-example)
+- [Boundary Handling & Data Availability](#-boundary-handling--data-availability)
 - [Resource Management](#-resource-management)
 - [Configuration](#-configuration)
 - [Execution Strategy Selection](#-execution-strategy-selection)
@@ -318,18 +319,129 @@ var cache = WindowCache<int, string, IntegerFixedStepDomain>.Create(
     readMode: UserCacheReadMode.Snapshot
 );
 
-// Request data - returns ReadOnlyMemory<string>
-var data = await cache.GetDataAsync(
+// Request data - returns RangeResult<int, string>
+var result = await cache.GetDataAsync(
     Range.Closed(100, 200),
     cancellationToken
 );
 
 // Access the data
-foreach (var item in data.Span)
+foreach (var item in result.Data.Span)
 {
     Console.WriteLine(item);
 }
 ```
+
+---
+
+## 🎯 Boundary Handling & Data Availability
+
+The cache provides explicit boundary handling through `RangeResult<TRange, TData>` returned by `GetDataAsync()`. This allows data sources to communicate data availability and partial fulfillment.
+
+### RangeResult Structure
+
+```csharp
+public readonly record struct RangeResult<TRange, TData>(
+    Range<TRange>? Range,        // Actual range returned (nullable)
+    ReadOnlyMemory<TData> Data   // The data for that range
+);
+```
+
+### Basic Usage
+
+```csharp
+var result = await cache.GetDataAsync(
+    Intervals.NET.Factories.Range.Closed(100, 200), 
+    ct
+);
+
+// Always check Range before using Data
+if (result.Range != null)
+{
+    Console.WriteLine($"Received {result.Data.Length} elements for range {result.Range}");
+    
+    foreach (var item in result.Data.Span)
+    {
+        ProcessItem(item);
+    }
+}
+else
+{
+    Console.WriteLine("No data available for requested range");
+}
+```
+
+### Why RangeResult?
+
+**Benefits:**
+- ✅ **Explicit Contracts**: Know exactly what range was fulfilled
+- ✅ **Boundary Awareness**: Data sources signal truncation at physical boundaries
+- ✅ **No Exceptions for Normal Cases**: Out-of-bounds is expected, not exceptional
+- ✅ **Partial Fulfillment**: Handle cases where only part of requested range is available
+
+### Bounded Data Sources Example
+
+For data sources with physical boundaries (databases with min/max IDs, APIs with limits):
+
+```csharp
+public class BoundedDatabaseSource : IDataSource<int, Record>
+{
+    private const int MinId = 1000;
+    private const int MaxId = 9999;
+
+    public async Task<RangeChunk<int, Record>> FetchAsync(
+        Range<int> requested, 
+        CancellationToken ct)
+    {
+        var availableRange = Intervals.NET.Factories.Range.Closed(MinId, MaxId);
+        var fulfillable = requested.Intersect(availableRange);
+        
+        // No data available
+        if (fulfillable == null)
+        {
+            return new RangeChunk<int, Record>(
+                requested, 
+                Array.Empty<Record>()
+            );
+        }
+        
+        // Fetch available portion
+        var data = await _db.FetchRecordsAsync(
+            fulfillable.LowerBound.Value,
+            fulfillable.UpperBound.Value,
+            ct
+        );
+        
+        return new RangeChunk<int, Record>(fulfillable, data);
+    }
+}
+
+// Example scenarios:
+// Request [2000..3000]  → Range = [2000..3000], 1001 records ✓
+// Request [500..1500]   → Range = [1000..1500], 501 records (truncated) ✓
+// Request [0..999]      → Range = null, empty data ✓
+```
+
+### Handling Subset Requests
+
+When requesting a subset of cached data, `RangeResult` returns only the requested range:
+
+```csharp
+// Prime cache with large range
+await cache.GetDataAsync(Intervals.NET.Factories.Range.Closed(0, 1000), ct);
+
+// Request subset (served from cache)
+var subset = await cache.GetDataAsync(
+    Intervals.NET.Factories.Range.Closed(100, 200), 
+    ct
+);
+
+// Result contains ONLY the requested subset
+Assert.Equal(101, subset.Data.Length);  // [100, 200] = 101 elements
+Assert.Equal(subset.Range, Intervals.NET.Factories.Range.Closed(100, 200));
+```
+
+**For complete boundary handling documentation, see:** [Boundary Handling Guide](docs/boundary-handling.md)
 
 ---
 
@@ -406,7 +518,7 @@ public class DataService : IAsyncDisposable
         );
     }
 
-    public ValueTask<ReadOnlyMemory<string>> GetDataAsync(Range<int> range, CancellationToken ct)
+    public ValueTask<RangeResult<int, string>> GetDataAsync(Range<int> range, CancellationToken ct)
         => _cache.GetDataAsync(range, ct);
 
     public async ValueTask DisposeAsync()
@@ -757,9 +869,10 @@ see [Diagnostics Guide](docs/diagnostics.md).**
 
 1. **[README - Quick Start](#-quick-start)** - Basic usage examples (you're already here!)
 2. **[README - Configuration Guide](#configuration)** - Understand the 5 key parameters
-3. **[Storage Strategies](docs/storage-strategies.md)** - Choose Snapshot vs CopyOnRead for your use case
-4. **[Glossary - Common Misconceptions](docs/glossary.md#common-misconceptions)** - Avoid common pitfalls
-5. **[Diagnostics](docs/diagnostics.md)** - Add optional instrumentation for visibility
+3. **[Boundary Handling](docs/boundary-handling.md)** - RangeResult usage, bounded data sources, partial fulfillment
+4. **[Storage Strategies](docs/storage-strategies.md)** - Choose Snapshot vs CopyOnRead for your use case
+5. **[Glossary - Common Misconceptions](docs/glossary.md#common-misconceptions)** - Avoid common pitfalls
+6. **[Diagnostics](docs/diagnostics.md)** - Add optional instrumentation for visibility
 
 **When to use this path**: Building features, integrating the cache, performance tuning.
 
