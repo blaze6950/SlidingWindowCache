@@ -21,6 +21,11 @@ public class NoOpDiagnostics : ICacheDiagnostics
     }
 
     /// <inheritdoc/>
+    public void DataSegmentUnavailable()
+    {
+    }
+
+    /// <inheritdoc/>
     public void DataSourceFetchSingleRange()
     {
     }

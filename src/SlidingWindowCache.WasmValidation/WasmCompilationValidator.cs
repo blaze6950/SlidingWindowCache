@@ -12,14 +12,14 @@ namespace SlidingWindowCache.WasmValidation;
 /// </summary>
 internal sealed class SimpleDataSource : IDataSource<int, int>
 {
-    public Task<IEnumerable<int>> FetchAsync(Range<int> range, CancellationToken cancellationToken)
+    public Task<RangeChunk<int, int>> FetchAsync(Range<int> range, CancellationToken cancellationToken)
     {
         // Generate deterministic sequential data for the range
         // Range.Start and Range.End are RangeValue<int>, use implicit conversion to int
         var start = range.Start.Value;
         var end = range.End.Value;
         var data = Enumerable.Range(start, end - start + 1);
-        return Task.FromResult(data);
+        return Task.FromResult(new RangeChunk<int, int>(range, data));
     }
 
     public Task<IEnumerable<RangeChunk<int, int>>> FetchAsync(
@@ -106,7 +106,7 @@ public static class WasmCompilationValidator
         await cache.WaitForIdleAsync();
 
         // Use result to avoid unused variable warning
-        _ = result.Length;
+        _ = result.Data.Length;
 
         // Compilation successful if this code builds for net8.0-browser
     }
@@ -145,7 +145,7 @@ public static class WasmCompilationValidator
         var range = Intervals.NET.Factories.Range.Closed<int>(0, 10);
         var result = await cache.GetDataAsync(range, CancellationToken.None);
         await cache.WaitForIdleAsync();
-        _ = result.Length;
+        _ = result.Data.Length;
     }
 
     /// <summary>
@@ -182,7 +182,7 @@ public static class WasmCompilationValidator
         var range = Intervals.NET.Factories.Range.Closed<int>(0, 10);
         var result = await cache.GetDataAsync(range, CancellationToken.None);
         await cache.WaitForIdleAsync();
-        _ = result.Length;
+        _ = result.Data.Length;
     }
 
     /// <summary>
@@ -219,6 +219,6 @@ public static class WasmCompilationValidator
         var range = Intervals.NET.Factories.Range.Closed<int>(0, 10);
         var result = await cache.GetDataAsync(range, CancellationToken.None);
         await cache.WaitForIdleAsync();
-        _ = result.Length;
+        _ = result.Data.Length;
     }
 }

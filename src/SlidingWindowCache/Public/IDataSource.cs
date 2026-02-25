@@ -68,7 +68,42 @@ public interface IDataSource<TRangeType, TDataType> where TRangeType : IComparab
     /// The task result contains an enumerable of data of type <typeparamref name="TDataType"/> 
     /// for the specified range.
     /// </returns>
-    Task<IEnumerable<TDataType>> FetchAsync(
+    /// <remarks>
+    /// <para><strong>Bounded Data Sources:</strong></para>
+    /// <para>
+    /// For data sources with physical boundaries (e.g., databases with min/max IDs, 
+    /// time-series with temporal limits, paginated APIs with maximum pages), implementations MUST:
+    /// </para>
+    /// <list type="bullet">
+    /// <item><description>Return RangeChunk with Range = null when no data is available for the requested range</description></item>
+    /// <item><description>Return truncated range when partial data is available (intersection of requested and available)</description></item>
+    /// <item><description>NEVER throw exceptions for out-of-bounds requests - use null Range instead</description></item>
+    /// <item><description>Ensure Data.Count() equals Range.Span when Range is non-null</description></item>
+    /// </list>
+    /// <para><strong>Boundary Handling Examples:</strong></para>
+    /// <code>
+    /// // Database with records ID 100-500
+    /// public async Task&lt;IEnumerable&lt;MyData&gt;&gt; FetchAsync(Range&lt;int&gt; requested, CancellationToken ct)
+    /// {
+    ///     // Compute intersection with available range
+    ///     var available = requested.Intersect(Range.Closed(MinId, MaxId));
+    ///     
+    ///     // No data available - return empty
+    ///     if (available == null)
+    ///         return Array.Empty&lt;MyData&gt;();
+    ///     
+    ///     // Fetch available portion
+    ///     return await Database.FetchRecordsAsync(available.LeftEndpoint, available.RightEndpoint, ct);
+    /// }
+    /// 
+    /// // Examples:
+    /// // Request [50..150]  → Fetch [100..150] (51 records - truncated at lower bound)
+    /// // Request [400..600] → Fetch [400..500] (101 records - truncated at upper bound)
+    /// // Request [600..700] → Return empty (completely out of bounds)
+    /// </code>
+    /// <para>See documentation on boundary handling for detailed guidance.</para>
+    /// </remarks>
+    Task<RangeChunk<TRangeType, TDataType>> FetchAsync(
         Range<TRangeType> range,
         CancellationToken cancellationToken
     );
@@ -86,7 +121,7 @@ public interface IDataSource<TRangeType, TDataType> where TRangeType : IComparab
     /// <returns>
     /// A task that represents the asynchronous fetch operation. 
     /// The task result contains an enumerable of <see cref="RangeChunk{TRangeType,TDataType}"/> 
-    /// for the specified ranges.
+    /// for the specified ranges. Each RangeChunk may have a null Range if no data is available.
     /// </returns>
     /// <remarks>
     /// <para><strong>Default Behavior:</strong></para>
@@ -104,19 +139,19 @@ public interface IDataSource<TRangeType, TDataType> where TRangeType : IComparab
     /// <item><description>Batch API endpoints that accept multiple range parameters</description></item>
     /// <item><description>Custom batching logic with size limits or throttling</description></item>
     /// </list>
+    /// <para><strong>Boundary Handling:</strong></para>
+    /// <para>
+    /// When implementing for bounded data sources, ensure each RangeChunk follows the same
+    /// boundary contract as the single-range FetchAsync method (null Range for unavailable data,
+    /// truncated ranges for partial availability).
+    /// </para>
     /// </remarks>
     async Task<IEnumerable<RangeChunk<TRangeType, TDataType>>> FetchAsync(
         IEnumerable<Range<TRangeType>> ranges,
         CancellationToken cancellationToken
     )
     {
-        var tasks = ranges.Select(async range =>
-            new RangeChunk<TRangeType, TDataType>(
-                range,
-                await FetchAsync(range, cancellationToken)
-            )
-        );
-
+        var tasks = ranges.Select(async range => await FetchAsync(range, cancellationToken));
         return await Task.WhenAll(tasks);
     }
 }

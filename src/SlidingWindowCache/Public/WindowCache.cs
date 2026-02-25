@@ -1,4 +1,4 @@
-﻿using Intervals.NET;
+using Intervals.NET;
 using Intervals.NET.Domain.Abstractions;
 using SlidingWindowCache.Core.Planning;
 using SlidingWindowCache.Core.Rebalance.Decision;
@@ -10,6 +10,7 @@ using SlidingWindowCache.Infrastructure.Concurrency;
 using SlidingWindowCache.Infrastructure.Instrumentation;
 using SlidingWindowCache.Infrastructure.Storage;
 using SlidingWindowCache.Public.Configuration;
+using SlidingWindowCache.Public.Dto;
 
 namespace SlidingWindowCache.Public;
 
@@ -74,10 +75,37 @@ public interface IWindowCache<TRange, TData, TDomain> : IAsyncDisposable
     /// A cancellation token to cancel the operation.
     /// </param>
     /// <returns>
-    /// A task that represents the asynchronous operation. The task result contains the data 
-    /// for the specified range as a <see cref="ReadOnlyMemory{T}"/>.
+    /// A task that represents the asynchronous operation. The task result contains a 
+    /// <see cref="RangeResult{TRange, TData}"/> with the actual available range and data.
     /// </returns>
-    ValueTask<ReadOnlyMemory<TData>> GetDataAsync(
+    /// <remarks>
+    /// <para><strong>Bounded Data Sources:</strong></para>
+    /// <para>
+    /// When working with bounded data sources (e.g., databases with min/max IDs, time-series with
+    /// temporal limits), the returned RangeResult.Range indicates what portion of the request was
+    /// actually available. The Range may be:
+    /// </para>
+    /// <list type="bullet">
+    /// <item><description>Equal to requestedRange - all data available (typical case)</description></item>
+    /// <item><description>Subset of requestedRange - partial data available (truncated at boundaries)</description></item>
+    /// <item><description>Null - no data available for the requested range</description></item>
+    /// </list>
+    /// <para><strong>Example:</strong></para>
+    /// <code>
+    /// var result = await cache.GetDataAsync(Range.Closed(50, 600), ct);
+    /// if (result.Range.HasValue)
+    /// {
+    ///     Console.WriteLine($"Got data for range: {result.Range.Value}");
+    ///     ProcessData(result.Data);
+    /// }
+    /// else
+    /// {
+    ///     Console.WriteLine("No data available for requested range");
+    /// }
+    /// </code>
+    /// <para>See boundary handling documentation for details.</para>
+    /// </remarks>
+    ValueTask<RangeResult<TRange, TData>> GetDataAsync(
         Range<TRange> requestedRange,
         CancellationToken cancellationToken);
 
@@ -264,7 +292,7 @@ public sealed class WindowCache<TRange, TData, TDomain>
     /// This method acts as a thin delegation layer to the internal <see cref="UserRequestHandler{TRange,TData,TDomain}"/> actor.
     /// WindowCache itself implements no business logic - it is a pure facade.
     /// </remarks>
-    public ValueTask<ReadOnlyMemory<TData>> GetDataAsync(
+    public ValueTask<RangeResult<TRange, TData>> GetDataAsync(
         Range<TRange> requestedRange,
         CancellationToken cancellationToken)
     {
@@ -273,10 +301,10 @@ public sealed class WindowCache<TRange, TData, TDomain>
         {
             throw new ObjectDisposedException(
                 nameof(WindowCache<TRange, TData, TDomain>),
-                "Cannot access a disposed WindowCache instance.");
+                "Cannot retrieve data from a disposed cache.");
         }
 
-        // Pure facade: delegate to UserRequestHandler actor
+        // Delegate to UserRequestHandler (Fast Path Actor)
         return _userRequestHandler.HandleRequestAsync(requestedRange, cancellationToken);
     }
 

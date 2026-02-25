@@ -1,4 +1,4 @@
-﻿using Intervals.NET;
+using Intervals.NET;
 using Intervals.NET.Data;
 using Intervals.NET.Data.Extensions;
 using Intervals.NET.Domain.Abstractions;
@@ -8,6 +8,7 @@ using SlidingWindowCache.Core.Rebalance.Intent;
 using SlidingWindowCache.Core.State;
 using SlidingWindowCache.Infrastructure.Instrumentation;
 using SlidingWindowCache.Public;
+using SlidingWindowCache.Public.Dto;
 
 namespace SlidingWindowCache.Core.UserPath;
 
@@ -84,17 +85,19 @@ internal sealed class UserRequestHandler<TRange, TData, TDomain>
     /// <param name="requestedRange">The range requested by the user.</param>
     /// <param name="cancellationToken">A cancellation token to cancel the operation.</param>
     /// <returns>
-    /// A task that represents the asynchronous operation. The task result contains the data
-    /// for the specified range as a <see cref="ReadOnlyMemory{T}"/>.
+    /// A task that represents the asynchronous operation. The task result contains a 
+    /// <see cref="RangeResult{TRange, TData}"/> with the actual available range and data.
+    /// The Range may be null if no data is available, or a subset of requestedRange if truncated at boundaries.
     /// </returns>
     /// <remarks>
     /// <para>This method implements the User Path logic (READ-ONLY with respect to cache state):</para>
     /// <list type="number">
     /// <item><description>Check if requested range is fully or partially covered by cache</description></item>
     /// <item><description>Fetch missing data from IDataSource as needed</description></item>
+    /// <item><description>Compute actual available range (intersection of requested and available)</description></item>
     /// <item><description>Materialize assembled data to array</description></item>
     /// <item><description>Publish rebalance intent with delivered data (fire-and-forget)</description></item>
-    /// <item><description>Return data immediately</description></item>
+    /// <item><description>Return RangeResult immediately</description></item>
     /// </list>
     /// <para><strong>CRITICAL: User Path is READ-ONLY</strong></para>
     /// <para>
@@ -108,8 +111,14 @@ internal sealed class UserRequestHandler<TRange, TData, TDomain>
     /// <item><description>❌ NEVER writes to NoRebalanceRange</description></item>
     /// </list>
     /// </para>
+    /// <para><strong>Boundary Handling:</strong></para>
+    /// <para>
+    /// When DataSource has physical boundaries (e.g., database min/max IDs), the returned
+    /// RangeResult.Range indicates what portion of the request was actually available.
+    /// This allows graceful handling of out-of-bounds requests without exceptions.
+    /// </para>
     /// </remarks>
-    public async ValueTask<ReadOnlyMemory<TData>> HandleRequestAsync(
+    public async ValueTask<RangeResult<TRange, TData>> HandleRequestAsync(
         Range<TRange> requestedRange,
         CancellationToken cancellationToken)
     {
@@ -126,6 +135,7 @@ internal sealed class UserRequestHandler<TRange, TData, TDomain>
         var isColdStart = !_state.LastRequested.HasValue;
 
         RangeData<TRange, TData, TDomain>? assembledData = null;
+        Range<TRange>? actualRange = null;
         ReadOnlyMemory<TData> resultData;
 
         try
@@ -135,12 +145,25 @@ internal sealed class UserRequestHandler<TRange, TData, TDomain>
                 // Scenario 1: Cold Start
                 // Cache has never been populated - fetch data ONLY for requested range
                 _cacheDiagnostics.DataSourceFetchSingleRange();
-                assembledData = (await _dataSource.FetchAsync(requestedRange, cancellationToken))
-                    .ToRangeData(requestedRange, _state.Domain);
+                var fetchedChunk = await _dataSource.FetchAsync(requestedRange, cancellationToken);
+                
+                // Handle boundary: chunk.Range may be null or truncated
+                if (fetchedChunk.Range.HasValue)
+                {
+                    assembledData = fetchedChunk.Data.ToRangeData(fetchedChunk.Range.Value, _state.Domain);
+                    actualRange = fetchedChunk.Range.Value;
+                    resultData = new ReadOnlyMemory<TData>(assembledData.Data.ToArray());
+                }
+                else
+                {
+                    // No data available for requested range
+                    // Use default RangeData (empty)
+                    assembledData = null;
+                    actualRange = null;
+                    resultData = ReadOnlyMemory<TData>.Empty;
+                }
 
                 _cacheDiagnostics.UserRequestFullCacheMiss();
-
-                resultData = new ReadOnlyMemory<TData>(assembledData.Data.ToArray());
             }
             else
             {
@@ -156,6 +179,7 @@ internal sealed class UserRequestHandler<TRange, TData, TDomain>
 
                     // Return a requested range data using the cache storage's Read method, which may return a view or a copy depending on the strategy
                     resultData = cacheStorage.Read(requestedRange);
+                    actualRange = requestedRange; // Fully in cache, so actual = requested
                 }
                 else
                 {
@@ -175,7 +199,13 @@ internal sealed class UserRequestHandler<TRange, TData, TDomain>
 
                         _cacheDiagnostics.UserRequestPartialCacheHit();
 
-                        resultData = new ReadOnlyMemory<TData>(assembledData[requestedRange].Data.ToArray());
+                        // Compute actual available range (intersection of requested and assembled)
+                        // assembledData.Range is always non-null (ExtendCacheAsync returns valid RangeData)
+                        actualRange = assembledData.Range.Intersect(requestedRange);
+                        
+                        // Slice to exact request
+                        var slicedData = assembledData[requestedRange];
+                        resultData = new ReadOnlyMemory<TData>(slicedData.Data.ToArray());
                     }
                     else
                     {
@@ -184,12 +214,25 @@ internal sealed class UserRequestHandler<TRange, TData, TDomain>
                         // Fetch ONLY the requested range from IDataSource
                         // NOTE: The logic is similar to cold start
                         _cacheDiagnostics.DataSourceFetchSingleRange();
-                        assembledData = (await _dataSource.FetchAsync(requestedRange, cancellationToken).ConfigureAwait(false))
-                            .ToRangeData(requestedRange, _state.Domain);
+                        var fetchedChunk = await _dataSource.FetchAsync(requestedRange, cancellationToken).ConfigureAwait(false);
+                        
+                        // Handle boundary: chunk.Range may be null or truncated
+                        if (fetchedChunk.Range.HasValue)
+                        {
+                            assembledData = fetchedChunk.Data.ToRangeData(fetchedChunk.Range.Value, _state.Domain);
+                            actualRange = fetchedChunk.Range.Value;
+                            resultData = new ReadOnlyMemory<TData>(assembledData.Data.ToArray());
+                        }
+                        else
+                        {
+                            // No data available for requested range
+                            // Use default RangeData (empty)
+                            assembledData = default;
+                            actualRange = null;
+                            resultData = ReadOnlyMemory<TData>.Empty;
+                        }
 
                         _cacheDiagnostics.UserRequestFullCacheMiss();
-
-                        resultData = new ReadOnlyMemory<TData>(assembledData.Data.ToArray());
                     }
                 }
             }
@@ -212,8 +255,8 @@ internal sealed class UserRequestHandler<TRange, TData, TDomain>
             }
         }
 
-        // Return data directly
-        return resultData;
+        // Return RangeResult with actual available range and data
+        return new RangeResult<TRange, TData>(actualRange, resultData);
     }
 
     /// <summary>

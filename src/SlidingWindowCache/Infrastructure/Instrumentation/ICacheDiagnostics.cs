@@ -88,6 +88,32 @@ public interface ICacheDiagnostics
     /// </summary>
     void DataSourceFetchMissingSegments();
 
+    /// <summary>
+    /// Called when a data segment is unavailable because the DataSource returned a null Range.
+    /// This typically occurs when rebalancing attempts to prefetch data beyond physical boundaries
+    /// (e.g., database min/max IDs, time-series with temporal limits, paginated APIs with max pages).
+    /// </summary>
+    /// <remarks>
+    /// <para><strong>Context:</strong> Background Thread (Rebalance Execution)</para>
+    /// <para>
+    /// This is informational only - the system handles boundaries gracefully by skipping
+    /// unavailable segments during cache union (UnionAll), preserving cache contiguity (Invariant A.9a).
+    /// </para>
+    /// <para><strong>Typical Scenarios:</strong></para>
+    /// <list type="bullet">
+    /// <item><description>Database with min/max ID bounds - rebalance tries to extend beyond available range</description></item>
+    /// <item><description>Time-series data with temporal limits - requesting future/past data not yet/no longer available</description></item>
+    /// <item><description>Paginated API with maximum pages - attempting to fetch beyond last page</description></item>
+    /// </list>
+    /// <para>
+    /// Location: RebalanceExecutor.ExecuteAsync (after fetching extension chunks from DataSource)
+    /// </para>
+    /// <para>
+    /// Related: Invariant G.48 (IDataSource Boundary Semantics), Invariant A.9a (Cache Contiguity)
+    /// </para>
+    /// </remarks>
+    void DataSegmentUnavailable();
+
     // ============================================================================
     // REBALANCE INTENT LIFECYCLE COUNTERS
     // ============================================================================

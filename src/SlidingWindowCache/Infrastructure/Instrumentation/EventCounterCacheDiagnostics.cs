@@ -24,6 +24,7 @@ public class EventCounterCacheDiagnostics : ICacheDiagnostics
     private int _userRequestFullCacheMiss;
     private int _dataSourceFetchSingleRange;
     private int _dataSourceFetchMissingSegments;
+    private int _dataSegmentUnavailable;
     private int _rebalanceExecutionFailed;
 
     public int UserRequestServed => _userRequestServed;
@@ -34,6 +35,7 @@ public class EventCounterCacheDiagnostics : ICacheDiagnostics
     public int UserRequestFullCacheMiss => _userRequestFullCacheMiss;
     public int DataSourceFetchSingleRange => _dataSourceFetchSingleRange;
     public int DataSourceFetchMissingSegments => _dataSourceFetchMissingSegments;
+    public int DataSegmentUnavailable => _dataSegmentUnavailable;
     public int RebalanceIntentPublished => _rebalanceIntentPublished;
     public int RebalanceIntentCancelled => _rebalanceIntentCancelled;
     public int RebalanceExecutionStarted => _rebalanceExecutionStarted;
@@ -54,6 +56,10 @@ public class EventCounterCacheDiagnostics : ICacheDiagnostics
     /// <inheritdoc/>
     void ICacheDiagnostics.DataSourceFetchMissingSegments() =>
         Interlocked.Increment(ref _dataSourceFetchMissingSegments);
+
+    /// <inheritdoc/>
+    void ICacheDiagnostics.DataSegmentUnavailable() =>
+        Interlocked.Increment(ref _dataSegmentUnavailable);
 
     /// <inheritdoc/>
     void ICacheDiagnostics.DataSourceFetchSingleRange() => Interlocked.Increment(ref _dataSourceFetchSingleRange);
@@ -137,6 +143,7 @@ public class EventCounterCacheDiagnostics : ICacheDiagnostics
         _userRequestFullCacheMiss = 0;
         _dataSourceFetchSingleRange = 0;
         _dataSourceFetchMissingSegments = 0;
+        _dataSegmentUnavailable = 0;
         _rebalanceExecutionFailed = 0;
     }
 }

@@ -94,7 +94,7 @@ internal sealed class CacheDataExtensionService<TRange, TData, TDomain>
         var fetchedResults = await _dataSource.FetchAsync(missingRanges, ct)
             .ConfigureAwait(false);
 
-        // Step 3: Union fetched data with current cache
+        // Step 3: Union fetched data with current cache (UnionAll will filter null ranges)
         return UnionAll(currentCache, fetchedResults, _domain);
     }
 
@@ -132,19 +132,40 @@ internal sealed class CacheDataExtensionService<TRange, TData, TDomain>
     /// Combines the existing cached data with the newly fetched data,
     /// ensuring that the resulting range data is correctly merged and consistent with the domain.
     /// </summary>
-    private static RangeData<TRange, TData, TDomain> UnionAll(
+    /// <remarks>
+    /// <para><strong>Boundary Handling:</strong></para>
+    /// <para>
+    /// Segments with null Range (unavailable data from DataSource) are filtered out
+    /// before union. This ensures cache only contains contiguous available data,
+    /// preserving Invariant A.9a (Cache Contiguity).
+    /// </para>
+    /// <para>
+    /// When DataSource returns RangeChunk with Range = null (e.g., request beyond database boundaries),
+    /// those segments are skipped and do not affect the cache. The cache converges to maximum
+    /// available data without gaps.
+    /// </para>
+    /// </remarks>
+    private RangeData<TRange, TData, TDomain> UnionAll(
         RangeData<TRange, TData, TDomain> current,
         IEnumerable<RangeChunk<TRange, TData>> rangeChunks,
         TDomain domain
     )
     {
         // Combine existing data with fetched data
-        foreach (var (range, data) in rangeChunks)
+        foreach (var chunk in rangeChunks)
         {
+            // Filter out segments with null ranges (unavailable data)
+            // This preserves cache contiguity - only available data is stored
+            if (!chunk.Range.HasValue)
+            {
+                _cacheDiagnostics.DataSegmentUnavailable();
+                continue;
+            }
+
             // It is important to call Union on the current range data to overwrite outdated
             // intersected segments with the newly fetched data, ensuring that the most up-to-date
             // information is retained in the cache.
-            current = current.Union(data.ToRangeData(range, domain))!;
+            current = current.Union(chunk.Data.ToRangeData(chunk.Range!.Value, domain))!;
         }
 
         return current;
