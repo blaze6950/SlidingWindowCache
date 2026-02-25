@@ -234,6 +234,22 @@ without polling or timing dependencies.
 - *Observable via*: Returned data length and content
 - *Test verifies*: Data matches requested range exactly (no more, no less)
 
+**A.10a** 🔵 **[Architectural]** `GetDataAsync` returns `RangeResult<TRange, TData>` containing both the actual range fulfilled and the corresponding data.
+
+**Formal Specification:**
+- Return type: `ValueTask<RangeResult<TRange, TData>>`
+- `RangeResult.Range` indicates the actual range returned (may differ from requested in bounded data sources)
+- `RangeResult.Data` contains `ReadOnlyMemory<TData>` for the returned range
+- `Range` is nullable to signal data unavailability without exceptions
+- When `Range` is non-null, `Data.Length` MUST equal `Range.Span(domain)`
+
+**Rationale:** 
+- Explicit boundary contracts between cache and consumers
+- Bounded data sources can signal truncation or unavailability gracefully
+- No exceptions for normal boundary conditions (out-of-bounds is expected, not exceptional)
+
+**Related Documentation:** [Boundary Handling Guide](boundary-handling.md) — comprehensive coverage of RangeResult usage patterns, bounded data source implementation, partial fulfillment handling, and testing.
+
 ### A.3 Cache Mutation Rules (User Path)
 
 **A.7** 🔵 **[Architectural]** The User Path may read from cache and `IDataSource` but **does not mutate cache state**.
