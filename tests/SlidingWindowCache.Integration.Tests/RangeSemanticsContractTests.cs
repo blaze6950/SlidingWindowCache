@@ -80,8 +80,8 @@ public sealed class RangeSemanticsContractTests : IAsyncDisposable
 
         // ASSERT - Validate memory length matches range span
         var expectedLength = (int)range.Span(_domain);
-        Assert.Equal(expectedLength, result.Length);
-        Assert.Equal(11, result.Length); // [100, 110] inclusive = 11 elements
+        Assert.Equal(expectedLength, result.Data.Length);
+        Assert.Equal(11, result.Data.Length); // [100, 110] inclusive = 11 elements
 
         // ASSERT - Validate IDataSource was called with correct range
         Assert.True(_dataSource.TotalFetchCount > 0, "DataSource should be called for cold start");
@@ -99,7 +99,7 @@ public sealed class RangeSemanticsContractTests : IAsyncDisposable
         var result = await cache.GetDataAsync(range, CancellationToken.None);
 
         // ASSERT - Validate boundary values are correct
-        var array = result.ToArray();
+        var array = result.Data.ToArray();
         Assert.Equal(50, array[0]); // First element matches start
         Assert.Equal(55, array[^1]); // Last element matches end
         Assert.True(array.SequenceEqual([50, 51, 52, 53, 54, 55]));
@@ -122,7 +122,7 @@ public sealed class RangeSemanticsContractTests : IAsyncDisposable
         {
             var loopResult = await cache.GetDataAsync(range, CancellationToken.None);
             var expectedLength = (int)range.Span(_domain);
-            Assert.Equal(expectedLength, loopResult.Length);
+            Assert.Equal(expectedLength, loopResult.Data.Length);
         }
     }
 
@@ -137,7 +137,7 @@ public sealed class RangeSemanticsContractTests : IAsyncDisposable
         var result = await cache.GetDataAsync(range, CancellationToken.None);
 
         // ASSERT
-        var array = result.ToArray();
+        var array = result.Data.ToArray();
         Assert.Single(array);
         Assert.Equal(42, array[0]);
     }
@@ -153,7 +153,7 @@ public sealed class RangeSemanticsContractTests : IAsyncDisposable
         var result = await cache.GetDataAsync(range, CancellationToken.None);
 
         // ASSERT - Verify sequential data from start to end
-        var array = result.ToArray();
+        var array = result.Data.ToArray();
         for (var i = 0; i < array.Length; i++)
         {
             Assert.Equal(1000 + i, array[i]);
@@ -179,7 +179,7 @@ public sealed class RangeSemanticsContractTests : IAsyncDisposable
 
         // ASSERT - No exceptions, correct length
         var expectedLength = (int)range.Span(_domain);
-        Assert.Equal(expectedLength, result.Length);
+        Assert.Equal(expectedLength, result.Data.Length);
     }
 
     [Fact]
@@ -196,7 +196,7 @@ public sealed class RangeSemanticsContractTests : IAsyncDisposable
 
         // ASSERT - No exceptions, correct length
         var expectedLength = (int)range.Span(_domain);
-        Assert.Equal(expectedLength, result.Length);
+        Assert.Equal(expectedLength, result.Data.Length);
     }
 
     #endregion
@@ -228,8 +228,8 @@ public sealed class RangeSemanticsContractTests : IAsyncDisposable
         var data2 = await cache.GetDataAsync(range2, CancellationToken.None);
 
         // ASSERT - Both requests return correct lengths despite cache expansion
-        Assert.Equal((int)range1.Span(_domain), data1.Length);
-        Assert.Equal((int)range2.Span(_domain), data2.Length);
+        Assert.Equal((int)range1.Span(_domain), data1.Data.Length);
+        Assert.Equal((int)range2.Span(_domain), data2.Data.Length);
     }
 
     [Fact]
@@ -248,7 +248,7 @@ public sealed class RangeSemanticsContractTests : IAsyncDisposable
         foreach (var range in ranges)
         {
             var loopResult = await cache.GetDataAsync(range, CancellationToken.None);
-            Assert.Equal((int)range.Span(_domain), loopResult.Length);
+            Assert.Equal((int)range.Span(_domain), loopResult.Data.Length);
         }
     }
 
@@ -293,7 +293,7 @@ public sealed class RangeSemanticsContractTests : IAsyncDisposable
         var result = await cache.GetDataAsync(range, CancellationToken.None);
 
         // ASSERT
-        var array = result.ToArray();
+        var array = result.Data.ToArray();
         Assert.Equal(21, array.Length); // -10 to 10 inclusive
         Assert.Equal(-10, array[0]);
         Assert.Equal(0, array[10]);
@@ -311,7 +311,7 @@ public sealed class RangeSemanticsContractTests : IAsyncDisposable
         var result = await cache.GetDataAsync(range, CancellationToken.None);
 
         // ASSERT
-        var array = result.ToArray();
+        var array = result.Data.ToArray();
         Assert.Equal(11, array.Length);
         Assert.Equal(-100, array[0]);
         Assert.Equal(-90, array[^1]);

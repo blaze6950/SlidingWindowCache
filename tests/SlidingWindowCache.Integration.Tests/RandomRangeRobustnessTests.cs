@@ -85,7 +85,7 @@ public sealed class RandomRangeRobustnessTests : IAsyncDisposable
         {
             var range = GenerateRandomRange();
             var result = await cache.GetDataAsync(range, CancellationToken.None);
-            Assert.Equal((int)range.Span(_domain), result.Length);
+            Assert.Equal((int)range.Span(_domain), result.Data.Length);
         }
 
         // ASSERT - Verify IDataSource was called and no malformed ranges requested
@@ -113,7 +113,7 @@ public sealed class RandomRangeRobustnessTests : IAsyncDisposable
             var result = await cache.GetDataAsync(range, CancellationToken.None);
 
             var start = (int)range.Start;
-            var array = result.ToArray(); // Convert to array to avoid ref struct in async
+            var array = result.Data.ToArray(); // Convert to array to avoid ref struct in async
 
             for (var j = 0; j < array.Length; j++)
             {
@@ -139,7 +139,7 @@ public sealed class RandomRangeRobustnessTests : IAsyncDisposable
             var range = Intervals.NET.Factories.Range.Closed<int>(overlapStart, overlapEnd);
 
             var result = await cache.GetDataAsync(range, CancellationToken.None);
-            Assert.Equal((int)range.Span(_domain), result.Length);
+            Assert.Equal((int)range.Span(_domain), result.Data.Length);
         }
     }
 
@@ -163,7 +163,7 @@ public sealed class RandomRangeRobustnessTests : IAsyncDisposable
             );
 
             var result = await cache.GetDataAsync(range, CancellationToken.None);
-            var array = result.ToArray();
+            var array = result.Data.ToArray();
             Assert.Equal(rangeLength, array.Length);
             Assert.Equal(currentPosition, array[0]);
         }
@@ -204,7 +204,7 @@ public sealed class RandomRangeRobustnessTests : IAsyncDisposable
             }
 
             var result = await cache.GetDataAsync(range, CancellationToken.None);
-            Assert.Equal((int)range.Span(_domain), result.Length);
+            Assert.Equal((int)range.Span(_domain), result.Data.Length);
         }
 
         // ASSERT - Comprehensive validation of IDataSource interactions

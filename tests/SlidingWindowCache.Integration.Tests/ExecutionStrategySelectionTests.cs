@@ -1,8 +1,8 @@
 using Intervals.NET;
 using Intervals.NET.Domain.Default.Numeric;
-using Intervals.NET.Domain.Extensions.Fixed;
 using SlidingWindowCache.Public;
 using SlidingWindowCache.Public.Configuration;
+using SlidingWindowCache.Public.Dto;
 
 namespace SlidingWindowCache.Integration.Tests;
 
@@ -16,11 +16,11 @@ public class ExecutionStrategySelectionTests
 
     private class TestDataSource : IDataSource<int, string>
     {
-        public Task<IEnumerable<string>> FetchAsync(
+        public Task<RangeChunk<int, string>> FetchAsync(
             Range<int> range,
             CancellationToken cancellationToken)
         {
-            return Task.FromResult(GenerateDataForRange(range));
+            return Task.FromResult(new RangeChunk<int, string>(range, GenerateDataForRange(range)));
         }
 
         /// <summary>
@@ -91,9 +91,9 @@ public class ExecutionStrategySelectionTests
         var result = await cache.GetDataAsync(Intervals.NET.Factories.Range.Closed<int>(10, 20), CancellationToken.None);
 
         // ASSERT
-        Assert.Equal(11, result.Length);
-        Assert.Equal("Item_10", result.Span[0]);
-        Assert.Equal("Item_20", result.Span[10]);
+        Assert.Equal(11, result.Data.Length);
+        Assert.Equal("Item_10", result.Data.Span[0]);
+        Assert.Equal("Item_20", result.Data.Span[10]);
     }
 
     [Fact]
@@ -119,9 +119,9 @@ public class ExecutionStrategySelectionTests
         var result = await cache.GetDataAsync(Intervals.NET.Factories.Range.Closed<int>(0, 10), CancellationToken.None);
 
         // ASSERT
-        Assert.Equal(11, result.Length);
-        Assert.Equal("Item_0", result.Span[0]);
-        Assert.Equal("Item_10", result.Span[10]);
+        Assert.Equal(11, result.Data.Length);
+        Assert.Equal("Item_0", result.Data.Span[0]);
+        Assert.Equal("Item_10", result.Data.Span[10]);
     }
 
     [Fact]
@@ -147,7 +147,7 @@ public class ExecutionStrategySelectionTests
         );
 
         // ACT - Rapid sequential requests (should trigger multiple rebalances)
-        var tasks = new List<Task<ReadOnlyMemory<string>>>();
+        var tasks = new List<Task<RangeResult<int, string>>>();
         for (int i = 0; i < 10; i++)
         {
             int start = i * 10;
@@ -161,7 +161,7 @@ public class ExecutionStrategySelectionTests
         Assert.Equal(10, results.Length);
         foreach (var result in results)
         {
-            Assert.Equal(11, result.Length);
+            Assert.Equal(11, result.Data.Length);
         }
 
         // Wait for idle to ensure all background work completes
@@ -195,9 +195,9 @@ public class ExecutionStrategySelectionTests
         var result = await cache.GetDataAsync(Intervals.NET.Factories.Range.Closed<int>(100, 110), CancellationToken.None);
 
         // ASSERT
-        Assert.Equal(11, result.Length);
-        Assert.Equal("Item_100", result.Span[0]);
-        Assert.Equal("Item_110", result.Span[10]);
+        Assert.Equal(11, result.Data.Length);
+        Assert.Equal("Item_100", result.Data.Span[0]);
+        Assert.Equal("Item_110", result.Data.Span[10]);
     }
 
     [Fact]
@@ -223,7 +223,7 @@ public class ExecutionStrategySelectionTests
         );
 
         // ACT - Rapid sequential requests (may experience backpressure)
-        var tasks = new List<Task<ReadOnlyMemory<string>>>();
+        var tasks = new List<Task<RangeResult<int, string>>>();
         for (int i = 0; i < 10; i++)
         {
             int start = i * 10;
@@ -237,7 +237,7 @@ public class ExecutionStrategySelectionTests
         Assert.Equal(10, results.Length);
         foreach (var result in results)
         {
-            Assert.Equal(11, result.Length);
+            Assert.Equal(11, result.Data.Length);
         }
 
         // Wait for idle to ensure all background work completes
@@ -272,9 +272,9 @@ public class ExecutionStrategySelectionTests
         var result3 = await cache.GetDataAsync(Intervals.NET.Factories.Range.Closed<int>(40, 50), CancellationToken.None);
 
         // ASSERT
-        Assert.Equal(11, result1.Length);
-        Assert.Equal(11, result2.Length);
-        Assert.Equal(11, result3.Length);
+        Assert.Equal(11, result1.Data.Length);
+        Assert.Equal(11, result2.Data.Length);
+        Assert.Equal(11, result3.Data.Length);
 
         // Wait for idle
         await cache.WaitForIdleAsync(CancellationToken.None);

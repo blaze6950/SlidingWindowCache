@@ -3,6 +3,7 @@ using Intervals.NET.Domain.Default.Numeric;
 using SlidingWindowCache.Infrastructure.Instrumentation;
 using SlidingWindowCache.Public;
 using SlidingWindowCache.Public.Configuration;
+using SlidingWindowCache.Public.Dto;
 
 namespace SlidingWindowCache.Integration.Tests;
 
@@ -131,8 +132,8 @@ public class RebalanceExceptionHandlingTests : IDisposable
 
         // Assert: Both requests succeeded despite rebalance failure
         Assert.Equal(2, _diagnostics.UserRequestServed);
-        Assert.Equal(11, data1.Length);
-        Assert.Equal(11, data2.Length);
+        Assert.Equal(11, data1.Data.Length);
+        Assert.Equal(11, data2.Data.Length);
 
         // Verify at least one rebalance failed
         Assert.True(_diagnostics.RebalanceExecutionFailed >= 1,
@@ -212,23 +213,23 @@ public class RebalanceExceptionHandlingTests : IDisposable
             _fetchSingleRange = fetchSingleRange;
         }
 
-        public Task<IEnumerable<TData>> FetchAsync(Range<TRange> range, CancellationToken cancellationToken)
+        public Task<RangeChunk<TRange, TData>> FetchAsync(Range<TRange> range, CancellationToken cancellationToken)
         {
             var data = _fetchSingleRange(range);
-            return Task.FromResult(data);
+            return Task.FromResult(new RangeChunk<TRange, TData>(range, data));
         }
 
-        public Task<IEnumerable<TData>> FetchAsync(IEnumerable<Range<TRange>> ranges,
+        public Task<IEnumerable<RangeChunk<TRange, TData>>> FetchAsync(IEnumerable<Range<TRange>> ranges,
             CancellationToken cancellationToken)
         {
-            var allData = new List<TData>();
+            var chunks = new List<RangeChunk<TRange, TData>>();
             foreach (var range in ranges)
             {
                 var data = _fetchSingleRange(range);
-                allData.AddRange(data);
+                chunks.Add(new RangeChunk<TRange, TData>(range, data));
             }
 
-            return Task.FromResult<IEnumerable<TData>>(allData);
+            return Task.FromResult<IEnumerable<RangeChunk<TRange, TData>>>(chunks);
         }
     }
 
@@ -317,6 +318,10 @@ public class RebalanceExceptionHandlingTests : IDisposable
         }
 
         public void RebalanceSkippedSameRange()
+        {
+        }
+
+        public void DataSegmentUnavailable()
         {
         }
     }

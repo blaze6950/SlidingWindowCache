@@ -190,7 +190,7 @@ public static class TestHelpers
                         break;
                 }
 
-                return data;
+                return new RangeChunk<int, int>(range, data);
             });
 
         mock.Setup(ds => ds.FetchAsync(It.IsAny<IEnumerable<Range<int>>>(), It.IsAny<CancellationToken>()))
@@ -200,8 +200,8 @@ public static class TestHelpers
 
                 foreach (var range in ranges)
                 {
-                    var data = await mock.Object.FetchAsync(range, ct);
-                    chunks.Add(new RangeChunk<int, int>(range, data));
+                    var chunk = await mock.Object.FetchAsync(range, ct);
+                    chunks.Add(chunk);
                 }
 
                 return chunks;
@@ -267,7 +267,7 @@ public static class TestHelpers
                         break;
                 }
 
-                return data;
+                return new RangeChunk<int, int>(range, data);
             });
 
         mock.Setup(ds => ds.FetchAsync(It.IsAny<IEnumerable<Range<int>>>(), It.IsAny<CancellationToken>()))
@@ -277,8 +277,8 @@ public static class TestHelpers
 
                 foreach (var range in ranges)
                 {
-                    var data = await mock.Object.FetchAsync(range, ct);
-                    chunks.Add(new RangeChunk<int, int>(range, data));
+                    var chunk = await mock.Object.FetchAsync(range, ct);
+                    chunks.Add(chunk);
                 }
 
                 return chunks;
@@ -322,7 +322,7 @@ public static class TestHelpers
     {
         var result = await cache.GetDataAsync(range, CancellationToken.None);
         await cache.WaitForIdleAsync();
-        return result;
+        return result.Data;
     }
 
     /// <summary>

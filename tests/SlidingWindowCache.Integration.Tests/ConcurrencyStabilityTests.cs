@@ -80,7 +80,7 @@ public sealed class ConcurrencyStabilityTests : IAsyncDisposable
         {
             var start = i * 100;
             var range = Intervals.NET.Factories.Range.Closed<int>(start, start + 20);
-            tasks.Add(cache.GetDataAsync(range, CancellationToken.None).AsTask());
+            tasks.Add(cache.GetDataAsync(range, CancellationToken.None).AsTask().ContinueWith(t => t.Result.Data));
         }
 
         var results = await Task.WhenAll(tasks);
@@ -122,7 +122,7 @@ public sealed class ConcurrencyStabilityTests : IAsyncDisposable
 
         foreach (var result in results)
         {
-            var array = result.ToArray();
+            var array = result.Data.ToArray();
             Assert.Equal(21, array.Length);
             Assert.Equal(100, array[0]);
             Assert.Equal(120, array[^1]);
@@ -146,7 +146,7 @@ public sealed class ConcurrencyStabilityTests : IAsyncDisposable
         {
             var offset = i * 5;
             var range = Intervals.NET.Factories.Range.Closed<int>(100 + offset, 150 + offset);
-            tasks.Add(cache.GetDataAsync(range, CancellationToken.None).AsTask());
+            tasks.Add(cache.GetDataAsync(range, CancellationToken.None).AsTask().ContinueWith(t => t.Result.Data));
         }
 
         var results = await Task.WhenAll(tasks);
@@ -183,7 +183,7 @@ public sealed class ConcurrencyStabilityTests : IAsyncDisposable
                 var range = Intervals.NET.Factories.Range.Closed<int>(start, start + 15);
                 var result = await cache.GetDataAsync(range, CancellationToken.None);
 
-                Assert.Equal(16, result.Length);
+                Assert.Equal(16, result.Data.Length);
             }
             catch (Exception ex)
             {
@@ -216,7 +216,7 @@ public sealed class ConcurrencyStabilityTests : IAsyncDisposable
         {
             var start = (i % 10) * 50; // Create some overlap
             var range = Intervals.NET.Factories.Range.Closed<int>(start, start + 25);
-            tasks.Add(cache.GetDataAsync(range, CancellationToken.None).AsTask());
+            tasks.Add(cache.GetDataAsync(range, CancellationToken.None).AsTask().ContinueWith(t => t.Result.Data));
         }
 
         var results = await Task.WhenAll(tasks);
@@ -258,7 +258,7 @@ public sealed class ConcurrencyStabilityTests : IAsyncDisposable
                 range = Intervals.NET.Factories.Range.Closed<int>(start, start + 20);
             }
 
-            tasks.Add(cache.GetDataAsync(range, CancellationToken.None).AsTask());
+            tasks.Add(cache.GetDataAsync(range, CancellationToken.None).AsTask().ContinueWith(t => t.Result.Data));
         }
 
         var results = await Task.WhenAll(tasks);
@@ -354,7 +354,7 @@ public sealed class ConcurrencyStabilityTests : IAsyncDisposable
             var range = Intervals.NET.Factories.Range.Closed<int>(start, start + 20);
             var result = await cache.GetDataAsync(range, CancellationToken.None);
 
-            Assert.Equal(21, result.Length);
+            Assert.Equal(21, result.Data.Length);
         }
 
         // ASSERT - Completed without deadlock
@@ -390,7 +390,7 @@ public sealed class ConcurrencyStabilityTests : IAsyncDisposable
             {
                 var range = Intervals.NET.Factories.Range.Closed<int>(500 + offset, 550 + offset);
                 var data = await cache.GetDataAsync(range, CancellationToken.None);
-                return (data.Length, data.Span[0], expectedFirst);
+                return (data.Data.Length, data.Data.Span[0], expectedFirst);
             }));
         }
 
@@ -436,7 +436,7 @@ public sealed class ConcurrencyStabilityTests : IAsyncDisposable
         {
             var start = i * 15;
             var range = Intervals.NET.Factories.Range.Closed<int>(start, start + 25);
-            tasks.Add(cache.GetDataAsync(range, cts.Token).AsTask());
+            tasks.Add(cache.GetDataAsync(range, cts.Token).AsTask().ContinueWith(t => t.Result.Data));
         }
 
         // ASSERT - Completes within timeout

@@ -86,13 +86,13 @@ public sealed class SpyDataSource : IDataSource<int, int>
     /// <summary>
     /// Fetches data for a single range and records the call.
     /// </summary>
-    public Task<IEnumerable<int>> FetchAsync(Range<int> range, CancellationToken cancellationToken)
+    public Task<RangeChunk<int, int>> FetchAsync(Range<int> range, CancellationToken cancellationToken)
     {
         _singleFetchCalls.Add(range);
         Interlocked.Increment(ref _totalFetchCount);
 
         var data = GenerateDataForRange(range);
-        return Task.FromResult<IEnumerable<int>>(data);
+        return Task.FromResult(new RangeChunk<int, int>(range, data));
     }
 
     /// <summary>

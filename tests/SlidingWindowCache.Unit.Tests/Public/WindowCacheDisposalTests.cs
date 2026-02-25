@@ -2,6 +2,7 @@ using Intervals.NET;
 using Intervals.NET.Domain.Default.Numeric;
 using SlidingWindowCache.Public;
 using SlidingWindowCache.Public.Configuration;
+using SlidingWindowCache.Public.Dto;
 
 namespace SlidingWindowCache.Unit.Tests.Public;
 
@@ -19,14 +20,14 @@ public class WindowCacheDisposalTests
     /// </summary>
     private sealed class TestDataSource : IDataSource<int, int>
     {
-        public async Task<IEnumerable<int>> FetchAsync(
+        public async Task<RangeChunk<int, int>> FetchAsync(
             Range<int> requestedRange,
             CancellationToken cancellationToken)
         {
             // Simulate async I/O
             await Task.Delay(1, cancellationToken);
 
-            return GenerateDataForRange(requestedRange);
+            return new RangeChunk<int, int>(requestedRange, GenerateDataForRange(requestedRange));
         }
 
         /// <summary>
@@ -112,7 +113,7 @@ public class WindowCacheDisposalTests
 
         // ACT - Use the cache
         var data = await cache.GetDataAsync(range, CancellationToken.None);
-        Assert.Equal(11, data.Length); // Verify usage worked
+        Assert.Equal(11, data.Data.Length); // Verify usage worked
 
         // Wait for background processing to stabilize
         await cache.WaitForIdleAsync();
@@ -379,7 +380,7 @@ public class WindowCacheDisposalTests
         {
             var range = Intervals.NET.Factories.Range.Closed<int>(0, 10);
             var data = await cache.GetDataAsync(range, CancellationToken.None);
-            Assert.Equal(11, data.Length);
+            Assert.Equal(11, data.Data.Length);
         } // DisposeAsync called automatically here
 
         // ASSERT - Implicit: No exceptions thrown during disposal
@@ -394,7 +395,7 @@ public class WindowCacheDisposalTests
         var data = await cache.GetDataAsync(range, CancellationToken.None);
 
         // ASSERT
-        Assert.Equal(11, data.Length);
+        Assert.Equal(11, data.Data.Length);
 
         // DisposeAsync will be called automatically at end of scope
     }

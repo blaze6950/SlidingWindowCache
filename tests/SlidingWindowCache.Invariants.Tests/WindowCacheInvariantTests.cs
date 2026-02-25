@@ -189,7 +189,7 @@ public sealed class WindowCacheInvariantTests : IAsyncDisposable
             var rangeSize = random.Next(10, 30);
             var range = TestHelpers.CreateRange(baseStart, baseStart + rangeSize);
 
-            tasks.Add(Task.Run(async () => await cache.GetDataAsync(range, CancellationToken.None)));
+            tasks.Add(Task.Run(async () => (await cache.GetDataAsync(range, CancellationToken.None)).Data));
         }
 
         // Wait for all requests to complete
@@ -236,9 +236,9 @@ public sealed class WindowCacheInvariantTests : IAsyncDisposable
         var result3 = await cache.GetDataAsync(TestHelpers.CreateRange(105, 115), CancellationToken.None);
 
         // ASSERT: All requests completed with correct data
-        TestHelpers.AssertUserDataCorrect(result1, TestHelpers.CreateRange(100, 110));
-        TestHelpers.AssertUserDataCorrect(result2, TestHelpers.CreateRange(200, 210));
-        TestHelpers.AssertUserDataCorrect(result3, TestHelpers.CreateRange(105, 115));
+        TestHelpers.AssertUserDataCorrect(result1.Data, TestHelpers.CreateRange(100, 110));
+        TestHelpers.AssertUserDataCorrect(result2.Data, TestHelpers.CreateRange(200, 210));
+        TestHelpers.AssertUserDataCorrect(result3.Data, TestHelpers.CreateRange(105, 115));
         Assert.Equal(3, _cacheDiagnostics.UserRequestServed);
     }
 
@@ -262,7 +262,7 @@ public sealed class WindowCacheInvariantTests : IAsyncDisposable
         Assert.Equal(1, _cacheDiagnostics.UserRequestServed);
         Assert.Equal(1, _cacheDiagnostics.RebalanceIntentPublished);
         Assert.Equal(0, _cacheDiagnostics.RebalanceExecutionCompleted);
-        TestHelpers.AssertUserDataCorrect(result, TestHelpers.CreateRange(100, 110));
+        TestHelpers.AssertUserDataCorrect(result.Data, TestHelpers.CreateRange(100, 110));
         await cache.WaitForIdleAsync();
         Assert.Equal(1, _cacheDiagnostics.RebalanceExecutionCompleted);
     }
@@ -290,7 +290,7 @@ public sealed class WindowCacheInvariantTests : IAsyncDisposable
         foreach (var range in testRanges)
         {
             var loopResult = await cache.GetDataAsync(range, CancellationToken.None);
-            TestHelpers.AssertUserDataCorrect(loopResult, range);
+            TestHelpers.AssertUserDataCorrect(loopResult.Data, range);
         }
     }
 
@@ -334,7 +334,7 @@ public sealed class WindowCacheInvariantTests : IAsyncDisposable
         var result = await cache.GetDataAsync(TestHelpers.CreateRange(reqStart, reqEnd), CancellationToken.None);
 
         // ASSERT: User receives correct data immediately
-        TestHelpers.AssertUserDataCorrect(result, TestHelpers.CreateRange(reqStart, reqEnd));
+        TestHelpers.AssertUserDataCorrect(result.Data, TestHelpers.CreateRange(reqStart, reqEnd));
 
         // User Path MUST NOT mutate cache (single-writer architecture)
         TestHelpers.AssertNoUserPathMutations(_cacheDiagnostics);
@@ -364,9 +364,9 @@ public sealed class WindowCacheInvariantTests : IAsyncDisposable
         var result3 = await cache.GetDataAsync(TestHelpers.CreateRange(95, 120), CancellationToken.None);
 
         // ASSERT: All data is contiguous (no gaps)
-        TestHelpers.AssertUserDataCorrect(result1, TestHelpers.CreateRange(100, 110));
-        TestHelpers.AssertUserDataCorrect(result2, TestHelpers.CreateRange(105, 115));
-        TestHelpers.AssertUserDataCorrect(result3, TestHelpers.CreateRange(95, 120));
+        TestHelpers.AssertUserDataCorrect(result1.Data, TestHelpers.CreateRange(100, 110));
+        TestHelpers.AssertUserDataCorrect(result2.Data, TestHelpers.CreateRange(105, 115));
+        TestHelpers.AssertUserDataCorrect(result3.Data, TestHelpers.CreateRange(95, 120));
     }
 
     #endregion
@@ -397,8 +397,8 @@ public sealed class WindowCacheInvariantTests : IAsyncDisposable
         {
             var result = await cache.GetDataAsync(range, CancellationToken.None);
             var expectedLength = (int)range.End - (int)range.Start + 1;
-            Assert.Equal(expectedLength, result.Length);
-            TestHelpers.AssertUserDataCorrect(result, range);
+            Assert.Equal(expectedLength, result.Data.Length);
+            TestHelpers.AssertUserDataCorrect(result.Data, range);
         }
     }
 
@@ -419,11 +419,11 @@ public sealed class WindowCacheInvariantTests : IAsyncDisposable
         var result = await cache.GetDataAsync(TestHelpers.CreateRange(200, 210), CancellationToken.None);
 
         // ASSERT: Cache still returns correct data
-        TestHelpers.AssertUserDataCorrect(result, TestHelpers.CreateRange(200, 210));
+        TestHelpers.AssertUserDataCorrect(result.Data, TestHelpers.CreateRange(200, 210));
 
         // Verify cache is not corrupted by making another request
         var result2 = await cache.GetDataAsync(TestHelpers.CreateRange(205, 215), CancellationToken.None);
-        TestHelpers.AssertUserDataCorrect(result2, TestHelpers.CreateRange(205, 215));
+        TestHelpers.AssertUserDataCorrect(result2.Data, TestHelpers.CreateRange(205, 215));
     }
 
     /// <summary>
@@ -465,7 +465,7 @@ public sealed class WindowCacheInvariantTests : IAsyncDisposable
 
         // ASSERT: Cache remains consistent despite cancellation during I/O
         var result3 = await cache.GetDataAsync(TestHelpers.CreateRange(205, 215), CancellationToken.None);
-        TestHelpers.AssertUserDataCorrect(result3, TestHelpers.CreateRange(205, 215));
+        TestHelpers.AssertUserDataCorrect(result3.Data, TestHelpers.CreateRange(205, 215));
 
         // Verify lifecycle integrity - system remained stable
         TestHelpers.AssertRebalanceLifecycleIntegrity(_cacheDiagnostics);
@@ -506,12 +506,12 @@ public sealed class WindowCacheInvariantTests : IAsyncDisposable
         // ASSERT: Cache should reflect the latest intent (around 200-210 range with extensions)
         // Make a request in the second range area to verify cache is centered there
         var result = await cache.GetDataAsync(TestHelpers.CreateRange(205, 215), CancellationToken.None);
-        TestHelpers.AssertUserDataCorrect(result, TestHelpers.CreateRange(205, 215));
+        TestHelpers.AssertUserDataCorrect(result.Data, TestHelpers.CreateRange(205, 215));
 
         // Should be full hit (cache was rebalanced to this region)
         _cacheDiagnostics.Reset();
         var verifyResult = await cache.GetDataAsync(TestHelpers.CreateRange(208, 212), CancellationToken.None);
-        TestHelpers.AssertUserDataCorrect(verifyResult, TestHelpers.CreateRange(208, 212));
+        TestHelpers.AssertUserDataCorrect(verifyResult.Data, TestHelpers.CreateRange(208, 212));
         TestHelpers.AssertFullCacheHit(_cacheDiagnostics, 1);
 
         // Verify system stability
@@ -645,7 +645,7 @@ public sealed class WindowCacheInvariantTests : IAsyncDisposable
 
         // Verify final cache state is correct (centered around last request)
         var result = await cache.GetDataAsync(TestHelpers.CreateRange(405, 415), CancellationToken.None);
-        TestHelpers.AssertUserDataCorrect(result, TestHelpers.CreateRange(405, 415));
+        TestHelpers.AssertUserDataCorrect(result.Data, TestHelpers.CreateRange(405, 415));
     }
 
     /// <summary>
@@ -698,7 +698,7 @@ public sealed class WindowCacheInvariantTests : IAsyncDisposable
         for (var i = 0; i < 10; i++)
         {
             var start = 100 + i * 2;
-            tasks.Add(cache.GetDataAsync(TestHelpers.CreateRange(start, start + 10), CancellationToken.None).AsTask());
+            tasks.Add(cache.GetDataAsync(TestHelpers.CreateRange(start, start + 10), CancellationToken.None).AsTask().ContinueWith(t => t.Result.Data));
         }
 
         await Task.WhenAll(tasks);
@@ -706,7 +706,7 @@ public sealed class WindowCacheInvariantTests : IAsyncDisposable
 
         // ASSERT: System is stable and serves new requests correctly
         var finalResult = await cache.GetDataAsync(TestHelpers.CreateRange(105, 115), CancellationToken.None);
-        TestHelpers.AssertUserDataCorrect(finalResult, TestHelpers.CreateRange(105, 115));
+        TestHelpers.AssertUserDataCorrect(finalResult.Data, TestHelpers.CreateRange(105, 115));
     }
 
     #endregion
@@ -859,7 +859,7 @@ public sealed class WindowCacheInvariantTests : IAsyncDisposable
         await cache.WaitForIdleAsync();
 
         // ASSERT: Verify same-range skip occurred (Stage 3 validation)
-        TestHelpers.AssertUserDataCorrect(result, initialRange);
+        TestHelpers.AssertUserDataCorrect(result.Data, initialRange);
         TestHelpers.AssertIntentPublished(_cacheDiagnostics, 1);
         TestHelpers.AssertRebalanceSkippedSameRange(_cacheDiagnostics, 1);
 
@@ -902,7 +902,7 @@ public sealed class WindowCacheInvariantTests : IAsyncDisposable
         var withinDesired = await cache.GetDataAsync(TestHelpers.CreateRange(95, 115), CancellationToken.None);
 
         // ASSERT: Data is correct, demonstrating cache expanded based on configuration
-        TestHelpers.AssertUserDataCorrect(withinDesired, TestHelpers.CreateRange(95, 115));
+        TestHelpers.AssertUserDataCorrect(withinDesired.Data, TestHelpers.CreateRange(95, 115));
 
         // Verify this was a full cache hit, proving the desired range was calculated correctly
         TestHelpers.AssertFullCacheHit(_cacheDiagnostics);
@@ -945,8 +945,8 @@ public sealed class WindowCacheInvariantTests : IAsyncDisposable
         await cache2.WaitForIdleAsync();
 
         // ASSERT: Both caches should have same behavior for [200, 210] despite different histories
-        TestHelpers.AssertUserDataCorrect(result1, TestHelpers.CreateRange(200, 210));
-        TestHelpers.AssertUserDataCorrect(result2, TestHelpers.CreateRange(200, 210));
+        TestHelpers.AssertUserDataCorrect(result1.Data, TestHelpers.CreateRange(200, 210));
+        TestHelpers.AssertUserDataCorrect(result2.Data, TestHelpers.CreateRange(200, 210));
 
         // Both should have scheduled rebalance for the same desired range (deterministic computation)
         // Verify both caches converged to serving the same expanded range
@@ -956,8 +956,8 @@ public sealed class WindowCacheInvariantTests : IAsyncDisposable
         var verify1 = await cache1.GetDataAsync(TestHelpers.CreateRange(195, 215), CancellationToken.None);
         var verify2 = await cache2.GetDataAsync(TestHelpers.CreateRange(195, 215), CancellationToken.None);
 
-        TestHelpers.AssertUserDataCorrect(verify1, TestHelpers.CreateRange(195, 215));
-        TestHelpers.AssertUserDataCorrect(verify2, TestHelpers.CreateRange(195, 215));
+        TestHelpers.AssertUserDataCorrect(verify1.Data, TestHelpers.CreateRange(195, 215));
+        TestHelpers.AssertUserDataCorrect(verify2.Data, TestHelpers.CreateRange(195, 215));
 
         // Both should be full cache hits (both caches expanded to same desired range)
         TestHelpers.AssertFullCacheHit(diagnostics1, 1);
@@ -1121,7 +1121,7 @@ public sealed class WindowCacheInvariantTests : IAsyncDisposable
 
         // Cache should be normalized - verify by requesting from expected expanded range
         var extendedData = await cache.GetDataAsync(TestHelpers.CreateRange(95, 115), CancellationToken.None);
-        TestHelpers.AssertUserDataCorrect(extendedData, TestHelpers.CreateRange(95, 115));
+        TestHelpers.AssertUserDataCorrect(extendedData.Data, TestHelpers.CreateRange(95, 115));
     }
 
     /// <summary>
@@ -1155,7 +1155,7 @@ public sealed class WindowCacheInvariantTests : IAsyncDisposable
 
             // After rebalance, cache should serve data from normalized range [100-11, 110+11] = [89, 121]
             var normalizedData = await cache.GetDataAsync(TestHelpers.CreateRange(90, 120), CancellationToken.None);
-            TestHelpers.AssertUserDataCorrect(normalizedData, TestHelpers.CreateRange(90, 120));
+            TestHelpers.AssertUserDataCorrect(normalizedData.Data, TestHelpers.CreateRange(90, 120));
         }
     }
 
@@ -1220,7 +1220,7 @@ public sealed class WindowCacheInvariantTests : IAsyncDisposable
 
         // Verify final state is correct
         var result = await cache.GetDataAsync(TestHelpers.CreateRange(105, 120), CancellationToken.None);
-        TestHelpers.AssertUserDataCorrect(result, TestHelpers.CreateRange(105, 120));
+        TestHelpers.AssertUserDataCorrect(result.Data, TestHelpers.CreateRange(105, 120));
     }
 
     /// <summary>
@@ -1274,11 +1274,11 @@ public sealed class WindowCacheInvariantTests : IAsyncDisposable
 
         // Verify cache serves correct data after expansion
         var result = await cache.GetDataAsync(TestHelpers.CreateRange(90, 105), CancellationToken.None);
-        TestHelpers.AssertUserDataCorrect(result, TestHelpers.CreateRange(90, 105));
+        TestHelpers.AssertUserDataCorrect(result.Data, TestHelpers.CreateRange(90, 105));
 
         // Verify original range is still correct (data preserved)
         var originalResult = await cache.GetDataAsync(TestHelpers.CreateRange(100, 110), CancellationToken.None);
-        TestHelpers.AssertUserDataCorrect(originalResult, TestHelpers.CreateRange(100, 110));
+        TestHelpers.AssertUserDataCorrect(originalResult.Data, TestHelpers.CreateRange(100, 110));
     }
 
     #endregion
@@ -1309,7 +1309,7 @@ public sealed class WindowCacheInvariantTests : IAsyncDisposable
         Assert.Equal(1, _cacheDiagnostics.UserRequestServed);
         Assert.Equal(1, _cacheDiagnostics.RebalanceIntentPublished);
         Assert.Equal(0, _cacheDiagnostics.RebalanceExecutionCompleted);
-        TestHelpers.AssertUserDataCorrect(result, TestHelpers.CreateRange(100, 110));
+        TestHelpers.AssertUserDataCorrect(result.Data, TestHelpers.CreateRange(100, 110));
         await cache.WaitForIdleAsync();
         Assert.Equal(1, _cacheDiagnostics.RebalanceExecutionCompleted);
     }
@@ -1365,25 +1365,25 @@ public sealed class WindowCacheInvariantTests : IAsyncDisposable
         // Act & Assert: Sequential user requests
         // Request 1: Cold start
         var result1 = await cache.GetDataAsync(TestHelpers.CreateRange(100, 110), CancellationToken.None);
-        TestHelpers.AssertUserDataCorrect(result1, TestHelpers.CreateRange(100, 110));
+        TestHelpers.AssertUserDataCorrect(result1.Data, TestHelpers.CreateRange(100, 110));
 
         // Request 2: Overlapping expansion
         var result2 = await cache.GetDataAsync(TestHelpers.CreateRange(105, 120), CancellationToken.None);
-        TestHelpers.AssertUserDataCorrect(result2, TestHelpers.CreateRange(105, 120));
+        TestHelpers.AssertUserDataCorrect(result2.Data, TestHelpers.CreateRange(105, 120));
         await cache.WaitForIdleAsync();
 
         // Request 3: Within cached/rebalanced range
         var result3 = await cache.GetDataAsync(TestHelpers.CreateRange(110, 115), CancellationToken.None);
-        TestHelpers.AssertUserDataCorrect(result3, TestHelpers.CreateRange(110, 115));
+        TestHelpers.AssertUserDataCorrect(result3.Data, TestHelpers.CreateRange(110, 115));
 
         // Request 4: Non-intersecting jump
         var data4 = await cache.GetDataAsync(TestHelpers.CreateRange(200, 210), CancellationToken.None);
-        TestHelpers.AssertUserDataCorrect(data4, TestHelpers.CreateRange(200, 210));
+        TestHelpers.AssertUserDataCorrect(data4.Data, TestHelpers.CreateRange(200, 210));
         await cache.WaitForIdleAsync();
 
         // Request 5: Verify cache stability
         var data5 = await cache.GetDataAsync(TestHelpers.CreateRange(205, 215), CancellationToken.None);
-        TestHelpers.AssertUserDataCorrect(data5, TestHelpers.CreateRange(205, 215));
+        TestHelpers.AssertUserDataCorrect(data5.Data, TestHelpers.CreateRange(205, 215));
 
         // Wait for background rebalance to settle before checking counters
         await cache.WaitForIdleAsync();
@@ -1421,7 +1421,7 @@ public sealed class WindowCacheInvariantTests : IAsyncDisposable
         for (var i = 0; i < 20; i++)
         {
             var start = 100 + i * 5;
-            tasks.Add(cache.GetDataAsync(TestHelpers.CreateRange(start, start + 10), CancellationToken.None).AsTask());
+            tasks.Add(cache.GetDataAsync(TestHelpers.CreateRange(start, start + 10), CancellationToken.None).AsTask().ContinueWith(t => t.Result.Data));
         }
 
         var results = await Task.WhenAll(tasks);
@@ -1468,8 +1468,8 @@ public sealed class WindowCacheInvariantTests : IAsyncDisposable
         var result2 = await cache.GetDataAsync(TestHelpers.CreateRange(105, 115), CancellationToken.None);
 
         // Assert
-        TestHelpers.VerifyDataMatchesRange(result1, TestHelpers.CreateRange(100, 110));
-        TestHelpers.VerifyDataMatchesRange(result2, TestHelpers.CreateRange(105, 115));
+        TestHelpers.VerifyDataMatchesRange(result1.Data, TestHelpers.CreateRange(100, 110));
+        TestHelpers.VerifyDataMatchesRange(result2.Data, TestHelpers.CreateRange(105, 115));
     }
 
     #endregion

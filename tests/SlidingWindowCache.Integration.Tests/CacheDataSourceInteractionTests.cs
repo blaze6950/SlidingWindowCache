@@ -85,7 +85,7 @@ public sealed class CacheDataSourceInteractionTests : IAsyncDisposable
             "DataSource should be asked to fetch at least the requested range [100, 110]");
 
         // Verify data is correct
-        var array = result.ToArray();
+        var array = result.Data.ToArray();
         Assert.Equal((int)requestedRange.Span(_domain), array.Length);
         Assert.Equal(100, array[0]);
         Assert.Equal(110, array[^1]);
@@ -111,7 +111,7 @@ public sealed class CacheDataSourceInteractionTests : IAsyncDisposable
         Assert.True(_dataSource.TotalFetchCount > 0, "DataSource should be called for non-overlapping range");
 
         // Verify correct data
-        var array = result.ToArray();
+        var array = result.Data.ToArray();
         Assert.Equal(11, array.Length);
         Assert.Equal(500, array[0]);
         Assert.Equal(510, array[^1]);
@@ -137,7 +137,7 @@ public sealed class CacheDataSourceInteractionTests : IAsyncDisposable
         var result = await cache.GetDataAsync(overlappingRange, CancellationToken.None);
 
         // ASSERT - Verify returned data is correct
-        var array = result.ToArray();
+        var array = result.Data.ToArray();
         Assert.Equal(16, array.Length); // [105, 120] = 16 elements
         Assert.Equal(105, array[0]);
         Assert.Equal(120, array[^1]);
@@ -165,7 +165,7 @@ public sealed class CacheDataSourceInteractionTests : IAsyncDisposable
         var result = await cache.GetDataAsync(leftExtendRange, CancellationToken.None);
 
         // ASSERT - Verify data correctness
-        var array = result.ToArray();
+        var array = result.Data.ToArray();
         Assert.Equal(16, array.Length);
         Assert.Equal(190, array[0]);
         Assert.Equal(205, array[^1]);
@@ -186,7 +186,7 @@ public sealed class CacheDataSourceInteractionTests : IAsyncDisposable
         var result = await cache.GetDataAsync(rightExtendRange, CancellationToken.None);
 
         // ASSERT - Verify data correctness
-        var array2 = result.ToArray();
+        var array2 = result.Data.ToArray();
         Assert.Equal(16, array2.Length);
         Assert.Equal(305, array2[0]);
         Assert.Equal(320, array2[^1]);
@@ -223,8 +223,8 @@ public sealed class CacheDataSourceInteractionTests : IAsyncDisposable
         var data2 = await cache.GetDataAsync(withinExpanded, CancellationToken.None);
 
         // ASSERT - Verify data correctness
-        var array1 = result.ToArray();
-        var array2 = data2.ToArray();
+        var array1 = result.Data.ToArray();
+        var array2 = data2.Data.ToArray();
         Assert.Equal(11, array1.Length);
         Assert.Equal(100, array1[0]);
         Assert.Equal(11, array2.Length);
@@ -255,7 +255,7 @@ public sealed class CacheDataSourceInteractionTests : IAsyncDisposable
         foreach (var range in ranges)
         {
             var loopResult = await cache.GetDataAsync(range, CancellationToken.None);
-            Assert.Equal((int)range.Span(_domain), loopResult.Length);
+            Assert.Equal((int)range.Span(_domain), loopResult.Data.Length);
             await cache.WaitForIdleAsync();
         }
 
@@ -284,7 +284,7 @@ public sealed class CacheDataSourceInteractionTests : IAsyncDisposable
 
         // ASSERT - Second request should not trigger additional fetch (served from cache)
         // Note: May trigger rebalance fetch in background, but user data served from cache
-        var array = data2.ToArray();
+        var array = data2.Data.ToArray();
         Assert.Equal(11, array.Length);
         Assert.Equal(100, array[0]);
     }
@@ -316,7 +316,7 @@ public sealed class CacheDataSourceInteractionTests : IAsyncDisposable
         var result = await cache.GetDataAsync(subset, CancellationToken.None);
 
         // ASSERT - Data is correct
-        var array = result.ToArray();
+        var array = result.Data.ToArray();
         Assert.Equal(11, array.Length);
         Assert.Equal(150, array[0]);
         Assert.Equal(160, array[^1]);
@@ -387,7 +387,7 @@ public sealed class CacheDataSourceInteractionTests : IAsyncDisposable
         var result = await cache.GetDataAsync(singleElementRange, CancellationToken.None);
 
         // ASSERT
-        var array1 = result.ToArray();
+        var array1 = result.Data.ToArray();
         Assert.Single(array1);
         Assert.Equal(42, array1[0]);
         Assert.True(_dataSource.TotalFetchCount >= 1);
@@ -404,7 +404,7 @@ public sealed class CacheDataSourceInteractionTests : IAsyncDisposable
         var result = await cache.GetDataAsync(largeRange, CancellationToken.None);
 
         // ASSERT
-        var array2 = result.ToArray();
+        var array2 = result.Data.ToArray();
         Assert.Equal(1000, array2.Length);
         Assert.Equal(0, array2[0]);
         Assert.Equal(999, array2[^1]);
