@@ -314,7 +314,8 @@ public sealed class WindowCacheInvariantTests : IAsyncDisposable
     [Theory]
     [MemberData(nameof(A3_8_TestData))]
     public async Task Invariant_A3_8_UserPathNeverMutatesCache(
-        string scenario, int reqStart, int reqEnd, int priorStart, int priorEnd, bool hasPriorRequest, string storageName, UserCacheReadMode readMode)
+        string scenario, int reqStart, int reqEnd, int priorStart, int priorEnd, bool hasPriorRequest,
+        string storageName, UserCacheReadMode readMode)
     {
         // ARRANGE
         var options = TestHelpers.CreateDefaultOptions(
