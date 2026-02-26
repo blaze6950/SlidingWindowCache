@@ -381,7 +381,7 @@ Assert.Equal(Range.Closed(1000, 1500), result.Range);
 ```csharp
 await cache.GetDataAsync(Range.Closed(100, 200), ct);
 
-// Every user request publishes exactly one intent
+// Intent is published when data was successfully assembled (not on physical boundary misses)
 Assert.Equal(1, diagnostics.RebalanceIntentPublished);
 ```
 

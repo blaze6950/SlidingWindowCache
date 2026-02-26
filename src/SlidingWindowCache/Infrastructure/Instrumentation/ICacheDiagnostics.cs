@@ -123,7 +123,9 @@ public interface ICacheDiagnostics
     /// <summary>
     /// Records publication of a rebalance intent by the User Path.
     /// Called after UserRequestHandler publishes an intent containing delivered data to IntentController.
-    /// Every user request produces exactly one intent publication (fire-and-forget).
+    /// Intent is published only when the user request results in assembled data (assembledData != null).
+    /// Physical boundary misses — where IDataSource returns null for the requested range — do not produce an intent
+    /// because there is no delivered data to embed in the intent (see Invariant C.24e).
     /// Location: IntentController.PublishIntent (after scheduler receives intent)
     /// Related: Invariant A.3 (User Path is sole source of rebalance intent), Invariant 24e (Intent must contain delivered data)
     /// Note: Intent publication does NOT guarantee execution (opportunistic behavior)

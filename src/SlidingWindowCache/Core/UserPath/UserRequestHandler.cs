@@ -23,7 +23,9 @@ namespace SlidingWindowCache.Core.UserPath;
 /// <para><strong>Execution Context:</strong> User Thread</para>
 /// <para><strong>Critical Contract:</strong></para>
 /// <para>
-/// Every user access produces a rebalance intent.
+/// Every user access that results in assembled data publishes a rebalance intent.
+/// Requests where IDataSource returns null for the requested range (physical boundary misses)
+/// do not publish an intent, as there is no delivered data to embed (see Invariant C.24e).
 /// The UserRequestHandler NEVER invokes decision logic.
 /// </para>
 /// <para><strong>Responsibilities:</strong></para>

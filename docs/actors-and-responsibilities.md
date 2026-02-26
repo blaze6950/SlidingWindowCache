@@ -23,7 +23,9 @@ Handles user requests with minimal latency and maximal isolation from background
 
 **Critical Contract:**
 ```
-Every user access produces a rebalance intent containing delivered data.
+Every user access that results in assembled data publishes a rebalance intent containing
+that delivered data. Requests where IDataSource returns null (physical boundary misses)
+do not publish an intent — there is no data to embed (Invariant C.24e).
 The UserRequestHandler is READ-ONLY with respect to cache state.
 The UserRequestHandler NEVER invokes directly decision logic - it just publishes an intent.
 ```
@@ -171,7 +173,7 @@ IntentController (User Thread for PublishIntent; Background Thread for ProcessIn
 **Enhanced Role (Decision-Driven Model):**
 
 Now responsible for:
-- **Receiving intents** (on every user request) [IntentController.PublishIntent - User Thread]
+- **Receiving intents** (when user request produces assembled data) [IntentController.PublishIntent - User Thread]
 - **Owning and invoking DecisionEngine** [IntentController - Background Thread (intent processing loop), synchronous]
 - **Intent identity and versioning** via ExecutionRequest snapshot [IntentController]
 - **Cancellation coordination** based on validation results from owned DecisionEngine [IntentController - Background Thread]
