@@ -6,8 +6,8 @@ namespace SlidingWindowCache.Integration.Tests.TestInfrastructure;
 
 /// <summary>
 /// A configurable IDataSource that delegates fetch calls through a user-supplied callback,
-/// allowing individual tests to inject faults (throw), boundary misses (return null Range),
-/// or normal data on a per-call basis.
+/// allowing individual tests to inject faults (exceptions) or control returned data on a per-call basis.
+/// Intended for exception-handling tests only. For boundary/null-Range scenarios use BoundedDataSource.
 /// </summary>
 /// <typeparam name="TRange">The range boundary type.</typeparam>
 /// <typeparam name="TData">The data type.</typeparam>
@@ -23,7 +23,7 @@ public sealed class FaultyDataSource<TRange, TData> : IDataSource<TRange, TData>
     /// Callback invoked for every single-range fetch. May throw to simulate failures,
     /// or return any <see cref="IEnumerable{T}"/> to control the returned data.
     /// The <see cref="RangeChunk{TRange,TData}.Range"/> in the result is always set to
-    /// the requested range; return an empty enumerable when the range is out of bounds.
+    /// the requested range — this class does not support returning a null Range.
     /// </param>
     public FaultyDataSource(Func<Range<TRange>, IEnumerable<TData>> fetchSingleRange)
     {
