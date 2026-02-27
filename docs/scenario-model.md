@@ -82,12 +82,10 @@ The User Path is responsible only for:
 2. Cache detects that it is not initialized
 3. Cache requests RequestedRange from IDataSource in the user thread  
    (this is unavoidable because the user request must be served)
-4. Received data:
-    - is stored as CacheData
-    - CurrentCacheRange is set to RequestedRange
-    - LastRequestedRange is set to RequestedRange
-5. Rebalance is triggered asynchronously (fire-and-forget background work)
-6. Data is immediately returned to the user
+4. A rebalance intent is published (fire-and-forget) with the fetched data
+5. Data is immediately returned to the user
+6. Rebalance execution (background) stores the data as CacheData,  
+   sets CurrentCacheRange to RequestedRange, and sets LastRequestedRange to RequestedRange
 
 **Note:**  
 The User Path does not expand the cache beyond RequestedRange.

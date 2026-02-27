@@ -3,7 +3,7 @@ using Intervals.NET.Extensions;
 using SlidingWindowCache.Public;
 using SlidingWindowCache.Public.Dto;
 
-namespace SlidingWindowCache.Integration.Tests.TestInfrastructure;
+namespace SlidingWindowCache.Tests.Infrastructure.DataSources;
 
 /// <summary>
 /// A test IDataSource implementation that simulates a bounded data source with physical limits.
@@ -47,7 +47,7 @@ public sealed class BoundedDataSource : IDataSource<int, int>
         }
 
         // Fetch available portion (non-null fulfillable)
-        var data = GenerateDataForRange(fulfillable.Value);
+        var data = DataGenerationHelpers.GenerateDataForRange(fulfillable.Value);
         return Task.FromResult(new RangeChunk<int, int>(fulfillable.Value, data));
     }
 
@@ -68,52 +68,5 @@ public sealed class BoundedDataSource : IDataSource<int, int>
         }
 
         return chunks;
-    }
-
-    /// <summary>
-    /// Generates sequential integer data for a range, respecting boundary inclusivity.
-    /// </summary>
-    private static List<int> GenerateDataForRange(Range<int> range)
-    {
-        var data = new List<int>();
-        var start = (int)range.Start;
-        var end = (int)range.End;
-
-        switch (range)
-        {
-            case { IsStartInclusive: true, IsEndInclusive: true }:
-                // [start, end]
-                for (var i = start; i <= end; i++)
-                {
-                    data.Add(i);
-                }
-                break;
-
-            case { IsStartInclusive: true, IsEndInclusive: false }:
-                // [start, end)
-                for (var i = start; i < end; i++)
-                {
-                    data.Add(i);
-                }
-                break;
-
-            case { IsStartInclusive: false, IsEndInclusive: true }:
-                // (start, end]
-                for (var i = start + 1; i <= end; i++)
-                {
-                    data.Add(i);
-                }
-                break;
-
-            default:
-                // (start, end)
-                for (var i = start + 1; i < end; i++)
-                {
-                    data.Add(i);
-                }
-                break;
-        }
-
-        return data;
     }
 }

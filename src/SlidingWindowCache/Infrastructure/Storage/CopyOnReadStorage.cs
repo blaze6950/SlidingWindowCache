@@ -4,7 +4,6 @@ using Intervals.NET.Data.Extensions;
 using Intervals.NET.Domain.Abstractions;
 using Intervals.NET.Extensions;
 using SlidingWindowCache.Infrastructure.Extensions;
-using SlidingWindowCache.Public.Configuration;
 
 namespace SlidingWindowCache.Infrastructure.Storage;
 
@@ -85,9 +84,6 @@ internal sealed class CopyOnReadStorage<TRange, TData, TDomain> : ICacheStorage<
     }
 
     /// <inheritdoc />
-    public UserCacheReadMode Mode => UserCacheReadMode.CopyOnRead;
-
-    /// <inheritdoc />
     public Range<TRange> Range { get; private set; }
 
     /// <inheritdoc />
@@ -125,6 +121,35 @@ internal sealed class CopyOnReadStorage<TRange, TData, TDomain> : ICacheStorage<
 
         // Atomically swap buffers: staging becomes active, old active becomes staging for next use
         // This swap is the only point where active storage is replaced, satisfying Invariant B.12 (atomic changes)
+        //
+        // TODO: Known race condition between Read() and Rematerialize():
+        // Read() and Rematerialize() can overlap — Read() is called on the User thread while Rematerialize()
+        // runs on the Rebalance Execution thread. The tuple-swap here ( (_activeStorage, _stagingBuffer) = ... )
+        // is NOT atomic at the CPU level: it is two separate field writes. A concurrent Read() could observe
+        // _activeStorage mid-swap, seeing the new reference for _activeStorage but old data for Range (or vice versa).
+        // This is a real data race.
+        //
+        // All known fix approaches share the same fundamental race:
+        //   - Making _activeStorage volatile only fixes visibility, not atomicity of the two-field update.
+        //   - Wrapping both fields in a single holder object and replacing the holder via Interlocked.Exchange
+        //     would achieve atomic reference replacement, but at the cost of allocating a new holder object on
+        //     every Rematerialize() call and losing the buffer-reuse advantage that is CopyOnReadStorage's
+        //     primary design goal.
+        //   - Using a lock on both Read() and Rematerialize() would be correct but violates the lock-free
+        //     User Path requirement (Invariant A.2: User Path must never block on rebalance operations).
+        //
+        // The race is accepted as-is because:
+        //   1. WindowCache is designed for a single logical consumer (single coherent access pattern).
+        //      The User thread and Rebalance thread have an implicit ordering: Rematerialize() is only
+        //      called after data is fetched, which only happens after a user request triggers a rebalance.
+        //   2. In practice, the window of inconsistency is sub-microsecond (two field writes), and the
+        //      observable effect (slightly stale data on one read) is within the "smart eventual consistency"
+        //      model that WindowCache guarantees.
+        //   3. Fixing it cleanly would require either accepting per-Rematerialize allocations (defeating
+        //      CopyOnReadStorage's purpose) or violating the lock-free User Path invariant.
+        //
+        // If strict atomic swap is required, use SnapshotReadStorage instead (allocates a new array per
+        // Rematerialize but achieves safe reference replacement via a single field write to _data).
         (_activeStorage, _stagingBuffer) = (_stagingBuffer, _activeStorage);
 
         // Update range to reflect new active storage (part of atomic change)
@@ -182,7 +207,7 @@ internal sealed class CopyOnReadStorage<TRange, TData, TDomain> : ICacheStorage<
     /// <inheritdoc />
     /// <remarks>
     /// <para>
-    /// Returns a <see cref="RangeData{TRangeType,TDataType,TRangeDomain}"/> representing
+    /// Returns a <see cref="RangeData{TRange,TData,TDomain}"/> representing
     /// the current active storage. The returned data is a lazy enumerable over the active list.
     /// </para>
     /// <para>

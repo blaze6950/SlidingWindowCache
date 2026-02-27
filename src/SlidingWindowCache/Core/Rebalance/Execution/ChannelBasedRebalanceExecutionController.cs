@@ -245,7 +245,7 @@ internal sealed class ChannelBasedRebalanceExecutionController<TRange, TData, TD
             desiredNoRebalanceRange,
             cancellationTokenSource
         );
-        Interlocked.Exchange(ref _lastExecutionRequest, request);
+        Volatile.Write(ref _lastExecutionRequest, request);
 
         // Enqueue execution request to bounded channel
         // BACKPRESSURE: This will await if channel is at capacity, creating backpressure on intent processing loop
@@ -302,8 +302,10 @@ internal sealed class ChannelBasedRebalanceExecutionController<TRange, TData, TD
         {
             _cacheDiagnostics.RebalanceExecutionStarted();
 
-            var (intent, desiredRange, desiredNoRebalanceRange, cancellationTokenSource) = request;
-            var cancellationToken = cancellationTokenSource.Token;
+            var intent = request.Intent;
+            var desiredRange = request.DesiredRange;
+            var desiredNoRebalanceRange = request.DesiredNoRebalanceRange;
+            var cancellationToken = request.CancellationToken;
 
             try
             {
@@ -313,6 +315,11 @@ internal sealed class ChannelBasedRebalanceExecutionController<TRange, TData, TD
                     .ConfigureAwait(false);
 
                 // Step 2: Check cancellation after debounce - avoid wasted I/O work
+                // NOTE: We check IsCancellationRequested explicitly here rather than relying solely on the
+                // OperationCanceledException catch below. Task.Delay can complete normally just as cancellation
+                // is signalled (a race), so we may reach here with cancellation requested but no exception thrown.
+                // This explicit check provides a clean diagnostic event path (RebalanceExecutionCancelled) for
+                // that case, separate from the exception-based cancellation path in the catch block below.
                 if (cancellationToken.IsCancellationRequested)
                 {
                     _cacheDiagnostics.RebalanceExecutionCancelled();
@@ -385,7 +392,7 @@ internal sealed class ChannelBasedRebalanceExecutionController<TRange, TData, TD
             return; // Already disposed
         }
 
-        _lastExecutionRequest?.Cancel();
+        Volatile.Read(ref _lastExecutionRequest)?.Cancel();
 
         // Complete the channel - signals execution loop to exit after current operation
         _executionChannel.Writer.Complete();
@@ -404,6 +411,6 @@ internal sealed class ChannelBasedRebalanceExecutionController<TRange, TData, TD
         }
 
         // Dispose last execution request if present
-        _lastExecutionRequest?.Dispose();
+        Volatile.Read(ref _lastExecutionRequest)?.Dispose();
     }
 }

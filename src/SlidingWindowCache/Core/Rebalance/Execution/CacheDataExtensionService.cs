@@ -59,7 +59,7 @@ internal sealed class CacheDataExtensionService<TRange, TData, TDomain>
     /// </summary>
     /// <param name="currentCache">The current cached data.</param>
     /// <param name="requested">The requested range that needs to be covered by the cache.</param>
-    /// <param name="ct">Cancellation token.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>
     /// Extended cache containing all existing data plus newly fetched data to cover the requested range.
     /// </returns>
@@ -82,20 +82,30 @@ internal sealed class CacheDataExtensionService<TRange, TData, TDomain>
     public async Task<RangeData<TRange, TData, TDomain>> ExtendCacheAsync(
         RangeData<TRange, TData, TDomain> currentCache,
         Range<TRange> requested,
-        CancellationToken ct
+        CancellationToken cancellationToken
     )
     {
         _cacheDiagnostics.DataSourceFetchMissingSegments();
 
-        // Step 1: Calculate which ranges are missing
-        var missingRanges = CalculateMissingRanges(currentCache.Range, requested);
+        // Step 1: Calculate which ranges are missing (and record the expansion/replacement diagnostic)
+        var missingRanges = CalculateMissingRanges(currentCache.Range, requested, out bool isCacheExpanded);
 
-        // Step 2: Fetch the missing data from data source
-        var fetchedResults = await _dataSource.FetchAsync(missingRanges, ct)
+        // Step 2: Record the diagnostic event here (caller context), not inside the pure helper
+        if (isCacheExpanded)
+        {
+            _cacheDiagnostics.CacheExpanded();
+        }
+        else
+        {
+            _cacheDiagnostics.CacheReplaced();
+        }
+
+        // Step 3: Fetch the missing data from data source
+        var fetchedResults = await _dataSource.FetchAsync(missingRanges, cancellationToken)
             .ConfigureAwait(false);
 
-        // Step 3: Union fetched data with current cache (UnionAll will filter null ranges)
-        return UnionAll(currentCache, fetchedResults, _domain);
+        // Step 4: Union fetched data with current cache (UnionAll will filter null ranges)
+        return UnionAll(currentCache, fetchedResults);
     }
 
     /// <summary>
@@ -104,25 +114,30 @@ internal sealed class CacheDataExtensionService<TRange, TData, TDomain>
     /// </summary>
     /// <param name="currentRange">The range currently covered by the cache.</param>
     /// <param name="requestedRange">The range that needs to be covered.</param>
+    /// <param name="isCacheExpanded">
+    /// Set to <see langword="true"/> when the existing cache overlaps with the requested range
+    /// (expansion case); <see langword="false"/> when there is no overlap (replacement case).
+    /// </param>
     /// <returns>
-    /// An enumerable of missing ranges that need to be fetched, or null if there's no intersection
-    /// (meaning the entire requested range needs to be fetched).
+    /// An enumerable of missing ranges that need to be fetched, or the full requested range
+    /// when there is no intersection (meaning the entire requested range needs to be fetched).
     /// </returns>
-    private IEnumerable<Range<TRange>> CalculateMissingRanges(
+    private static IEnumerable<Range<TRange>> CalculateMissingRanges(
         Range<TRange> currentRange,
-        Range<TRange> requestedRange
+        Range<TRange> requestedRange,
+        out bool isCacheExpanded
     )
     {
         var intersection = currentRange.Intersect(requestedRange);
 
         if (intersection.HasValue)
         {
-            _cacheDiagnostics.CacheExpanded();
+            isCacheExpanded = true;
             // Calculate the missing segments using range subtraction
             return requestedRange.Except(intersection.Value);
         }
 
-        _cacheDiagnostics.CacheReplaced();
+        isCacheExpanded = false;
         // No overlap - indicate that entire requested range is missing
         // This signals to fetch the whole requested range without trying to calculate missing segments, as they are all missing.
         return [requestedRange];
@@ -147,8 +162,7 @@ internal sealed class CacheDataExtensionService<TRange, TData, TDomain>
     /// </remarks>
     private RangeData<TRange, TData, TDomain> UnionAll(
         RangeData<TRange, TData, TDomain> current,
-        IEnumerable<RangeChunk<TRange, TData>> rangeChunks,
-        TDomain domain
+        IEnumerable<RangeChunk<TRange, TData>> rangeChunks
     )
     {
         // Combine existing data with fetched data
@@ -165,7 +179,7 @@ internal sealed class CacheDataExtensionService<TRange, TData, TDomain>
             // It is important to call Union on the current range data to overwrite outdated
             // intersected segments with the newly fetched data, ensuring that the most up-to-date
             // information is retained in the cache.
-            current = current.Union(chunk.Data.ToRangeData(chunk.Range!.Value, domain))!;
+            current = current.Union(chunk.Data.ToRangeData(chunk.Range!.Value, _domain))!;
         }
 
         return current;

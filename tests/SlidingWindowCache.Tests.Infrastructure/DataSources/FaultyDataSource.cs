@@ -2,7 +2,7 @@ using Intervals.NET;
 using SlidingWindowCache.Public;
 using SlidingWindowCache.Public.Dto;
 
-namespace SlidingWindowCache.Integration.Tests.TestInfrastructure;
+namespace SlidingWindowCache.Tests.Infrastructure.DataSources;
 
 /// <summary>
 /// A configurable IDataSource that delegates fetch calls through a user-supplied callback,

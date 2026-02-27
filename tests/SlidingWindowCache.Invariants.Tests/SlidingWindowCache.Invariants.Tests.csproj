@@ -22,7 +22,14 @@
     </ItemGroup>
 
     <ItemGroup>
+        <PackageReference Include="Intervals.NET.Data" Version="0.0.1"/>
+        <PackageReference Include="Intervals.NET.Domain.Default" Version="0.0.2"/>
+        <PackageReference Include="Intervals.NET.Domain.Extensions" Version="0.0.3"/>
+    </ItemGroup>
+
+    <ItemGroup>
       <ProjectReference Include="..\..\src\SlidingWindowCache\SlidingWindowCache.csproj" />
+      <ProjectReference Include="..\SlidingWindowCache.Tests.Infrastructure\SlidingWindowCache.Tests.Infrastructure.csproj" />
     </ItemGroup>
 
 </Project>

@@ -1,4 +1,4 @@
-using Intervals.NET;
+﻿using Intervals.NET;
 using Intervals.NET.Data;
 using Intervals.NET.Data.Extensions;
 using Intervals.NET.Domain.Abstractions;
@@ -133,7 +133,7 @@ internal sealed class UserRequestHandler<TRange, TData, TDomain>
         }
 
         // Check if cache is cold (never used) - use ToRangeData to detect empty cache
-        var cacheStorage = _state.Cache;
+        var cacheStorage = _state.Storage;
         var isColdStart = !_state.LastRequested.HasValue;
 
         RangeData<TRange, TData, TDomain>? assembledData = null;
@@ -148,24 +148,8 @@ internal sealed class UserRequestHandler<TRange, TData, TDomain>
             {
                 // Scenario 1: Cold Start
                 // Cache has never been populated - fetch data ONLY for requested range
-                _cacheDiagnostics.DataSourceFetchSingleRange();
-                var fetchedChunk = await _dataSource.FetchAsync(requestedRange, cancellationToken);
-
-                // Handle boundary: chunk.Range may be null or truncated
-                if (fetchedChunk.Range.HasValue)
-                {
-                    assembledData = fetchedChunk.Data.ToRangeData(fetchedChunk.Range.Value, _state.Domain);
-                    actualRange = fetchedChunk.Range.Value;
-                    resultData = new ReadOnlyMemory<TData>(assembledData.Data.ToArray());
-                }
-                else
-                {
-                    // No data available for requested range
-                    assembledData = null;
-                    actualRange = null;
-                    resultData = ReadOnlyMemory<TData>.Empty;
-                }
-
+                (assembledData, actualRange, resultData) =
+                    await FetchSingleRangeAsync(requestedRange, cancellationToken).ConfigureAwait(false);
                 _cacheDiagnostics.UserRequestFullCacheMiss();
             }
             else
@@ -199,7 +183,7 @@ internal sealed class UserRequestHandler<TRange, TData, TDomain>
                             cacheStorage.ToRangeData(),
                             requestedRange,
                             cancellationToken
-                        );
+                        ).ConfigureAwait(false);
 
                         _cacheDiagnostics.UserRequestPartialCacheHit();
 
@@ -226,26 +210,8 @@ internal sealed class UserRequestHandler<TRange, TData, TDomain>
                         // Scenario 4: Full Cache Miss (Non-intersecting Jump)
                         // RequestedRange does NOT intersect CurrentCacheRange
                         // Fetch ONLY the requested range from IDataSource
-                        // NOTE: The logic is similar to cold start
-                        _cacheDiagnostics.DataSourceFetchSingleRange();
-                        var fetchedChunk = await _dataSource.FetchAsync(requestedRange, cancellationToken)
-                            .ConfigureAwait(false);
-
-                        // Handle boundary: chunk.Range may be null or truncated
-                        if (fetchedChunk.Range.HasValue)
-                        {
-                            assembledData = fetchedChunk.Data.ToRangeData(fetchedChunk.Range.Value, _state.Domain);
-                            actualRange = fetchedChunk.Range.Value;
-                            resultData = new ReadOnlyMemory<TData>(assembledData.Data.ToArray());
-                        }
-                        else
-                        {
-                            // No data available for requested range
-                            assembledData = null;
-                            actualRange = null;
-                            resultData = ReadOnlyMemory<TData>.Empty;
-                        }
-
+                        (assembledData, actualRange, resultData) =
+                            await FetchSingleRangeAsync(requestedRange, cancellationToken).ConfigureAwait(false);
                         _cacheDiagnostics.UserRequestFullCacheMiss();
                     }
                 }
@@ -314,5 +280,44 @@ internal sealed class UserRequestHandler<TRange, TData, TDomain>
 
         // Dispose intent controller (cascades to execution controller)
         await _intentController.DisposeAsync().ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Fetches data for a single range directly from the data source, without involving the cache.
+    /// Used by Scenario 1 (cold start) and Scenario 4 (full cache miss / non-intersecting jump).
+    /// </summary>
+    /// <param name="requestedRange">The range to fetch.</param>
+    /// <param name="cancellationToken">A cancellation token to cancel the operation.</param>
+    /// <returns>
+    /// A tuple of (assembledData, actualRange, resultData). <c>assembledData</c> is null and
+    /// <c>actualRange</c> is null when the data source reports no data is available for the range
+    /// (physical boundary miss).
+    /// </returns>
+    /// <remarks>
+    /// <para><strong>Execution Context:</strong> User Thread (called from <see cref="HandleRequestAsync"/>)</para>
+    /// <para>
+    /// This helper centralises the fetch-and-materialise pattern shared by the cold-start and
+    /// full-miss scenarios. It emits the <c>DataSourceFetchSingleRange</c> diagnostic event and
+    /// handles the null-Range contract of <see cref="IDataSource{TRange,TData}"/>.
+    /// </para>
+    /// </remarks>
+    private async ValueTask<(RangeData<TRange, TData, TDomain>? assembledData, Range<TRange>? actualRange, ReadOnlyMemory<TData> resultData)>
+        FetchSingleRangeAsync(Range<TRange> requestedRange, CancellationToken cancellationToken)
+    {
+        _cacheDiagnostics.DataSourceFetchSingleRange();
+        var fetchedChunk = await _dataSource.FetchAsync(requestedRange, cancellationToken)
+            .ConfigureAwait(false);
+
+        // Handle boundary: chunk.Range may be null or truncated
+        if (fetchedChunk.Range.HasValue)
+        {
+            var assembledData = fetchedChunk.Data.ToRangeData(fetchedChunk.Range.Value, _state.Domain);
+            var actualRange = fetchedChunk.Range.Value;
+            var resultData = new ReadOnlyMemory<TData>(assembledData.Data.ToArray());
+            return (assembledData, actualRange, resultData);
+        }
+
+        // No data available for requested range (physical boundary miss)
+        return (null, null, ReadOnlyMemory<TData>.Empty);
     }
 }

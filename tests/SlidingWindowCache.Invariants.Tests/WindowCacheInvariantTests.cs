@@ -2,7 +2,7 @@ using Intervals.NET.Domain.Default.Numeric;
 using Intervals.NET.Domain.Extensions.Fixed;
 using Intervals.NET.Extensions;
 using SlidingWindowCache.Infrastructure.Instrumentation;
-using SlidingWindowCache.Invariants.Tests.TestInfrastructure;
+using SlidingWindowCache.Tests.Infrastructure.Helpers;
 using SlidingWindowCache.Public;
 using SlidingWindowCache.Public.Configuration;
 
@@ -630,11 +630,6 @@ public sealed class WindowCacheInvariantTests : IAsyncDisposable
         // The number of scheduled executions should be less than or equal to intents published
         Assert.True(_cacheDiagnostics.RebalanceScheduled <= _cacheDiagnostics.RebalanceIntentPublished,
             $"Scheduled executions ({_cacheDiagnostics.RebalanceScheduled}) should not exceed published intents ({_cacheDiagnostics.RebalanceIntentPublished})");
-
-        // Intent cancellations indicate early exit occurred (obsolete intents discarded)
-        // System should have cancelled some intents due to obsolescence
-        var totalCancellations = _cacheDiagnostics.RebalanceIntentCancelled +
-                                 _cacheDiagnostics.RebalanceExecutionCancelled;
 
         // At least one rebalance should complete successfully (system converged to final state)
         Assert.True(_cacheDiagnostics.RebalanceExecutionCompleted >= 1,

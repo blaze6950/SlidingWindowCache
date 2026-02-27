@@ -1,7 +1,6 @@
 ﻿using Intervals.NET;
 using Intervals.NET.Data;
 using Intervals.NET.Domain.Abstractions;
-using SlidingWindowCache.Public.Configuration;
 
 namespace SlidingWindowCache.Infrastructure.Storage;
 
@@ -25,11 +24,6 @@ internal interface ICacheStorage<TRange, TData, TDomain>
     where TRange : IComparable<TRange>
     where TDomain : IRangeDomain<TRange>
 {
-    /// <summary>
-    /// Gets the read mode this strategy implements.
-    /// </summary>
-    UserCacheReadMode Mode { get; }
-
     /// <summary>
     /// Gets the current range of data stored in internal storage.
     /// </summary>

@@ -3,32 +3,6 @@
 namespace SlidingWindowCache.Core.Rebalance.Decision;
 
 /// <summary>
-/// Specifies the reason for a rebalance decision outcome.
-/// </summary>
-internal enum RebalanceReason
-{
-    /// <summary>
-    /// Request falls within the current cache's no-rebalance range (Stage 1 stability).
-    /// </summary>
-    WithinCurrentNoRebalanceRange,
-
-    /// <summary>
-    /// Request falls within the pending rebalance's desired no-rebalance range (Stage 2 stability).
-    /// </summary>
-    WithinPendingNoRebalanceRange,
-
-    /// <summary>
-    /// Desired cache range equals current cache range (Stage 4 short-circuit).
-    /// </summary>
-    DesiredEqualsCurrent,
-
-    /// <summary>
-    /// Rebalance is required to satisfy the request (Stage 5 execution).
-    /// </summary>
-    RebalanceRequired
-}
-
-/// <summary>
 /// Represents the result of a rebalance decision evaluation.
 /// </summary>
 /// <typeparam name="TRange">The type representing the range boundaries.</typeparam>
@@ -38,7 +12,7 @@ internal readonly struct RebalanceDecision<TRange>
     /// <summary>
     /// Gets a value indicating whether rebalance execution should proceed.
     /// </summary>
-    public bool ShouldSchedule { get; }
+    public bool IsExecutionRequired { get; }
 
     /// <summary>
     /// Gets the desired cache range if execution is allowed, otherwise null.
@@ -61,7 +35,7 @@ internal readonly struct RebalanceDecision<TRange>
         Range<TRange>? desiredNoRebalanceRange,
         RebalanceReason reason)
     {
-        ShouldSchedule = shouldSchedule;
+        IsExecutionRequired = shouldSchedule;
         DesiredRange = desiredRange;
         DesiredNoRebalanceRange = desiredNoRebalanceRange;
         Reason = reason;

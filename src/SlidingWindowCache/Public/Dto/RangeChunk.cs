@@ -5,8 +5,8 @@ namespace SlidingWindowCache.Public.Dto;
 /// <summary>
 /// Represents a chunk of data associated with a specific range. This is used to encapsulate the data fetched for a particular range in the sliding window cache.
 /// </summary>
-/// <typeparam name="TRangeType">The type representing range boundaries.</typeparam>
-/// <typeparam name="TDataType">The type of data elements.</typeparam>
+/// <typeparam name="TRange">The type representing range boundaries.</typeparam>
+/// <typeparam name="TData">The type of data elements.</typeparam>
 /// <param name="Range">
 /// The range of data in this chunk.
 /// Null if no data is available for the requested range (e.g., out of physical bounds).
@@ -28,5 +28,5 @@ namespace SlidingWindowCache.Public.Dto;
 /// // Request [600..700] → Return RangeChunk(null, empty enumerable)
 /// </code>
 /// </remarks>
-public record RangeChunk<TRangeType, TDataType>(Range<TRangeType>? Range, IEnumerable<TDataType> Data)
-    where TRangeType : IComparable<TRangeType>;
+public sealed record RangeChunk<TRange, TData>(Range<TRange>? Range, IEnumerable<TData> Data)
+    where TRange : IComparable<TRange>;

@@ -5,7 +5,7 @@ namespace SlidingWindowCache.Infrastructure.Instrumentation;
 /// <summary>
 /// Default implementation of <see cref="ICacheDiagnostics"/> that uses thread-safe counters to track cache events and metrics.
 /// </summary>
-public class EventCounterCacheDiagnostics : ICacheDiagnostics
+public sealed class EventCounterCacheDiagnostics : ICacheDiagnostics
 {
     private int _userRequestServed;
     private int _cacheExpanded;
@@ -126,24 +126,24 @@ public class EventCounterCacheDiagnostics : ICacheDiagnostics
     /// </summary>
     public void Reset()
     {
-        _userRequestServed = 0;
-        _cacheExpanded = 0;
-        _cacheReplaced = 0;
-        _rebalanceIntentPublished = 0;
-        _rebalanceIntentCancelled = 0;
-        _rebalanceExecutionStarted = 0;
-        _rebalanceExecutionCompleted = 0;
-        _rebalanceExecutionCancelled = 0;
-        _rebalanceSkippedCurrentNoRebalanceRange = 0;
-        _rebalanceSkippedPendingNoRebalanceRange = 0;
-        _rebalanceSkippedSameRange = 0;
-        _rebalanceScheduled = 0;
-        _userRequestFullCacheHit = 0;
-        _userRequestPartialCacheHit = 0;
-        _userRequestFullCacheMiss = 0;
-        _dataSourceFetchSingleRange = 0;
-        _dataSourceFetchMissingSegments = 0;
-        _dataSegmentUnavailable = 0;
-        _rebalanceExecutionFailed = 0;
+        Volatile.Write(ref _userRequestServed, 0);
+        Volatile.Write(ref _cacheExpanded, 0);
+        Volatile.Write(ref _cacheReplaced, 0);
+        Volatile.Write(ref _rebalanceIntentPublished, 0);
+        Volatile.Write(ref _rebalanceIntentCancelled, 0);
+        Volatile.Write(ref _rebalanceExecutionStarted, 0);
+        Volatile.Write(ref _rebalanceExecutionCompleted, 0);
+        Volatile.Write(ref _rebalanceExecutionCancelled, 0);
+        Volatile.Write(ref _rebalanceSkippedCurrentNoRebalanceRange, 0);
+        Volatile.Write(ref _rebalanceSkippedPendingNoRebalanceRange, 0);
+        Volatile.Write(ref _rebalanceSkippedSameRange, 0);
+        Volatile.Write(ref _rebalanceScheduled, 0);
+        Volatile.Write(ref _userRequestFullCacheHit, 0);
+        Volatile.Write(ref _userRequestPartialCacheHit, 0);
+        Volatile.Write(ref _userRequestFullCacheMiss, 0);
+        Volatile.Write(ref _dataSourceFetchSingleRange, 0);
+        Volatile.Write(ref _dataSourceFetchMissingSegments, 0);
+        Volatile.Write(ref _dataSegmentUnavailable, 0);
+        Volatile.Write(ref _rebalanceExecutionFailed, 0);
     }
 }

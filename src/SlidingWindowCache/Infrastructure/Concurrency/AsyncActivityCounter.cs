@@ -190,8 +190,10 @@ internal sealed class AsyncActivityCounter
         // Sanity check - counter should never go negative
         if (newCount < 0)
         {
-            // This indicates a bug - decrement without matching increment
-            // Restore to 0 and throw to alert developers
+            // This indicates a bug: a DecrementActivity() call without a matching IncrementActivity().
+            // Restore to 0 so the counter doesn't remain invalid, then throw unconditionally.
+            // Intentionally supersedes any in-flight exception: counter underflow is an unrecoverable
+            // logic fault and the root cause MUST be surfaced, even inside finally blocks or catch handlers.
             Interlocked.CompareExchange(ref _activityCount, 0, newCount);
             throw new InvalidOperationException(
                 $"AsyncActivityCounter decremented below zero. This indicates unbalanced IncrementActivity/DecrementActivity calls.");

@@ -277,7 +277,7 @@ This component should be:
 - fully synchronous
 - independent of execution context
 
-**Critical Distinction:** While this is an internal tool of IntentManager/Executor pipeline,
+**Critical Distinction:** While this is an internal tool of IntentController/Executor pipeline,
 it is **THE sole authority** for determining rebalance necessity. All execution decisions
 flow from this component's analytical validation.
 
@@ -295,9 +295,9 @@ flow from this component's analytical validation.
 
 **Implemented as:** Two separate components working together as a unified policy:
 
-1. **ThresholdRebalancePolicy**
-   - `internal readonly struct ThresholdRebalancePolicy<TRange, TDomain>`
-   - File: `src/SlidingWindowCache/Core/Rebalance/Decision/ThresholdRebalancePolicy.cs`
+1. **NoRebalanceSatisfactionPolicy**
+   - `internal readonly struct NoRebalanceSatisfactionPolicy<TRange, TDomain>`
+   - File: `src/SlidingWindowCache/Core/Rebalance/Decision/NoRebalanceSatisfactionPolicy.cs`
    - Computes `NoRebalanceRange`
    - Checks if rebalance is needed based on threshold rules
 
@@ -326,7 +326,7 @@ shape to target).
 
 ### Component Responsibilities
 
-#### ThresholdRebalancePolicy (Threshold Rules)
+#### NoRebalanceSatisfactionPolicy (Threshold Rules)
 - Computes `NoRebalanceRange` from `CurrentCacheRange` + threshold configuration
 - Determines if requested range falls outside no-rebalance zone
 - Enforces threshold-based rebalance triggering rules
@@ -342,10 +342,10 @@ shape to target).
 
 Together, these components:
 - Compute `DesiredCacheRange` [ProportionalRangePlanner]
-- Compute `NoRebalanceRange` [ThresholdRebalancePolicy]
+- Compute `NoRebalanceRange` [NoRebalanceSatisfactionPolicy]
 - Encapsulate all sliding window rules:
     - left/right sizes [ProportionalRangePlanner]
-    - thresholds [ThresholdRebalancePolicy]
+    - thresholds [NoRebalanceSatisfactionPolicy]
     - expansion rules [ProportionalRangePlanner]
 
 ### Characteristics
@@ -360,15 +360,15 @@ Together, these components:
 This actor defines the **canonical shape** of the cache.
 
 The split into two components reflects separation of concerns:
-- **When to rebalance** (threshold-based triggering) → ThresholdRebalancePolicy
+- **When to rebalance** (threshold-based triggering) → NoRebalanceSatisfactionPolicy
 - **What shape to target** (desired cache geometry) → ProportionalRangePlanner
 
-Similar to RebalanceIntentManager, this logical actor is internally decomposed 
+Similar to RebalanceIntentController, this logical actor is internally decomposed 
 but externally appears as a unified policy concept.
 
 ---
 
-## 5. RebalanceIntentManager
+## 5. RebalanceIntentController
 
 *(Intent & Concurrency Actor)*
 
@@ -593,7 +593,7 @@ Its **conceptual separation is mandatory** even if physically co-located.
 | UserRequestHandler | Speed & availability    |
 | DecisionEngine     | Correctness of decision |
 | GeometryPolicy     | Deterministic shape     |
-| IntentManager      | Time & concurrency      |
+| IntentController   | Time & concurrency      |
 | RebalanceExecutor  | Physical mutation       |
 | CacheStateManager  | Safety & consistency    |
 
@@ -613,7 +613,7 @@ UserRequestHandler
             ▼
 Background / ThreadPool
 ───────────────────────
-RebalanceIntentManager
+RebalanceIntentController
     ├── debounce / cancel obsolete intents
     ├── enforce single-flight
     └── schedule execution
@@ -662,7 +662,7 @@ RebalanceExecutor
 
 **Contract:** *Every user access produces a rebalance intent.*
 
-#### RebalanceIntentManager (Enhanced Role)
+#### RebalanceIntentController (Enhanced Role)
 
 The IntentController ACTOR (implemented via `IntentController` + `IRebalanceExecutionController`) is the **orchestrator** responsible for:
 
@@ -679,7 +679,7 @@ The IntentController ACTOR (implemented via `IntentController` + `IRebalanceExec
 
 #### RebalanceDecisionEngine (Clarified Role)
 
-**Not a top-level actor** — internal tool of IntentManager/Executor pipeline.
+**Not a top-level actor** — internal tool of IntentController/Executor pipeline.
 
 - ❌ Not visible to User Path
 - ✅ Invoked only in background

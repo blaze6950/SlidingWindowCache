@@ -280,8 +280,8 @@ This section bridges architectural invariants (documented in [invariants.md](inv
 - **All-or-Nothing Updates**: Rematerialize operation succeeds completely or not at all
 
 **Source References**:
-- `src/SlidingWindowCache/Infrastructure/Storage/ArrayCacheStorage.cs` - Array.Copy + Volatile.Write for atomic swap
-- `src/SlidingWindowCache/Infrastructure/Storage/ListCacheStorage.cs` - List replacement + Volatile.Write
+- `src/SlidingWindowCache/Infrastructure/Storage/SnapshotReadStorage.cs` - Array.Copy + Volatile.Write for atomic swap
+- `src/SlidingWindowCache/Infrastructure/Storage/CopyOnReadStorage.cs` - List replacement + Volatile.Write
 - `src/SlidingWindowCache/Core/State/CacheState.cs` - Rematerialize method ensures atomicity
 
 ### Consistency Under Cancellation

@@ -44,7 +44,7 @@ namespace SlidingWindowCache.Core.Planning;
 ///   <item><description>E.33: Sliding window geometry is determined solely by configuration</description></item>
 ///   <item><description>D.25, D.26: Analytical/pure (CPU-only), never mutates cache state</description></item>
 /// </list>
-/// <para><strong>Related:</strong> <see cref="ThresholdRebalancePolicy{TRange,TDomain}"/> (threshold calculation, <b>when</b> to rebalance logic)</para>
+/// <para><strong>Related:</strong> <see cref="NoRebalanceSatisfactionPolicy{TRange}"/> (threshold calculation, <b>when</b> to rebalance logic)</para>
 /// <para>See: <see href="../docs/component-map.md#proportionalrangeplanner" /> for architectural overview.</para>
 /// </remarks>
 /// <typeparam name="TRange">Type representing the boundaries of a window/range; must be comparable (see <see cref="IComparable{TRange}"/>) so intervals can be ordered and spanned.</typeparam>
@@ -96,7 +96,7 @@ internal readonly struct ProportionalRangePlanner<TRange, TDomain>
     ///   Typical usage: Invoked during Stage 3 of the rebalance decision pipeline by <c>RebalanceDecisionEngine.Evaluate()</c>, which runs in the background intent processing loop (<c>IntentController.ProcessIntentsAsync</c>). Executes after stability checks (Stages 1-2) and before equality validation (Stage 4).
     /// </para>
     /// <para>See also:
-    ///   <see cref="ThresholdRebalancePolicy{TRange,TDomain}"/>
+    ///   <see cref="NoRebalanceSatisfactionPolicy{TRange}"/>
     ///   <see href="../docs/component-map.md#proportionalrangeplanner" />
     /// </para>
     /// </remarks>

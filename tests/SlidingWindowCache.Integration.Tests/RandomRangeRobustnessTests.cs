@@ -1,7 +1,7 @@
 using Intervals.NET;
 using Intervals.NET.Domain.Default.Numeric;
 using Intervals.NET.Domain.Extensions.Fixed;
-using SlidingWindowCache.Integration.Tests.TestInfrastructure;
+using SlidingWindowCache.Tests.Infrastructure.DataSources;
 using SlidingWindowCache.Infrastructure.Instrumentation;
 using SlidingWindowCache.Public;
 using SlidingWindowCache.Public.Configuration;

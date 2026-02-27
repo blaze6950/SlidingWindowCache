@@ -9,18 +9,17 @@ namespace SlidingWindowCache.Core.Rebalance.Decision;
 /// <see cref="Planning.NoRebalanceRangePlanner{TRange,TDomain}"/>.
 /// </summary>
 /// <typeparam name="TRange">The type representing the range boundaries.</typeparam>
-/// <typeparam name="TDomain">The type representing the domain of the ranges.</typeparam>
 /// <remarks>
 /// <para><strong>Role:</strong> Rebalance Policy - Decision Evaluation</para>
 /// <para><strong>Responsibility:</strong> Determine if a requested range violates the no-rebalance zone</para>
 /// <para><strong>Characteristics:</strong> Pure function, stateless</para>
 /// <para><strong>Execution Context:</strong> Background thread (intent processing loop)</para>
 /// <para>
-/// Invoked by <see cref="RebalanceDecisionEngine"/> during Stages 1-2 (stability validation),
+/// Invoked by <see cref="RebalanceDecisionEngine{TRange,TDomain}"/> during Stages 1-2 (stability validation),
 /// which executes in the background intent processing loop (see <c>IntentController.ProcessIntentsAsync</c>).
 /// </para>
 /// </remarks>
-internal readonly struct ThresholdRebalancePolicy<TRange, TDomain>
+internal readonly struct NoRebalanceSatisfactionPolicy<TRange>
     where TRange : IComparable<TRange>
 {
     /// <summary>

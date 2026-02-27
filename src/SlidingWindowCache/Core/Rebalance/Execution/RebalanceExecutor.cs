@@ -82,7 +82,7 @@ internal sealed class RebalanceExecutor<TRange, TData, TDomain>
         CancellationToken cancellationToken)
     {
         // Use delivered data as the base - this is what the user received
-        var baseRangeData = intent.AvailableRangeData;
+        var baseRangeData = intent.AssembledRangeData;
 
         // Cancellation check before expensive I/O
         // Satisfies Invariant 34a: "Rebalance Execution MUST yield to User Path requests immediately"
@@ -98,40 +98,15 @@ internal sealed class RebalanceExecutor<TRange, TData, TDomain>
         cancellationToken.ThrowIfCancellationRequested();
 
         // Phase 2: Trim to desired range (rebalancing-specific: discard data outside desired range)
-        baseRangeData = extended[desiredRange];
+        var normalizedData = extended[desiredRange];
 
         // Final cancellation check before applying mutation
         // Ensures we don't apply obsolete rebalance results
         cancellationToken.ThrowIfCancellationRequested();
 
-        // Phase 3: Apply cache state mutations
-        UpdateCacheState(baseRangeData, intent.RequestedRange, desiredNoRebalanceRange);
+        // Phase 3: Apply cache state mutations (single writer — all fields updated atomically)
+        _state.UpdateCacheState(normalizedData, intent.RequestedRange, desiredNoRebalanceRange);
 
         _cacheDiagnostics.RebalanceExecutionCompleted();
-    }
-
-    /// <summary>
-    /// Updates cache state with rebalanced data. This is the ONLY location where cache mutations occur.
-    /// SINGLE-WRITER: Only Rebalance Execution writes to cache state.
-    /// </summary>
-    /// <param name="normalizedData">The normalized data to write to cache.</param>
-    /// <param name="requestedRange">The original range requested by the user, used to update LastRequested field.</param>
-    /// <param name="desiredNoRebalanceRange">The pre-computed no-rebalance range for the target state.</param>
-    private void UpdateCacheState(
-        RangeData<TRange, TData, TDomain> normalizedData,
-        Range<TRange> requestedRange,
-        Range<TRange>? desiredNoRebalanceRange)
-    {
-        // Phase 1: Update the cache with the rebalanced data (atomic mutation)
-        // SINGLE-WRITER: This is the ONLY place where cache state is written
-        _state.Cache.Rematerialize(normalizedData);
-
-        // Phase 2: Update LastRequested to the original user's requested range
-        // SINGLE-WRITER: Only Rebalance Execution writes to LastRequested
-        _state.LastRequested = requestedRange;
-
-        // Phase 3: Update the no-rebalance range using pre-computed value from DecisionEngine
-        // SINGLE-WRITER: Only Rebalance Execution writes to NoRebalanceRange
-        _state.NoRebalanceRange = desiredNoRebalanceRange;
     }
 }

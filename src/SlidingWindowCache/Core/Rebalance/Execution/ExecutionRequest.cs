@@ -15,8 +15,9 @@ namespace SlidingWindowCache.Core.Rebalance.Execution;
 /// <para><strong>Architectural Role:</strong></para>
 /// <para>
 /// This record encapsulates the validated rebalance decision from IntentController and carries it
-/// through the execution pipeline. It includes the CancellationTokenSource for cancellation coordination
-/// when superseded by newer rebalance requests.
+/// through the execution pipeline. It owns a <see cref="CancellationTokenSource"/> (held as a private
+/// field) and exposes only the derived <see cref="CancellationToken"/> to consumers, ensuring that
+/// only this class controls cancellation and disposal of the token source.
 /// </para>
 /// <para><strong>Lifecycle:</strong></para>
 /// <list type="number">
@@ -29,18 +30,54 @@ namespace SlidingWindowCache.Core.Rebalance.Execution;
 /// <para><strong>Thread Safety:</strong></para>
 /// <para>
 /// The Cancel() and Dispose() methods are designed to be safe for multiple calls and handle
-/// disposal races gracefully by catching and ignoring exceptions.
+/// disposal races gracefully by catching and ignoring ObjectDisposedException.
 /// </para>
 /// </remarks>
-internal record ExecutionRequest<TRange, TData, TDomain>(
-    Intent<TRange, TData, TDomain> Intent,
-    Range<TRange> DesiredRange,
-    Range<TRange>? DesiredNoRebalanceRange,
-    CancellationTokenSource CancellationTokenSource
-)
+internal sealed class ExecutionRequest<TRange, TData, TDomain> : IDisposable
     where TRange : IComparable<TRange>
     where TDomain : IRangeDomain<TRange>
 {
+    private readonly CancellationTokenSource _cts;
+
+    /// <summary>
+    /// The rebalance intent that triggered this execution request.
+    /// </summary>
+    public Intent<TRange, TData, TDomain> Intent { get; }
+
+    /// <summary>
+    /// The desired cache range for this rebalance operation.
+    /// </summary>
+    public Range<TRange> DesiredRange { get; }
+
+    /// <summary>
+    /// The desired no-rebalance range for this rebalance operation, or null if not applicable.
+    /// </summary>
+    public Range<TRange>? DesiredNoRebalanceRange { get; }
+
+    /// <summary>
+    /// The cancellation token for this execution request. Cancelled when superseded or disposed.
+    /// </summary>
+    public CancellationToken CancellationToken => _cts.Token;
+
+    /// <summary>
+    /// Initializes a new execution request with the specified intent, ranges, and cancellation token source.
+    /// </summary>
+    /// <param name="intent">The rebalance intent that triggered this request.</param>
+    /// <param name="desiredRange">The desired cache range.</param>
+    /// <param name="desiredNoRebalanceRange">The desired no-rebalance range, or null.</param>
+    /// <param name="cts">The cancellation token source owned by this request.</param>
+    public ExecutionRequest(
+        Intent<TRange, TData, TDomain> intent,
+        Range<TRange> desiredRange,
+        Range<TRange>? desiredNoRebalanceRange,
+        CancellationTokenSource cts)
+    {
+        Intent = intent;
+        DesiredRange = desiredRange;
+        DesiredNoRebalanceRange = desiredNoRebalanceRange;
+        _cts = cts;
+    }
+
     /// <summary>
     /// Cancels this execution request by cancelling its CancellationTokenSource.
     /// Safe to call multiple times and handles disposal races gracefully.
@@ -53,7 +90,7 @@ internal record ExecutionRequest<TRange, TData, TDomain>(
     /// </para>
     /// <para><strong>Exception Handling:</strong></para>
     /// <para>
-    /// Catches and ignores all exceptions to handle disposal races gracefully.
+    /// Catches and ignores ObjectDisposedException to handle disposal races gracefully.
     /// This follows the "best-effort cancellation" pattern for background operations.
     /// </para>
     /// </remarks>
@@ -61,12 +98,11 @@ internal record ExecutionRequest<TRange, TData, TDomain>(
     {
         try
         {
-            CancellationTokenSource.Cancel();
+            _cts.Cancel();
         }
-        catch
+        catch (ObjectDisposedException)
         {
-            // Ignore disposal errors - cancellation is best-effort
-            // If CancellationTokenSource is already disposed, we don't care
+            // CancellationTokenSource already disposed - cancellation is best-effort
         }
     }
 
@@ -82,7 +118,7 @@ internal record ExecutionRequest<TRange, TData, TDomain>(
     /// </para>
     /// <para><strong>Exception Handling:</strong></para>
     /// <para>
-    /// Catches and ignores all exceptions to ensure cleanup always completes without
+    /// Catches and ignores ObjectDisposedException to ensure cleanup always completes without
     /// propagating exceptions during disposal.
     /// </para>
     /// </remarks>
@@ -90,11 +126,11 @@ internal record ExecutionRequest<TRange, TData, TDomain>(
     {
         try
         {
-            CancellationTokenSource.Dispose();
+            _cts.Dispose();
         }
-        catch
+        catch (ObjectDisposedException)
         {
-            // Ignore disposal errors - best-effort cleanup
+            // Already disposed - best-effort cleanup
         }
     }
 }

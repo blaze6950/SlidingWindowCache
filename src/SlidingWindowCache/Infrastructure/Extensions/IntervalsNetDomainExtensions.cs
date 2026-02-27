@@ -36,7 +36,7 @@ internal static class IntervalsNetDomainExtensions
     /// <exception cref="NotSupportedException">
     /// Thrown when the domain does not implement either IFixedStepDomain or IVariableStepDomain.
     /// </exception>
-    public static RangeValue<long> Span<TRange, TDomain>(this Range<TRange> range, TDomain domain)
+    internal static RangeValue<long> Span<TRange, TDomain>(this Range<TRange> range, TDomain domain)
         where TRange : IComparable<TRange>
         where TDomain : IRangeDomain<TRange> => domain switch
         {
@@ -64,7 +64,7 @@ internal static class IntervalsNetDomainExtensions
     /// <exception cref="NotSupportedException">
     /// Thrown when the domain does not implement either IFixedStepDomain or IVariableStepDomain.
     /// </exception>
-    public static Range<TRange> Expand<TRange, TDomain>(
+    internal static Range<TRange> Expand<TRange, TDomain>(
         this Range<TRange> range,
         TDomain domain,
         long left,
@@ -98,7 +98,7 @@ internal static class IntervalsNetDomainExtensions
     /// <exception cref="NotSupportedException">
     /// Thrown when the domain does not implement either IFixedStepDomain or IVariableStepDomain.
     /// </exception>
-    public static Range<TRange> ExpandByRatio<TRange, TDomain>(
+    internal static Range<TRange> ExpandByRatio<TRange, TDomain>(
         this Range<TRange> range,
         TDomain domain,
         double leftRatio,

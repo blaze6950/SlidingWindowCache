@@ -14,129 +14,6 @@ using SlidingWindowCache.Public.Dto;
 
 namespace SlidingWindowCache.Public;
 
-/// <summary>
-/// Represents a sliding window cache that retrieves and caches data for specified ranges,
-/// with automatic rebalancing based on access patterns.
-/// </summary>
-/// <typeparam name="TRange">
-/// The type representing the range boundaries. Must implement <see cref="IComparable{T}"/>.
-/// </typeparam>
-/// <typeparam name="TData">
-/// The type of data being cached.
-/// </typeparam>
-/// <typeparam name="TDomain">
-/// The type representing the domain of the ranges. Must implement <see cref="IRangeDomain{TRange}"/>.
-/// Supports both fixed-step (O(1)) and variable-step (O(N)) domains. While variable-step domains
-/// have O(N) complexity for range calculations, this cost is negligible compared to data source I/O.
-/// </typeparam>
-/// <remarks>
-/// <para><strong>Domain Flexibility:</strong></para>
-/// <para>
-/// This cache works with any <see cref="IRangeDomain{TRange}"/> implementation, whether fixed-step
-/// or variable-step. The in-memory cost of O(N) step counting (microseconds) is orders of magnitude
-/// smaller than typical data source operations (milliseconds to seconds via network/disk I/O).
-/// </para>
-/// <para><strong>Examples:</strong></para>
-/// <list type="bullet">
-/// <item><description>Fixed-step: DateTimeDayFixedStepDomain, IntegerFixedStepDomain (O(1) operations)</description></item>
-/// <item><description>Variable-step: Business days, months, custom calendars (O(N) operations, still fast)</description></item>
-/// </list>
-/// <para><strong>Resource Management:</strong></para>
-/// <para>
-/// WindowCache manages background processing tasks and resources that require explicit disposal.
-/// Always call <see cref="IAsyncDisposable.DisposeAsync"/> when done using the cache instance.
-/// </para>
-/// <para><strong>Disposal Behavior:</strong></para>
-/// <list type="bullet">
-/// <item><description>Gracefully stops background rebalance processing loops</description></item>
-/// <item><description>Disposes internal synchronization primitives (semaphores, cancellation tokens)</description></item>
-/// <item><description>After disposal, all methods throw <see cref="ObjectDisposedException"/></description></item>
-/// <item><description>Safe to call multiple times (idempotent)</description></item>
-/// <item><description>Does not require timeout - completes when background tasks finish current work</description></item>
-/// </list>
-/// <para><strong>Usage Pattern:</strong></para>
-/// <code>
-/// await using var cache = new WindowCache&lt;int, int, IntegerFixedStepDomain&gt;(...);
-/// var data = await cache.GetDataAsync(range, cancellationToken);
-/// // DisposeAsync automatically called at end of scope
-/// </code>
-/// </remarks>
-public interface IWindowCache<TRange, TData, TDomain> : IAsyncDisposable
-    where TRange : IComparable<TRange>
-    where TDomain : IRangeDomain<TRange>
-{
-    /// <summary>
-    /// Retrieves data for the specified range, utilizing the sliding window cache mechanism.
-    /// </summary>
-    /// <param name="requestedRange">
-    /// The range for which to retrieve data.
-    /// </param>
-    /// <param name="cancellationToken">
-    /// A cancellation token to cancel the operation.
-    /// </param>
-    /// <returns>
-    /// A task that represents the asynchronous operation. The task result contains a 
-    /// <see cref="RangeResult{TRange, TData}"/> with the actual available range and data.
-    /// </returns>
-    /// <remarks>
-    /// <para><strong>Bounded Data Sources:</strong></para>
-    /// <para>
-    /// When working with bounded data sources (e.g., databases with min/max IDs, time-series with
-    /// temporal limits), the returned RangeResult.Range indicates what portion of the request was
-    /// actually available. The Range may be:
-    /// </para>
-    /// <list type="bullet">
-    /// <item><description>Equal to requestedRange - all data available (typical case)</description></item>
-    /// <item><description>Subset of requestedRange - partial data available (truncated at boundaries)</description></item>
-    /// <item><description>Null - no data available for the requested range</description></item>
-    /// </list>
-    /// <para><strong>Example:</strong></para>
-    /// <code>
-    /// var result = await cache.GetDataAsync(Range.Closed(50, 600), ct);
-    /// if (result.Range.HasValue)
-    /// {
-    ///     Console.WriteLine($"Got data for range: {result.Range.Value}");
-    ///     ProcessData(result.Data);
-    /// }
-    /// else
-    /// {
-    ///     Console.WriteLine("No data available for requested range");
-    /// }
-    /// </code>
-    /// <para>See boundary handling documentation for details.</para>
-    /// </remarks>
-    ValueTask<RangeResult<TRange, TData>> GetDataAsync(
-        Range<TRange> requestedRange,
-        CancellationToken cancellationToken);
-
-    /// <summary>
-    /// Waits for the cache to reach an idle state (no pending intent and no executing rebalance).
-    /// </summary>
-    /// <param name="cancellationToken">
-    /// A cancellation token to cancel the wait operation.
-    /// </param>
-    /// <returns>
-    /// A task that completes when the cache reaches idle state.
-    /// </returns>
-    /// <remarks>
-    /// <para><strong>Idle State Definition:</strong></para>
-    /// <para>
-    /// The cache is considered idle when:
-    /// <list type="bullet">
-    /// <item><description>No pending intent is awaiting processing</description></item>
-    /// <item><description>No rebalance execution is currently running</description></item>
-    /// </list>
-    /// </para>
-    /// <para><strong>Use Cases:</strong></para>
-    /// <list type="bullet">
-    /// <item><description>Testing: Ensure cache has stabilized before assertions</description></item>
-    /// <item><description>Cold start synchronization: Wait for initial rebalance to complete</description></item>
-    /// <item><description>Diagnostics: Verify cache has converged to optimal state</description></item>
-    /// </list>
-    /// </remarks>
-    Task WaitForIdleAsync(CancellationToken cancellationToken = default);
-}
-
 /// <inheritdoc cref="IWindowCache{TRange,TData,TDomain}"/>
 /// <remarks>
 /// <para><strong>Architecture:</strong></para>
@@ -204,7 +81,7 @@ public sealed class WindowCache<TRange, TData, TDomain>
         var state = new CacheState<TRange, TData, TDomain>(cacheStorage, domain);
 
         // Initialize all internal actors following corrected execution context model
-        var rebalancePolicy = new ThresholdRebalancePolicy<TRange, TDomain>();
+        var rebalancePolicy = new NoRebalanceSatisfactionPolicy<TRange>();
         var rangePlanner = new ProportionalRangePlanner<TRange, TDomain>(options, domain);
         var noRebalancePlanner = new NoRebalanceRangePlanner<TRange, TDomain>(options, domain);
         var cacheFetcher = new CacheDataExtensionService<TRange, TData, TDomain>(dataSource, domain, cacheDiagnostics);
@@ -240,52 +117,54 @@ public sealed class WindowCache<TRange, TData, TDomain>
             dataSource,
             cacheDiagnostics
         );
-
-        return;
-
-        // Factory method to create the appropriate execution controller based on the specified rebalance queue capacity
-        static IRebalanceExecutionController<TRange, TData, TDomain> CreateExecutionController(
-            RebalanceExecutor<TRange, TData, TDomain> executor,
-            WindowCacheOptions options,
-            ICacheDiagnostics cacheDiagnostics,
-            AsyncActivityCounter activityCounter
-        )
-        {
-            if (options.RebalanceQueueCapacity == null)
-            {
-                // Unbounded strategy: Task-based serialization (default, recommended for most scenarios)
-                return new TaskBasedRebalanceExecutionController<TRange, TData, TDomain>(
-                    executor,
-                    options.DebounceDelay,
-                    cacheDiagnostics,
-                    activityCounter
-                );
-            }
-            else
-            {
-                // Bounded strategy: Channel-based serialization with backpressure support
-                return new ChannelBasedRebalanceExecutionController<TRange, TData, TDomain>(
-                    executor,
-                    options.DebounceDelay,
-                    cacheDiagnostics,
-                    activityCounter,
-                    options.RebalanceQueueCapacity.Value
-                );
-            }
-        }
-
-        // Factory method to create the appropriate cache storage based on the specified read mode in options
-        static ICacheStorage<TRange, TData, TDomain> CreateCacheStorage(
-            TDomain fixedStepDomain,
-            WindowCacheOptions windowCacheOptions
-        ) => windowCacheOptions.ReadMode switch
-        {
-            UserCacheReadMode.Snapshot => new SnapshotReadStorage<TRange, TData, TDomain>(fixedStepDomain),
-            UserCacheReadMode.CopyOnRead => new CopyOnReadStorage<TRange, TData, TDomain>(fixedStepDomain),
-            _ => throw new ArgumentOutOfRangeException(nameof(windowCacheOptions.ReadMode),
-                windowCacheOptions.ReadMode, "Unknown read mode.")
-        };
     }
+
+    /// <summary>
+    /// Creates the appropriate execution controller based on the specified rebalance queue capacity.
+    /// </summary>
+    private static IRebalanceExecutionController<TRange, TData, TDomain> CreateExecutionController(
+        RebalanceExecutor<TRange, TData, TDomain> executor,
+        WindowCacheOptions options,
+        ICacheDiagnostics cacheDiagnostics,
+        AsyncActivityCounter activityCounter
+    )
+    {
+        if (options.RebalanceQueueCapacity == null)
+        {
+            // Unbounded strategy: Task-based serialization (default, recommended for most scenarios)
+            return new TaskBasedRebalanceExecutionController<TRange, TData, TDomain>(
+                executor,
+                options.DebounceDelay,
+                cacheDiagnostics,
+                activityCounter
+            );
+        }
+        else
+        {
+            // Bounded strategy: Channel-based serialization with backpressure support
+            return new ChannelBasedRebalanceExecutionController<TRange, TData, TDomain>(
+                executor,
+                options.DebounceDelay,
+                cacheDiagnostics,
+                activityCounter,
+                options.RebalanceQueueCapacity.Value
+            );
+        }
+    }
+
+    /// <summary>
+    /// Creates the appropriate cache storage based on the specified read mode in options.
+    /// </summary>
+    private static ICacheStorage<TRange, TData, TDomain> CreateCacheStorage(
+        TDomain domain,
+        WindowCacheOptions windowCacheOptions
+    ) => windowCacheOptions.ReadMode switch
+    {
+        UserCacheReadMode.Snapshot => new SnapshotReadStorage<TRange, TData, TDomain>(domain),
+        UserCacheReadMode.CopyOnRead => new CopyOnReadStorage<TRange, TData, TDomain>(domain),
+        _ => throw new ArgumentOutOfRangeException(nameof(windowCacheOptions.ReadMode),
+            windowCacheOptions.ReadMode, "Unknown read mode.")
+    };
 
     /// <inheritdoc cref="IWindowCache{TRange,TData,TDomain}.GetDataAsync"/>
     /// <remarks>

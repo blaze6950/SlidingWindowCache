@@ -65,7 +65,7 @@ namespace SlidingWindowCache.Core.Rebalance.Execution;
 /// with execution controllers - requests flow through IntentController after validation.
 /// </para>
 /// </remarks>
-internal interface IRebalanceExecutionController<TRange, TData, TDomain>
+internal interface IRebalanceExecutionController<TRange, TData, TDomain> : IAsyncDisposable
     where TRange : IComparable<TRange>
     where TDomain : IRangeDomain<TRange>
 {
@@ -129,31 +129,4 @@ internal interface IRebalanceExecutionController<TRange, TData, TDomain>
     /// </para>
     /// </remarks>
     ExecutionRequest<TRange, TData, TDomain>? LastExecutionRequest { get; }
-
-    /// <summary>
-    /// Disposes the execution controller and releases all managed resources.
-    /// Gracefully shuts down execution processing and waits for completion.
-    /// </summary>
-    /// <returns>A ValueTask representing the asynchronous disposal operation.</returns>
-    /// <remarks>
-    /// <para><strong>Disposal Behavior (All Implementations):</strong></para>
-    /// <list type="number">
-    /// <item><description>Mark as disposed (prevent new execution requests)</description></item>
-    /// <item><description>Cancel any pending execution requests</description></item>
-    /// <item><description>Complete/signal the serialization mechanism (channel/task chain)</description></item>
-    /// <item><description>Wait for current execution to complete gracefully</description></item>
-    /// <item><description>Clean up resources (CancellationTokenSource, etc.)</description></item>
-    /// </list>
-    /// <para><strong>Thread Safety:</strong></para>
-    /// <para>
-    /// All implementations must be idempotent and thread-safe. Multiple concurrent disposal
-    /// calls should result in only one actual disposal operation.
-    /// </para>
-    /// <para><strong>Graceful Shutdown:</strong></para>
-    /// <para>
-    /// No timeout is enforced per architectural decision. Disposal waits for current execution
-    /// to complete naturally (typically milliseconds). Cancellation signals early exit.
-    /// </para>
-    /// </remarks>
-    ValueTask DisposeAsync();
 }

@@ -1,9 +1,9 @@
-﻿using System.Collections.Concurrent;
+using System.Collections.Concurrent;
 using Intervals.NET;
 using SlidingWindowCache.Public;
 using SlidingWindowCache.Public.Dto;
 
-namespace SlidingWindowCache.Integration.Tests.TestInfrastructure;
+namespace SlidingWindowCache.Tests.Infrastructure.DataSources;
 
 /// <summary>
 /// A test spy/fake IDataSource implementation that records all fetch calls for verification.
@@ -91,7 +91,7 @@ public sealed class SpyDataSource : IDataSource<int, int>
         _singleFetchCalls.Add(range);
         Interlocked.Increment(ref _totalFetchCount);
 
-        var data = GenerateDataForRange(range);
+        var data = DataGenerationHelpers.GenerateDataForRange(range);
         return Task.FromResult(new RangeChunk<int, int>(range, data));
     }
 
@@ -109,58 +109,10 @@ public sealed class SpyDataSource : IDataSource<int, int>
         var chunks = new List<RangeChunk<int, int>>();
         foreach (var range in rangesList)
         {
-            var data = GenerateDataForRange(range);
+            var data = DataGenerationHelpers.GenerateDataForRange(range);
             chunks.Add(new RangeChunk<int, int>(range, data));
         }
 
         return await Task.FromResult(chunks);
-    }
-
-    /// <summary>
-    /// Generates sequential integer data for a range, respecting boundary inclusivity.
-    /// </summary>
-    private static List<int> GenerateDataForRange(Range<int> range)
-    {
-        var data = new List<int>();
-        var start = (int)range.Start;
-        var end = (int)range.End;
-
-        switch (range)
-        {
-            case { IsStartInclusive: true, IsEndInclusive: true }:
-                // [start, end]
-                for (var i = start; i <= end; i++)
-                {
-                    data.Add(i);
-                }
-
-                break;
-            case { IsStartInclusive: true, IsEndInclusive: false }:
-                // [start, end)
-                for (var i = start; i < end; i++)
-                {
-                    data.Add(i);
-                }
-
-                break;
-            case { IsStartInclusive: false, IsEndInclusive: true }:
-                // (start, end]
-                for (var i = start + 1; i <= end; i++)
-                {
-                    data.Add(i);
-                }
-
-                break;
-            default:
-                // (start, end)
-                for (var i = start + 1; i < end; i++)
-                {
-                    data.Add(i);
-                }
-
-                break;
-        }
-
-        return data;
     }
 }

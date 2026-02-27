@@ -1,6 +1,6 @@
 using Intervals.NET.Domain.Default.Numeric;
 using Intervals.NET.Domain.Extensions.Fixed;
-using SlidingWindowCache.Integration.Tests.TestInfrastructure;
+using SlidingWindowCache.Tests.Infrastructure.DataSources;
 using SlidingWindowCache.Infrastructure.Instrumentation;
 using SlidingWindowCache.Public;
 using SlidingWindowCache.Public.Configuration;
@@ -258,10 +258,6 @@ public sealed class CacheDataSourceInteractionTests : IAsyncDisposable
             Assert.Equal((int)range.Span(_domain), loopResult.Data.Length);
             await cache.WaitForIdleAsync();
         }
-
-        // ASSERT - System handled sequential pattern without errors
-        // Each request returned correct data
-        Assert.True(true, "Sequential pattern handled successfully");
     }
 
     #endregion
@@ -320,10 +316,6 @@ public sealed class CacheDataSourceInteractionTests : IAsyncDisposable
         Assert.Equal(11, array.Length);
         Assert.Equal(150, array[0]);
         Assert.Equal(160, array[^1]);
-
-        // ASSERT - Subset request should ideally hit cache without new fetch
-        // (Background rebalance may occur, but subset data should be cached)
-        Assert.True(true, $"Subset request completed with fetch count: {_dataSource.TotalFetchCount}");
     }
 
     #endregion
@@ -367,9 +359,6 @@ public sealed class CacheDataSourceInteractionTests : IAsyncDisposable
             Assert.True(_dataSource.TotalFetchCount >= 1,
                 $"Cache miss should trigger fetch for range {range}");
         }
-
-        // ASSERT - All data correct
-        Assert.True(true, "All cache misses triggered DataSource calls");
     }
 
     #endregion

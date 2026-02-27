@@ -6,8 +6,9 @@ using SlidingWindowCache.Infrastructure.Instrumentation;
 using SlidingWindowCache.Public;
 using SlidingWindowCache.Public.Configuration;
 using SlidingWindowCache.Public.Dto;
+using SlidingWindowCache.Tests.Infrastructure.DataSources;
 
-namespace SlidingWindowCache.Invariants.Tests.TestInfrastructure;
+namespace SlidingWindowCache.Tests.Infrastructure.Helpers;
 
 /// <summary>
 /// Helper methods for creating test components.
@@ -150,46 +151,7 @@ public static class TestHelpers
                     await Task.Delay(fetchDelay.Value, ct);
                 }
 
-                // Use Intervals.NET domain to properly calculate range span
-                var span = range.Span(domain);
-                var data = new List<int>((int)span);
-
-                // Generate data respecting range inclusivity
-                var start = (int)range.Start;
-                var end = (int)range.End;
-
-                switch (range)
-                {
-                    case { IsStartInclusive: true, IsEndInclusive: true }:
-                        for (var i = start; i <= end; i++)
-                        {
-                            data.Add(i);
-                        }
-
-                        break;
-                    case { IsStartInclusive: true, IsEndInclusive: false }:
-                        for (var i = start; i < end; i++)
-                        {
-                            data.Add(i);
-                        }
-
-                        break;
-                    case { IsStartInclusive: false, IsEndInclusive: true }:
-                        for (var i = start + 1; i <= end; i++)
-                        {
-                            data.Add(i);
-                        }
-
-                        break;
-                    default:
-                        for (var i = start + 1; i < end; i++)
-                        {
-                            data.Add(i);
-                        }
-
-                        break;
-                }
-
+                var data = DataGenerationHelpers.GenerateDataForRange(range);
                 return new RangeChunk<int, int>(range, data);
             });
 
@@ -234,39 +196,7 @@ public static class TestHelpers
                     await Task.Delay(fetchDelay.Value, ct);
                 }
 
-                var span = range.Span(domain);
-                var data = new List<int>((int)span);
-                var start = (int)range.Start;
-                var end = (int)range.End;
-
-                switch (range)
-                {
-                    case { IsStartInclusive: true, IsEndInclusive: true }:
-                        for (var i = start; i <= end; i++)
-                        {
-                            data.Add(i);
-                        }
-                        break;
-                    case { IsStartInclusive: true, IsEndInclusive: false }:
-                        for (var i = start; i < end; i++)
-                        {
-                            data.Add(i);
-                        }
-                        break;
-                    case { IsStartInclusive: false, IsEndInclusive: true }:
-                        for (var i = start + 1; i <= end; i++)
-                        {
-                            data.Add(i);
-                        }
-                        break;
-                    default:
-                        for (var i = start + 1; i < end; i++)
-                        {
-                            data.Add(i);
-                        }
-                        break;
-                }
-
+                var data = DataGenerationHelpers.GenerateDataForRange(range);
                 return new RangeChunk<int, int>(range, data);
             });
 
@@ -296,6 +226,17 @@ public static class TestHelpers
         WindowCacheOptions options,
         EventCounterCacheDiagnostics cacheDiagnostics) =>
         new(mockDataSource.Object, domain, options, cacheDiagnostics);
+
+    /// <summary>
+    /// Creates a WindowCache instance backed by a <see cref="SpyDataSource"/>.
+    /// Used by integration tests that need a concrete (non-mock) data source with fetch recording.
+    /// </summary>
+    public static WindowCache<int, int, IntegerFixedStepDomain> CreateCache(
+        SpyDataSource dataSource,
+        IntegerFixedStepDomain domain,
+        WindowCacheOptions options,
+        EventCounterCacheDiagnostics cacheDiagnostics) =>
+        new(dataSource, domain, options, cacheDiagnostics);
 
     /// <summary>
     /// Creates a WindowCache with default options and returns both cache and mock data source.
@@ -341,7 +282,7 @@ public static class TestHelpers
     /// during range analysis (when determining what data needs to be fetched). They track planning, not actual
     /// cache mutations. This assertion verifies that User Path didn't call ExtendCacheAsync, which would
     /// increment these counters. Actual cache mutations (via Rematerialize) only occur in Rebalance Execution.
-    /// 
+    ///
     /// In test scenarios, prior rebalance operations typically expand the cache enough that subsequent
     /// User Path requests are full hits, avoiding calls to ExtendCacheAsync entirely.
     /// </remarks>
@@ -545,11 +486,11 @@ public static class TestHelpers
     /// <remarks>
     /// Decision Pipeline Stages:
     /// - Stage 1: Current NoRebalanceRange check → SkippedCurrentNoRebalanceRange
-    /// - Stage 2: Pending NoRebalanceRange check → SkippedPendingNoRebalanceRange  
+    /// - Stage 2: Pending NoRebalanceRange check → SkippedPendingNoRebalanceRange
     /// - Stage 3: DesiredCacheRange == CurrentCacheRange → SkippedSameRange
     /// - All stages pass → RebalanceScheduled
     /// - Intent superseded before decision → IntentCancelled
-    /// 
+    ///
     /// Execution Lifecycle:
     /// - Scheduled → ExecutionStarted (unless cancelled between scheduling and execution)
     /// - Started → (Completed | ExecutionCancelled | ExecutionFailed)

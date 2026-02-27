@@ -2,8 +2,8 @@
 using Intervals.NET.Data;
 using Intervals.NET.Data.Extensions;
 using Intervals.NET.Domain.Abstractions;
+using Intervals.NET.Extensions;
 using SlidingWindowCache.Infrastructure.Extensions;
-using SlidingWindowCache.Public.Configuration;
 
 namespace SlidingWindowCache.Infrastructure.Storage;
 
@@ -36,9 +36,6 @@ internal sealed class SnapshotReadStorage<TRange, TData, TDomain> : ICacheStorag
     {
         _domain = domain;
     }
-
-    /// <inheritdoc />
-    public UserCacheReadMode Mode => UserCacheReadMode.Snapshot;
 
     /// <inheritdoc />
     public Range<TRange> Range { get; private set; }

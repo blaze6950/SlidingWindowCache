@@ -68,8 +68,8 @@ internal readonly struct NoRebalanceRangePlanner<TRange, TDomain>
 
         return cacheRange.ExpandByRatio(
             domain: _domain,
-            leftRatio: -(_options.LeftThreshold ?? 0), // Negate to shrink
-            rightRatio: -(_options.RightThreshold ?? 0) // Negate to shrink
+            leftRatio: -leftThreshold, // Negate to shrink
+            rightRatio: -rightThreshold // Negate to shrink
         );
     }
 }

@@ -1,7 +1,6 @@
 using Intervals.NET.Data.Extensions;
 using Intervals.NET.Domain.Default.Numeric;
 using SlidingWindowCache.Infrastructure.Storage;
-using SlidingWindowCache.Public.Configuration;
 using SlidingWindowCache.Unit.Tests.Infrastructure.Extensions;
 using static SlidingWindowCache.Unit.Tests.Infrastructure.Storage.TestInfrastructure.StorageTestHelpers;
 
@@ -14,20 +13,6 @@ namespace SlidingWindowCache.Unit.Tests.Infrastructure.Storage;
 public class SnapshotReadStorageTests
 {
     #region Interface Contract Tests
-
-    [Fact]
-    public void Mode_ReturnsSnapshot()
-    {
-        // ARRANGE
-        var domain = CreateFixedStepDomain();
-        var storage = new SnapshotReadStorage<int, int, IntegerFixedStepDomain>(domain);
-
-        // ACT
-        var mode = storage.Mode;
-
-        // ASSERT
-        Assert.Equal(UserCacheReadMode.Snapshot, mode);
-    }
 
     [Fact]
     public void Range_InitiallyEmpty()

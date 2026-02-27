@@ -1,4 +1,4 @@
-﻿using Intervals.NET;
+using Intervals.NET;
 using Intervals.NET.Domain.Abstractions;
 using SlidingWindowCache.Core.Planning;
 using SlidingWindowCache.Core.Rebalance.Execution;
@@ -41,12 +41,12 @@ internal sealed class RebalanceDecisionEngine<TRange, TDomain>
     where TRange : IComparable<TRange>
     where TDomain : IRangeDomain<TRange>
 {
-    private readonly ThresholdRebalancePolicy<TRange, TDomain> _policy;
+    private readonly NoRebalanceSatisfactionPolicy<TRange> _policy;
     private readonly ProportionalRangePlanner<TRange, TDomain> _planner;
     private readonly NoRebalanceRangePlanner<TRange, TDomain> _noRebalancePlanner;
 
     public RebalanceDecisionEngine(
-        ThresholdRebalancePolicy<TRange, TDomain> policy,
+        NoRebalanceSatisfactionPolicy<TRange> policy,
         ProportionalRangePlanner<TRange, TDomain> planner,
         NoRebalanceRangePlanner<TRange, TDomain> noRebalancePlanner)
     {
@@ -60,8 +60,9 @@ internal sealed class RebalanceDecisionEngine<TRange, TDomain>
     /// This is the SOLE AUTHORITY for rebalance necessity determination.
     /// </summary>
     /// <param name="requestedRange">The range requested by the user.</param>
-    /// <param name="currentCacheState">The current cache state snapshot.</param>
-    /// <param name="lastExecutionRequest">The last rebalance execution request, if any.</param>
+    /// <param name="currentNoRebalanceRange">The no-rebalance range of the current cache state, or null if none.</param>
+    /// <param name="currentCacheRange">The range currently covered by the cache.</param>
+    /// <param name="pendingNoRebalanceRange">The desired no-rebalance range of the last pending execution request, or null if none.</param>
     /// <returns>A decision indicating whether to schedule rebalance with explicit reasoning.</returns>
     /// <remarks>
     /// <para><strong>Multi-Stage Validation Pipeline:</strong></para>
@@ -70,15 +71,16 @@ internal sealed class RebalanceDecisionEngine<TRange, TDomain>
     /// All stages must confirm necessity before rebalance is scheduled.
     /// </para>
     /// </remarks>
-    public RebalanceDecision<TRange> Evaluate<TData>(
+    public RebalanceDecision<TRange> Evaluate(
         Range<TRange> requestedRange,
-        CacheState<TRange, TData, TDomain> currentCacheState,
-        ExecutionRequest<TRange, TData, TDomain>? lastExecutionRequest)
+        Range<TRange>? currentNoRebalanceRange,
+        Range<TRange> currentCacheRange,
+        Range<TRange>? pendingNoRebalanceRange)
     {
         // Stage 1: Current Cache Stability Check (fast path)
         // If requested range is fully contained within current NoRebalanceRange, skip rebalancing
-        if (currentCacheState.NoRebalanceRange.HasValue &&
-            !_policy.ShouldRebalance(currentCacheState.NoRebalanceRange.Value, requestedRange))
+        if (currentNoRebalanceRange.HasValue &&
+            !_policy.ShouldRebalance(currentNoRebalanceRange.Value, requestedRange))
         {
             return RebalanceDecision<TRange>.Skip(RebalanceReason.WithinCurrentNoRebalanceRange);
         }
@@ -86,8 +88,8 @@ internal sealed class RebalanceDecisionEngine<TRange, TDomain>
         // Stage 2: Pending Rebalance Stability Check (anti-thrashing)
         // If there's a pending rebalance AND requested range will be covered by its NoRebalanceRange,
         // skip scheduling a new rebalance to avoid cancellation storms
-        if (lastExecutionRequest?.DesiredNoRebalanceRange != null &&
-            !_policy.ShouldRebalance(lastExecutionRequest.DesiredNoRebalanceRange.Value, requestedRange))
+        if (pendingNoRebalanceRange.HasValue &&
+            !_policy.ShouldRebalance(pendingNoRebalanceRange.Value, requestedRange))
         {
             return RebalanceDecision<TRange>.Skip(RebalanceReason.WithinPendingNoRebalanceRange);
         }
@@ -99,7 +101,6 @@ internal sealed class RebalanceDecisionEngine<TRange, TDomain>
 
         // Stage 4: Equality Short Circuit
         // If desired range matches current cache range, no mutation needed
-        var currentCacheRange = currentCacheState.Cache.Range;
         if (desiredCacheRange.Equals(currentCacheRange))
         {
             return RebalanceDecision<TRange>.Skip(RebalanceReason.DesiredEqualsCurrent);

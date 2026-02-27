@@ -224,7 +224,7 @@ internal sealed class TaskBasedRebalanceExecutionController<TRange, TData, TDoma
 
         // Chain execution to previous task (lock-free using volatile write - single-writer context)
         // Read current task, create new chained task, and update atomically
-        var previousTask = _currentExecutionTask;
+        var previousTask = Volatile.Read(ref _currentExecutionTask);
         var newTask = ChainExecutionAsync(previousTask, request);
         Volatile.Write(ref _currentExecutionTask, newTask);
 
@@ -309,8 +309,10 @@ internal sealed class TaskBasedRebalanceExecutionController<TRange, TData, TDoma
     {
         _cacheDiagnostics.RebalanceExecutionStarted();
 
-        var (intent, desiredRange, desiredNoRebalanceRange, cancellationTokenSource) = request;
-        var cancellationToken = cancellationTokenSource.Token;
+        var intent = request.Intent;
+        var desiredRange = request.DesiredRange;
+        var desiredNoRebalanceRange = request.DesiredNoRebalanceRange;
+        var cancellationToken = request.CancellationToken;
 
         try
         {
@@ -320,6 +322,11 @@ internal sealed class TaskBasedRebalanceExecutionController<TRange, TData, TDoma
                 .ConfigureAwait(false);
 
             // Step 2: Check cancellation after debounce - avoid wasted I/O work
+            // NOTE: We check IsCancellationRequested explicitly here rather than relying solely on the
+            // OperationCanceledException catch below. Task.Delay can complete normally just as cancellation
+            // is signalled (a race), so we may reach here with cancellation requested but no exception thrown.
+            // This explicit check provides a clean diagnostic event path (RebalanceExecutionCancelled) for
+            // that case, separate from the exception-based cancellation path in the catch block below.
             if (cancellationToken.IsCancellationRequested)
             {
                 _cacheDiagnostics.RebalanceExecutionCancelled();
@@ -398,7 +405,7 @@ internal sealed class TaskBasedRebalanceExecutionController<TRange, TData, TDoma
         }
 
         // Cancel last execution request (signals early exit)
-        _lastExecutionRequest?.Cancel();
+        Volatile.Read(ref _lastExecutionRequest)?.Cancel();
 
         // Capture current task chain reference (volatile read - no lock needed)
         var currentTask = Volatile.Read(ref _currentExecutionTask);
@@ -417,6 +424,6 @@ internal sealed class TaskBasedRebalanceExecutionController<TRange, TData, TDoma
         }
 
         // Dispose last execution request if present
-        _lastExecutionRequest?.Dispose();
+        Volatile.Read(ref _lastExecutionRequest)?.Dispose();
     }
 }

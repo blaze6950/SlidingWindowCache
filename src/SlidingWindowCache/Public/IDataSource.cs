@@ -8,10 +8,10 @@ namespace SlidingWindowCache.Public;
 /// Implementations must provide a method to fetch data for a single range.
 /// The batch fetching method has a default implementation that can be overridden for optimization.
 /// </summary>
-/// <typeparam name="TRangeType">
+/// <typeparam name="TRange">
 /// The type representing range boundaries. Must implement <see cref="IComparable{T}"/>.
 /// </typeparam>
-/// <typeparam name="TDataType">
+/// <typeparam name="TData">
 /// The type of data being fetched.
 /// </typeparam>
 /// <remarks>
@@ -52,7 +52,7 @@ namespace SlidingWindowCache.Public;
 /// }
 /// </code>
 /// </remarks>
-public interface IDataSource<TRangeType, TDataType> where TRangeType : IComparable<TRangeType>
+public interface IDataSource<TRange, TData> where TRange : IComparable<TRange>
 {
     /// <summary>
     /// Fetches data for the specified range asynchronously.
@@ -65,7 +65,7 @@ public interface IDataSource<TRangeType, TDataType> where TRangeType : IComparab
     /// </param>
     /// <returns>
     /// A task that represents the asynchronous fetch operation. 
-    /// The task result contains an enumerable of data of type <typeparamref name="TDataType"/> 
+    /// The task result contains an enumerable of data of type <typeparamref name="TData"/> 
     /// for the specified range.
     /// </returns>
     /// <remarks>
@@ -104,8 +104,8 @@ public interface IDataSource<TRangeType, TDataType> where TRangeType : IComparab
     /// </code>
     /// <para>See documentation on boundary handling for detailed guidance.</para>
     /// </remarks>
-    Task<RangeChunk<TRangeType, TDataType>> FetchAsync(
-        Range<TRangeType> range,
+    Task<RangeChunk<TRange, TData>> FetchAsync(
+        Range<TRange> range,
         CancellationToken cancellationToken
     );
 
@@ -121,14 +121,14 @@ public interface IDataSource<TRangeType, TDataType> where TRangeType : IComparab
     /// </param>
     /// <returns>
     /// A task that represents the asynchronous fetch operation. 
-    /// The task result contains an enumerable of <see cref="RangeChunk{TRangeType,TDataType}"/> 
+    /// The task result contains an enumerable of <see cref="RangeChunk{TRange,TData}"/> 
     /// for the specified ranges. Each RangeChunk may have a null Range if no data is available.
     /// </returns>
     /// <remarks>
     /// <para><strong>Default Behavior:</strong></para>
     /// <para>
     /// The default implementation fetches each range in parallel by calling 
-    /// <see cref="FetchAsync(Range{TRangeType}, CancellationToken)"/> for each range.
+    /// <see cref="FetchAsync(Range{TRange}, CancellationToken)"/> for each range.
     /// This provides automatic parallelization without additional implementation effort.
     /// </para>
     /// <para><strong>When to Override:</strong></para>
@@ -147,8 +147,8 @@ public interface IDataSource<TRangeType, TDataType> where TRangeType : IComparab
     /// truncated ranges for partial availability).
     /// </para>
     /// </remarks>
-    async Task<IEnumerable<RangeChunk<TRangeType, TDataType>>> FetchAsync(
-        IEnumerable<Range<TRangeType>> ranges,
+    async Task<IEnumerable<RangeChunk<TRange, TData>>> FetchAsync(
+        IEnumerable<Range<TRange>> ranges,
         CancellationToken cancellationToken
     )
     {

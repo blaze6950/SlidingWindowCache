@@ -3,7 +3,7 @@
 /// <summary>
 /// No-op implementation of ICacheDiagnostics for production use where performance is critical and diagnostics are not needed.
 /// </summary>
-public class NoOpDiagnostics : ICacheDiagnostics
+public sealed class NoOpDiagnostics : ICacheDiagnostics
 {
     /// <inheritdoc/>
     public void CacheExpanded()
