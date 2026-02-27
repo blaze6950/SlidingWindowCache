@@ -79,7 +79,6 @@ internal sealed class CacheState<TRange, TData, TDomain>
     /// This is the ONLY method that may write to the mutable fields on this class.
     /// </summary>
     /// <param name="normalizedData">The normalized range data to write into storage.</param>
-    /// <param name="requestedRange">The original range requested by the user; used to populate the storage and mark the cache as initialized.</param>
     /// <param name="noRebalanceRange">The pre-computed no-rebalance range for the new state.</param>
     /// <remarks>
     /// <para><strong>Single-Writer Contract:</strong></para>
@@ -91,7 +90,6 @@ internal sealed class CacheState<TRange, TData, TDomain>
     /// </remarks>
     internal void UpdateCacheState(
         Intervals.NET.Data.RangeData<TRange, TData, TDomain> normalizedData,
-        Range<TRange> requestedRange,
         Range<TRange>? noRebalanceRange)
     {
         Storage.Rematerialize(normalizedData);

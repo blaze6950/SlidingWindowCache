@@ -1,4 +1,3 @@
-using Intervals.NET;
 using Intervals.NET.Domain.Default.Numeric;
 using SlidingWindowCache.Tests.Infrastructure.DataSources;
 using SlidingWindowCache.Public;
@@ -257,10 +256,6 @@ public class RebalanceExceptionHandlingTests : IDisposable
         }
 
         public void RebalanceIntentPublished()
-        {
-        }
-
-        public void RebalanceIntentCancelled()
         {
         }
 

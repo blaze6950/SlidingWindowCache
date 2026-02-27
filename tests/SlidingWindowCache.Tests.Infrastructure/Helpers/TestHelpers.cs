@@ -309,7 +309,7 @@ public static class TestHelpers
     }
 
     /// <summary>
-    /// Asserts that rebalance was cancelled (at either intent or execution stage).
+    /// Asserts that rebalance execution was cancelled.
     /// </summary>
     /// <remarks>
     /// <para>
@@ -319,38 +319,20 @@ public static class TestHelpers
     /// tracked in the lifecycle.
     /// </para>
     /// <para>
-    /// Due to timing, cancellation can occur at two distinct lifecycle points:
-    /// </para>
-    /// <list type="number">
-    /// <item>
-    /// <description><strong>Intent-level cancellation</strong>: When a new request arrives while the previous
-    /// rebalance is still in debounce delay (before execution starts). This increments
-    /// <see cref="EventCounterCacheDiagnostics.RebalanceIntentCancelled"/>.</description>
-    /// </item>
-    /// <item>
-    /// <description><strong>Execution-level cancellation</strong>: When a new request arrives after the debounce
-    /// delay completed and execution has started. This increments
-    /// <see cref="EventCounterCacheDiagnostics.RebalanceExecutionCancelled"/>.</description>
-    /// </item>
-    /// </list>
-    /// <para>
-    /// This method checks the <strong>total</strong> cancellations across both stages, making assertions
-    /// stable regardless of timing variations. Most tests care that cancellation occurred, not the
-    /// specific lifecycle stage where it happened.
+    /// Cancellation occurs when a new request arrives after the debounce delay completed and execution
+    /// has started. This increments <see cref="EventCounterCacheDiagnostics.RebalanceExecutionCancelled"/>.
     /// </para>
     /// </remarks>
     /// <param name="cacheDiagnostics">
-    /// The diagnostics instance to check for cancellation counts. The method will sum both intent and execution cancellations to determine if the expected number of cancellations occurred.
+    /// The diagnostics instance to check for cancellation counts.
     /// </param>
-    /// <param name="minExpected">Minimum number of total cancellations expected (default: 1).</param>
+    /// <param name="minExpected">Minimum number of execution cancellations expected (default: 1).</param>
     public static void AssertRebalancePathCancelled(EventCounterCacheDiagnostics cacheDiagnostics, int minExpected = 1)
     {
-        var totalCancelled = cacheDiagnostics.RebalanceIntentCancelled +
-                             cacheDiagnostics.RebalanceExecutionCancelled;
+        var totalCancelled = cacheDiagnostics.RebalanceExecutionCancelled;
         Assert.True(totalCancelled >= minExpected,
-            $"At least {minExpected} cancellation(s) expected (intent or execution), but actual count was {totalCancelled} " +
-            $"(IntentCancelled: {cacheDiagnostics.RebalanceIntentCancelled}, " +
-            $"ExecutionCancelled: {cacheDiagnostics.RebalanceExecutionCancelled})");
+            $"At least {minExpected} cancellation(s) expected, but actual count was {totalCancelled} " +
+            $"(ExecutionCancelled: {cacheDiagnostics.RebalanceExecutionCancelled})");
     }
 
     /// <summary>
@@ -502,14 +484,13 @@ public static class TestHelpers
         var skippedStage1 = cacheDiagnostics.RebalanceSkippedCurrentNoRebalanceRange;
         var skippedStage2 = cacheDiagnostics.RebalanceSkippedPendingNoRebalanceRange;
         var skippedStage3 = cacheDiagnostics.RebalanceSkippedSameRange;
-        var intentCancelled = cacheDiagnostics.RebalanceIntentCancelled;
 
         // Decision phase: All intents must be accounted for
-        var totalDecisionOutcomes = scheduled + skippedStage1 + skippedStage2 + skippedStage3 + intentCancelled;
+        var totalDecisionOutcomes = scheduled + skippedStage1 + skippedStage2 + skippedStage3;
         Assert.True(totalDecisionOutcomes <= intentPublished,
             $"Decision outcomes ({totalDecisionOutcomes}) cannot exceed intents published ({intentPublished}). " +
             $"Breakdown: Scheduled={scheduled}, SkippedStage1={skippedStage1}, SkippedStage2={skippedStage2}, " +
-            $"SkippedStage3={skippedStage3}, IntentCancelled={intentCancelled}");
+            $"SkippedStage3={skippedStage3}");
 
         // Execution phase: Verify lifecycle integrity
         AssertRebalanceLifecycleIntegrity(cacheDiagnostics);

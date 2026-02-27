@@ -131,15 +131,6 @@ public interface ICacheDiagnostics
     /// </summary>
     void RebalanceIntentPublished();
 
-    /// <summary>
-    /// Records cancellation of a rebalance intent before or during execution.
-    /// Called when a new user request arrives and cancels the previous intent's CancellationToken, or when intent becomes obsolete during debounce delay.
-    /// Indicates single-flight execution pattern and priority enforcement (User Path cancels Rebalance).
-    /// Location: RebalanceScheduler (three scenarios: cancellation during debounce, cancellation before decision, cancellation during execution)
-    /// Related: Invariant A.0 (User Path priority), Invariant A.0a (User Request must cancel ongoing rebalance), Invariant C.20 (Obsolete intent must not start)
-    /// </summary>
-    void RebalanceIntentCancelled();
-
     // ============================================================================
     // REBALANCE EXECUTION LIFECYCLE COUNTERS
     // ============================================================================
@@ -148,7 +139,7 @@ public interface ICacheDiagnostics
     /// Records the start of rebalance execution after decision engine approves execution.
     /// Called when DecisionEngine determines rebalance is necessary (RequestedRange outside NoRebalanceRange and DesiredCacheRange != CurrentCacheRange).
     /// Indicates transition from Decision Path to Execution Path (Decision Scenario D3).
-    /// Location: RebalanceScheduler.ExecutePipelineAsync (after decision approval, before executor invocation)
+    /// Location: TaskBasedRebalanceExecutionController.ExecuteRequestAsync / ChannelBasedRebalanceExecutionController.ProcessExecutionRequestsAsync (before executor invocation)
     /// Related: Invariant 28 (Rebalance triggered only if confirmed necessary)
     /// </summary>
     void RebalanceExecutionStarted();
@@ -166,7 +157,7 @@ public interface ICacheDiagnostics
     /// Records cancellation of rebalance execution due to a new user request or intent supersession.
     /// Called when intentToken is cancelled during rebalance execution (after execution started but before completion).
     /// Indicates User Path priority enforcement and single-flight execution (yielding to new requests).
-    /// Location: RebalanceScheduler.ExecutePipelineAsync (catch OperationCanceledException during execution)
+    /// Location: TaskBasedRebalanceExecutionController.ExecuteRequestAsync / ChannelBasedRebalanceExecutionController.ProcessExecutionRequestsAsync (catch OperationCanceledException during execution)
     /// Related: Invariant 34a (Rebalance Execution must yield to User Path immediately)
     /// </summary>
     void RebalanceExecutionCancelled();
@@ -293,7 +284,7 @@ public interface ICacheDiagnostics
     /// }
     /// </code>
     /// <para>
-    /// Location: RebalanceScheduler.ExecutePipelineAsync (catch block around ExecuteAsync)
+    /// Location: TaskBasedRebalanceExecutionController.ExecuteRequestAsync / ChannelBasedRebalanceExecutionController.ProcessExecutionRequestsAsync (catch block around ExecuteAsync)
     /// </para>
     /// </remarks>
     void RebalanceExecutionFailed(Exception ex);

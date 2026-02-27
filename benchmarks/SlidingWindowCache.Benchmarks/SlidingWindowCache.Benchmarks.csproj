@@ -8,6 +8,10 @@
         <OutputType>Exe</OutputType>
     </PropertyGroup>
 
+    <PropertyGroup>
+      <ExcludeFromCodeCoverage>true</ExcludeFromCodeCoverage>
+    </PropertyGroup>
+
     <ItemGroup>
         <PackageReference Include="BenchmarkDotNet" Version="0.13.12" />
         <PackageReference Include="Intervals.NET.Data" Version="0.0.1" />

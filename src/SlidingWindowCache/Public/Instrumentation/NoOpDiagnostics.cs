@@ -46,11 +46,6 @@ public sealed class NoOpDiagnostics : ICacheDiagnostics
     }
 
     /// <inheritdoc/>
-    public void RebalanceIntentCancelled()
-    {
-    }
-
-    /// <inheritdoc/>
     public void RebalanceIntentPublished()
     {
     }

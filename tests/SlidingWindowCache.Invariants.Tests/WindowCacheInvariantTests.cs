@@ -318,6 +318,8 @@ public sealed class WindowCacheInvariantTests : IAsyncDisposable
         string storageName, UserCacheReadMode readMode)
     {
         // ARRANGE
+        _ = scenario;
+        _ = storageName;
         var options = TestHelpers.CreateDefaultOptions(
             debounceDelay: TimeSpan.FromMilliseconds(50),
             readMode: readMode);
@@ -1100,6 +1102,7 @@ public sealed class WindowCacheInvariantTests : IAsyncDisposable
     public async Task Invariant_F36a_RebalanceNormalizesCache(string storageName, UserCacheReadMode readMode)
     {
         // ARRANGE
+        _ = storageName;
         var options = TestHelpers.CreateDefaultOptions(
             leftCacheSize: 1.0,
             rightCacheSize: 1.0,
@@ -1134,6 +1137,7 @@ public sealed class WindowCacheInvariantTests : IAsyncDisposable
     public async Task Invariant_F40_F41_F42_PostExecutionGuarantees(string storageName, UserCacheReadMode readMode)
     {
         // ARRANGE
+        _ = storageName;
         var options = TestHelpers.CreateDefaultOptions(
             leftCacheSize: 1.0,
             rightCacheSize: 1.0,

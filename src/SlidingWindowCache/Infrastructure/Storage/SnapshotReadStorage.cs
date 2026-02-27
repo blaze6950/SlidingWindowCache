@@ -2,7 +2,6 @@
 using Intervals.NET.Data;
 using Intervals.NET.Data.Extensions;
 using Intervals.NET.Domain.Abstractions;
-using Intervals.NET.Extensions;
 using SlidingWindowCache.Infrastructure.Extensions;
 
 namespace SlidingWindowCache.Infrastructure.Storage;
@@ -48,6 +47,15 @@ internal sealed class SnapshotReadStorage<TRange, TData, TDomain> : ICacheStorag
     {
         // Always allocate a new array, even if the size is unchanged
         // This is the trade-off of the Snapshot mode
+        //
+        // Write ordering is intentional and critical for thread safety:
+        //   1. Range is written first (plain store, no fence)
+        //   2. _storage is written second as a volatile store (release fence)
+        //
+        // The volatile store on _storage acts as a release fence for ALL preceding stores,
+        // including Range. The user thread's volatile read of _storage (in Read()) acts as
+        // an acquire fence, guaranteeing it observes the Range value written before the
+        // volatile store. This is correct and safe under .NET's memory model.
         Range = rangeData.Range;
         _storage = rangeData.Data.ToArray();
     }

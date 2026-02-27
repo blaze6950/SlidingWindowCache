@@ -1,5 +1,4 @@
-﻿using Intervals.NET;
-using Intervals.NET.Domain.Abstractions;
+﻿using Intervals.NET.Domain.Abstractions;
 using SlidingWindowCache.Core.Rebalance.Decision;
 using SlidingWindowCache.Core.Rebalance.Execution;
 using SlidingWindowCache.Core.State;

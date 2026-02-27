@@ -11,7 +11,6 @@ public sealed class EventCounterCacheDiagnostics : ICacheDiagnostics
     private int _cacheExpanded;
     private int _cacheReplaced;
     private int _rebalanceIntentPublished;
-    private int _rebalanceIntentCancelled;
     private int _rebalanceExecutionStarted;
     private int _rebalanceExecutionCompleted;
     private int _rebalanceExecutionCancelled;
@@ -37,7 +36,6 @@ public sealed class EventCounterCacheDiagnostics : ICacheDiagnostics
     public int DataSourceFetchMissingSegments => _dataSourceFetchMissingSegments;
     public int DataSegmentUnavailable => _dataSegmentUnavailable;
     public int RebalanceIntentPublished => _rebalanceIntentPublished;
-    public int RebalanceIntentCancelled => _rebalanceIntentCancelled;
     public int RebalanceExecutionStarted => _rebalanceExecutionStarted;
     public int RebalanceExecutionCompleted => _rebalanceExecutionCompleted;
     public int RebalanceExecutionCancelled => _rebalanceExecutionCancelled;
@@ -72,9 +70,6 @@ public sealed class EventCounterCacheDiagnostics : ICacheDiagnostics
 
     /// <inheritdoc/>
     void ICacheDiagnostics.RebalanceExecutionStarted() => Interlocked.Increment(ref _rebalanceExecutionStarted);
-
-    /// <inheritdoc/>
-    void ICacheDiagnostics.RebalanceIntentCancelled() => Interlocked.Increment(ref _rebalanceIntentCancelled);
 
     /// <inheritdoc/>
     void ICacheDiagnostics.RebalanceIntentPublished() => Interlocked.Increment(ref _rebalanceIntentPublished);
@@ -130,7 +125,6 @@ public sealed class EventCounterCacheDiagnostics : ICacheDiagnostics
         Volatile.Write(ref _cacheExpanded, 0);
         Volatile.Write(ref _cacheReplaced, 0);
         Volatile.Write(ref _rebalanceIntentPublished, 0);
-        Volatile.Write(ref _rebalanceIntentCancelled, 0);
         Volatile.Write(ref _rebalanceExecutionStarted, 0);
         Volatile.Write(ref _rebalanceExecutionCompleted, 0);
         Volatile.Write(ref _rebalanceExecutionCancelled, 0);

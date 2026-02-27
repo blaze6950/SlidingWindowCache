@@ -1,5 +1,4 @@
 ﻿using Intervals.NET;
-using Intervals.NET.Data;
 using Intervals.NET.Domain.Abstractions;
 using SlidingWindowCache.Core.Rebalance.Intent;
 using SlidingWindowCache.Core.State;
@@ -105,7 +104,7 @@ internal sealed class RebalanceExecutor<TRange, TData, TDomain>
         cancellationToken.ThrowIfCancellationRequested();
 
         // Phase 3: Apply cache state mutations (single writer — all fields updated atomically)
-        _state.UpdateCacheState(normalizedData, intent.RequestedRange, desiredNoRebalanceRange);
+        _state.UpdateCacheState(normalizedData, desiredNoRebalanceRange);
 
         _cacheDiagnostics.RebalanceExecutionCompleted();
     }

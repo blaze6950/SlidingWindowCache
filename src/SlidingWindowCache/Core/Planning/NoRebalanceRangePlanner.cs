@@ -51,7 +51,7 @@ internal readonly struct NoRebalanceRangePlanner<TRange, TDomain>
     /// - Left threshold shrinks from the left boundary inward
     /// - Right threshold shrinks from the right boundary inward
     /// This creates a "stability zone" where requests don't trigger rebalancing.
-    /// Returns null when individual thresholds are >= 1.0, which would completely eliminate the no-rebalance range.
+        /// Returns null when the sum of left and right thresholds is >= 1.0, which would completely eliminate the no-rebalance range.
     /// Note: WindowCacheOptions constructor ensures leftThreshold + rightThreshold does not exceed 1.0.
     /// </remarks>
     public Range<TRange>? Plan(Range<TRange> cacheRange)
