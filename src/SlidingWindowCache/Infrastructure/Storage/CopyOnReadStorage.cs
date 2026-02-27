@@ -1,4 +1,4 @@
-﻿using Intervals.NET;
+using Intervals.NET;
 using Intervals.NET.Data;
 using Intervals.NET.Data.Extensions;
 using Intervals.NET.Domain.Abstractions;
@@ -26,18 +26,33 @@ namespace SlidingWindowCache.Infrastructure.Storage;
 /// This storage maintains two internal lists:
 /// </para>
 /// <list type="bullet">
-/// <item><description><c>_activeStorage</c> - Immutable during reads, used for serving data</description></item>
-/// <item><description><c>_stagingBuffer</c> - Write-only during rematerialization, reused across operations</description></item>
+/// <item><description><c>_activeStorage</c> - Serves data to <c>Read()</c> operations; never mutated during reads</description></item>
+/// <item><description><c>_stagingBuffer</c> - Write-only during rematerialization; reused across operations</description></item>
 /// </list>
 /// <para><strong>Rematerialization Process:</strong></para>
 /// <list type="number">
+/// <item><description>Acquire <c>_lock</c></description></item>
 /// <item><description>Clear staging buffer (preserves capacity)</description></item>
 /// <item><description>Enumerate incoming range data into staging buffer (single-pass)</description></item>
-/// <item><description>Atomically swap staging buffer with active storage</description></item>
+/// <item><description>Swap staging buffer with active storage</description></item>
+/// <item><description>Update <c>Range</c> to reflect new active storage</description></item>
+/// <item><description>Release <c>_lock</c></description></item>
 /// </list>
 /// <para>
-/// This ensures that active storage is never mutated during enumeration, preventing correctness issues
-/// when range data is derived from the same storage (e.g., during cache expansion per Invariant A.3.8).
+/// This ensures that active storage is never observed mid-swap by a concurrent <c>Read()</c> call,
+/// preventing data races when range data is derived from the same storage (e.g., during cache expansion
+/// per Invariant A.3.8).
+/// </para>
+/// <para><strong>Synchronization:</strong></para>
+/// <para>
+/// <c>Read()</c> and <c>Rematerialize()</c> share a single <c>_lock</c> object.
+/// This is the accepted trade-off for buffer reuse: contention is bounded to the duration of a
+/// single <c>Rematerialize()</c> call (a sub-millisecond linear copy), not the full rebalance cycle.
+/// <c>ToRangeData()</c> is only called by the rebalance path (the same thread as <c>Rematerialize()</c>)
+/// and is therefore not synchronized.
+/// </para>
+/// <para>
+/// See Invariant A.2 for the conditional compliance note regarding this lock.
 /// </para>
 /// <para><strong>Memory Behavior:</strong></para>
 /// <list type="bullet">
@@ -48,8 +63,8 @@ namespace SlidingWindowCache.Infrastructure.Storage;
 /// </list>
 /// <para><strong>Read Behavior:</strong></para>
 /// <para>
-/// Each read operation allocates a new array and copies data from active storage (copy-on-read semantics).
-/// This is a trade-off for cheaper rematerialization compared to Snapshot mode.
+/// Each read operation acquires the lock, allocates a new array, and copies data from active storage
+/// (copy-on-read semantics). This is a trade-off for cheaper rematerialization compared to Snapshot mode.
 /// </para>
 /// <para><strong>When to Use:</strong></para>
 /// <list type="bullet">
@@ -65,10 +80,14 @@ internal sealed class CopyOnReadStorage<TRange, TData, TDomain> : ICacheStorage<
 {
     private readonly TDomain _domain;
 
-    // Active storage: immutable during reads, serves data to Read() operations
+    // Shared lock: acquired by both Read() and Rematerialize() to prevent observation of mid-swap state.
+    // ToRangeData() is not synchronized because it is only called from the rebalance path.
+    private readonly object _lock = new();
+
+    // Active storage: serves data to Read() operations; never mutated while _lock is held by Read()
     private List<TData> _activeStorage = [];
 
-    // Staging buffer: write-only during rematerialization, reused across operations
+    // Staging buffer: write-only during Rematerialize(); reused across operations
     // This buffer may grow but never shrinks, amortizing allocation cost
     private List<TData> _stagingBuffer = [];
 
@@ -93,15 +112,24 @@ internal sealed class CopyOnReadStorage<TRange, TData, TDomain> : ICacheStorage<
     /// This method implements a dual-buffer pattern to satisfy Invariants A.3.8, B.11-12:
     /// </para>
     /// <list type="number">
+    /// <item><description>Acquire <c>_lock</c> (shared with <c>Read()</c>)</description></item>
     /// <item><description>Clear staging buffer (preserves capacity for reuse)</description></item>
     /// <item><description>Enumerate range data into staging buffer (single-pass, no double enumeration)</description></item>
-    /// <item><description>Atomically swap buffers: staging becomes active, old active becomes staging</description></item>
+    /// <item><description>Swap buffers: staging becomes active, old active becomes staging</description></item>
+    /// <item><description>Update <c>Range</c> to reflect new active storage</description></item>
     /// </list>
     /// <para>
     /// <strong>Why this pattern?</strong> When <paramref name="rangeData"/> contains data derived from
     /// the same storage (e.g., during cache expansion via LINQ operations like Concat/Union), direct
     /// mutation of active storage would corrupt the enumeration. The staging buffer ensures active
-    /// storage remains immutable during enumeration, satisfying Invariant A.3.9a (cache contiguity).
+    /// storage remains unchanged during enumeration, satisfying Invariant A.3.9a (cache contiguity).
+    /// </para>
+    /// <para>
+    /// <strong>Why the lock?</strong> The buffer swap consists of two separate field writes, which are
+    /// not atomic at the CPU level. Without the lock, a concurrent <c>Read()</c> on the User thread could
+    /// observe <c>_activeStorage</c> mid-swap (new list reference but stale <c>Range</c>, or vice versa),
+    /// producing incorrect results. The lock eliminates this window. Contention is bounded to the duration
+    /// of this method call, not the full rebalance cycle.
     /// </para>
     /// <para>
     /// <strong>Memory efficiency:</strong> The staging buffer reuses capacity across rematerializations,
@@ -111,97 +139,73 @@ internal sealed class CopyOnReadStorage<TRange, TData, TDomain> : ICacheStorage<
     /// </remarks>
     public void Rematerialize(RangeData<TRange, TData, TDomain> rangeData)
     {
-        // Clear staging buffer (preserves capacity for reuse)
-        _stagingBuffer.Clear();
+        // Enumerate incoming data BEFORE acquiring the lock.
+        // rangeData.Data may be a lazy LINQ chain over _activeStorage (e.g., during cache expansion).
+        // Holding the lock during enumeration would block concurrent Read() calls for the full
+        // enumeration duration. Instead, we materialize into a local staging buffer first, then
+        // acquire the lock only for the fast swap operation.
+        _stagingBuffer.Clear();                        // Preserves capacity
+        _stagingBuffer.AddRange(rangeData.Data);       // Single-pass enumeration outside the lock
 
-        // Single-pass enumeration: materialize incoming range data into staging buffer
-        // This is safe even if rangeData.Data is based on _activeStorage (e.g., LINQ chains during expansion)
-        // because we never mutate _activeStorage during enumeration
-        _stagingBuffer.AddRange(rangeData.Data);
-
-        // Atomically swap buffers: staging becomes active, old active becomes staging for next use
-        // This swap is the only point where active storage is replaced, satisfying Invariant B.12 (atomic changes)
-        //
-        // TODO: Known race condition between Read() and Rematerialize():
-        // Read() and Rematerialize() can overlap — Read() is called on the User thread while Rematerialize()
-        // runs on the Rebalance Execution thread. The tuple-swap here ( (_activeStorage, _stagingBuffer) = ... )
-        // is NOT atomic at the CPU level: it is two separate field writes. A concurrent Read() could observe
-        // _activeStorage mid-swap, seeing the new reference for _activeStorage but old data for Range (or vice versa).
-        // This is a real data race.
-        //
-        // All known fix approaches share the same fundamental race:
-        //   - Making _activeStorage volatile only fixes visibility, not atomicity of the two-field update.
-        //   - Wrapping both fields in a single holder object and replacing the holder via Interlocked.Exchange
-        //     would achieve atomic reference replacement, but at the cost of allocating a new holder object on
-        //     every Rematerialize() call and losing the buffer-reuse advantage that is CopyOnReadStorage's
-        //     primary design goal.
-        //   - Using a lock on both Read() and Rematerialize() would be correct but violates the lock-free
-        //     User Path requirement (Invariant A.2: User Path must never block on rebalance operations).
-        //
-        // The race is accepted as-is because:
-        //   1. WindowCache is designed for a single logical consumer (single coherent access pattern).
-        //      The User thread and Rebalance thread have an implicit ordering: Rematerialize() is only
-        //      called after data is fetched, which only happens after a user request triggers a rebalance.
-        //   2. In practice, the window of inconsistency is sub-microsecond (two field writes), and the
-        //      observable effect (slightly stale data on one read) is within the "smart eventual consistency"
-        //      model that WindowCache guarantees.
-        //   3. Fixing it cleanly would require either accepting per-Rematerialize allocations (defeating
-        //      CopyOnReadStorage's purpose) or violating the lock-free User Path invariant.
-        //
-        // If strict atomic swap is required, use SnapshotReadStorage instead (allocates a new array per
-        // Rematerialize but achieves safe reference replacement via a single field write to _data).
-        (_activeStorage, _stagingBuffer) = (_stagingBuffer, _activeStorage);
-
-        // Update range to reflect new active storage (part of atomic change)
-        Range = rangeData.Range;
+        lock (_lock)
+        {
+            // Swap buffers: staging (now filled) becomes active; old active becomes staging for next use.
+            // Range update is inside the lock so Read() always observes a consistent (list, Range) pair.
+            // There is no case when during Read the read buffer is changed due to lock.
+            (_activeStorage, _stagingBuffer) = (_stagingBuffer, _activeStorage);
+            Range = rangeData.Range;
+        }
     }
 
     /// <inheritdoc />
     /// <remarks>
     /// <para><strong>Copy-on-Read Semantics:</strong></para>
     /// <para>
-    /// Each read allocates a new array and copies the requested data from active storage.
-    /// This is the trade-off for cheaper rematerialization: reads are more expensive,
-    /// but rematerialization avoids allocating a new backing array each time.
+    /// Each read acquires <c>_lock</c>, allocates a new array, and copies the requested data from
+    /// active storage. The lock prevents observing active storage mid-swap during a concurrent
+    /// <c>Rematerialize()</c> call, ensuring the returned data is always consistent with <c>Range</c>.
     /// </para>
     /// <para>
-    /// Active storage is immutable during this operation, ensuring correctness within
-    /// the single-consumer model (Invariant A.1-1: no concurrent execution).
+    /// This is the trade-off for cheaper rematerialization: reads are more expensive (lock + alloc + copy),
+    /// but rematerialization avoids allocating a new backing array each time.
     /// </para>
     /// </remarks>
     public ReadOnlyMemory<TData> Read(Range<TRange> range)
     {
-        if (_activeStorage.Count == 0)
+        lock (_lock)
         {
-            return ReadOnlyMemory<TData>.Empty;
+            if (_activeStorage.Count == 0)
+            {
+                return ReadOnlyMemory<TData>.Empty;
+            }
+
+            // Validate that the requested range is within the stored range
+            if (!Range.Contains(range))
+            {
+                throw new ArgumentOutOfRangeException(nameof(range),
+                    $"Requested range {range} is not contained within the cached range {Range}");
+            }
+
+            // Calculate the offset and length for the requested range
+            var startOffset = _domain.Distance(Range.Start.Value, range.Start.Value);
+            var length = (int)range.Span(_domain);
+
+            // Validate bounds before accessing storage
+            if (startOffset < 0 || length < 0 || (int)startOffset + length > _activeStorage.Count)
+            {
+                throw new ArgumentOutOfRangeException(nameof(range),
+                    $"Calculated offset {startOffset} and length {length} exceed storage bounds (storage count: {_activeStorage.Count})");
+            }
+
+            // Allocate a new array and copy the requested data (copy-on-read semantics)
+            var result = new TData[length];
+            for (var i = 0; i < length; i++)
+            {
+                result[i] = _activeStorage[(int)startOffset + i];
+            }
+
+            return new ReadOnlyMemory<TData>(result);
         }
-
-        // Validate that the requested range is within the stored range
-        if (!Range.Contains(range))
-        {
-            throw new ArgumentOutOfRangeException(nameof(range),
-                $"Requested range {range} is not contained within the cached range {Range}");
-        }
-
-        // Calculate the offset and length for the requested range
-        var startOffset = _domain.Distance(Range.Start.Value, range.Start.Value);
-        var length = (int)range.Span(_domain);
-
-        // Validate bounds before accessing storage
-        if (startOffset < 0 || length < 0 || (int)startOffset + length > _activeStorage.Count)
-        {
-            throw new ArgumentOutOfRangeException(nameof(range),
-                $"Calculated offset {startOffset} and length {length} exceed storage bounds (storage count: {_activeStorage.Count})");
-        }
-
-        // Allocate a new array and copy the requested data (copy-on-read semantics)
-        var result = new TData[length];
-        for (var i = 0; i < length; i++)
-        {
-            result[i] = _activeStorage[(int)startOffset + i];
-        }
-
-        return new ReadOnlyMemory<TData>(result);
     }
 
     /// <inheritdoc />
@@ -211,8 +215,9 @@ internal sealed class CopyOnReadStorage<TRange, TData, TDomain> : ICacheStorage<
     /// the current active storage. The returned data is a lazy enumerable over the active list.
     /// </para>
     /// <para>
-    /// This method is safe because active storage is immutable during reads and only replaced
-    /// atomically during rematerialization (Invariant B.12).
+    /// This method is only called from the rebalance path — the same thread that calls
+    /// <c>Rematerialize()</c> — so it is not synchronized. It must not be called concurrently
+    /// with <c>Rematerialize()</c>.
     /// </para>
     /// </remarks>
     public RangeData<TRange, TData, TDomain> ToRangeData() => _activeStorage.ToRangeData(Range, _domain);

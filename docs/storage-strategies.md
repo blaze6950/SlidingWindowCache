@@ -20,7 +20,7 @@ This guide explains when to use each strategy and their trade-offs.
 |------------------------|-----------------------------------|-----------------------------------|
 | **Read Cost**          | O(1) - zero allocation            | O(n) - allocates and copies       |
 | **Rematerialize Cost** | O(n) - always allocates new array | O(1)* - reuses capacity           |
-| **Memory Pattern**     | Single array, replaced atomically | Dual buffers, swapped atomically  |
+| **Memory Pattern**     | Single array, replaced atomically | Dual buffers, swap synchronized by lock |
 | **Buffer Growth**      | Always allocates exact size       | Grows but never shrinks           |
 | **LOH Risk**           | High for >85KB arrays             | Lower (List growth strategy)      |
 | **Best For**           | Read-heavy workloads              | Rematerialization-heavy workloads |
@@ -148,32 +148,42 @@ storage during enumeration corrupts the data.
 **Rematerialize:**
 
 ```csharp
-_stagingBuffer.Clear();                    // Preserves capacity
-_stagingBuffer.AddRange(rangeData.Data);   // Single-pass enumeration
-(_activeStorage, _stagingBuffer) = (_stagingBuffer, _activeStorage);  // Atomic swap
-Range = rangeData.Range;
+// Enumerate outside the lock (may be a LINQ chain over _activeStorage)
+_stagingBuffer.Clear();
+_stagingBuffer.AddRange(rangeData.Data);
+
+lock (_lock)
+{
+    (_activeStorage, _stagingBuffer) = (_stagingBuffer, _activeStorage);  // Swap under lock
+    Range = rangeData.Range;
+}
 ```
 
 **Read:**
 
 ```csharp
-if (!Range.Contains(range))
-    throw new ArgumentOutOfRangeException(nameof(range), ...);
+lock (_lock)
+{
+    if (!Range.Contains(range))
+        throw new ArgumentOutOfRangeException(nameof(range), ...);
 
-var result = new TData[length];  // Allocates
-for (var i = 0; i < length; i++)
-    result[i] = _activeStorage[(int)startOffset + i];
-return new ReadOnlyMemory<TData>(result);
+    var result = new TData[length];  // Allocates
+    for (var i = 0; i < length; i++)
+        result[i] = _activeStorage[(int)startOffset + i];
+    return new ReadOnlyMemory<TData>(result);
+}
 ```
 
 ### Characteristics
 
 - ✅ **Cheap rematerialization**: Reuses capacity, no allocation if size ≤ capacity
 - ✅ **No LOH pressure**: List growth strategy avoids large single allocations
-- ✅ **Correct enumeration**: Staging buffer prevents corruption
+- ✅ **Correct enumeration**: Staging buffer prevents corruption during LINQ-derived expansion
 - ✅ **Amortized performance**: Cost decreases over time as capacity stabilizes
-- ❌ **Expensive reads**: Each read allocates and copies
+- ✅ **Safe concurrent access**: `Read()` and `Rematerialize()` share a lock; mid-swap observation is impossible
+- ❌ **Expensive reads**: Each read acquires a lock, allocates, and copies
 - ❌ **Higher memory**: Two buffers instead of one
+- ⚠️ **Lock contention**: Reader briefly blocks if rematerialization is in progress (bounded to a single `Rematerialize()` call duration)
 
 ### Memory Behavior
 
@@ -275,12 +285,12 @@ This composition leverages the strengths of both strategies:
 
 ### CopyOnRead Storage
 
-| Operation            | Time | Allocation    |
-|----------------------|------|---------------|
-| Read                 | O(n) | n × sizeof(T) |
-| Rematerialize (cold) | O(n) | n × sizeof(T) |
-| Rematerialize (warm) | O(n) | 0 bytes**     |
-| ToRangeData          | O(1) | 0 bytes*      |
+| Operation            | Time | Allocation    | Notes                        |
+|----------------------|------|---------------|------------------------------|
+| Read                 | O(n) | n × sizeof(T) | Lock acquired + copy         |
+| Rematerialize (cold) | O(n) | n × sizeof(T) | Enumerate outside lock       |
+| Rematerialize (warm) | O(n) | 0 bytes**     | Enumerate outside lock       |
+| ToRangeData          | O(1) | 0 bytes*      | Not synchronized (rebalance path only) |
 
 *Returns lazy enumerable  
 **When capacity is sufficient
@@ -338,9 +348,9 @@ cache.Rematerialize(extendedData);
 
 ### Buffer Swap Invariants
 
-1. **Active storage is immutable during reads**: Never mutated until swap
-2. **Staging buffer is write-only during rematerialization**: Cleared, filled, swapped
-3. **Swap is atomic**: Single tuple assignment
+1. **Active storage is immutable during reads**: Never mutated until swap; lock prevents concurrent observation mid-swap
+2. **Staging buffer is write-only during rematerialization**: Cleared and filled outside the lock, then swapped under lock
+3. **Swap is lock-protected**: `Read()` and `Rematerialize()` share `_lock`; a reader always sees a consistent `(_activeStorage, Range)` pair
 4. **Buffers never shrink**: Capacity grows monotonically, amortizing allocation cost
 
 ### Memory Growth Example
@@ -384,9 +394,17 @@ The staging buffer pattern directly supports key system invariants:
 
 ### Invariant B.11-12 - Atomic Consistency
 
-- Tuple swap `(_activeStorage, _stagingBuffer) = (_stagingBuffer, _activeStorage)` is atomic
-- Range update happens after swap, completing atomic change
-- No intermediate inconsistent states
+- Swap and Range update both happen inside `lock (_lock)`, so `Read()` always observes a consistent `(_activeStorage, Range)` pair
+- No intermediate inconsistent state is observable
+
+### Invariant A.2 - User Path Never Waits for Rebalance (Conditional Compliance)
+
+- `CopyOnReadStorage` is **conditionally compliant**: `Read()` acquires `_lock`, which is also held by
+  `Rematerialize()` for the duration of the buffer swap and Range update (a fast, bounded operation).
+- Contention is limited to the swap itself — not the full rebalance cycle (fetch + decision + execution).
+  The enumeration into the staging buffer happens **before** the lock is acquired, so the lock hold time
+  is just the cost of two field writes and a property assignment.
+- `SnapshotReadStorage` remains fully lock-free if strict A.2 compliance is required.
 
 ### Invariant B.15 - Cancellation Safety
 

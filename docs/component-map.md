@@ -753,16 +753,18 @@ internal sealed class CopyOnReadStorage<TRange, TData, TDomain> : ICacheStorage<
 
 **Characteristics**:
 - ✅ Cheap rematerialization (amortized O(1) when capacity sufficient)
-- ❌ Expensive reads (allocates + copies)
-- ✅ Correct enumeration (staging buffer prevents corruption)
+- ❌ Expensive reads (acquires lock + allocates + copies)
+- ✅ Correct enumeration (staging buffer prevents corruption during LINQ-derived expansion)
 - ✅ No LOH pressure (List growth strategy)
 - ✅ Satisfies Invariants A.3.8, A.3.9a, B.11-12
+- ✅ Read/Rematerialize synchronized via `_lock` (mid-swap observation impossible)
+- ⚠️ Small lock contention cost on each `Read()` (bounded to swap duration)
 
 **Ownership**: Owned by CacheState (single instance)
 
-**Internal State**: Two `List<TData>` (swapped atomically)
+**Internal State**: Two `List<TData>` (swapped under `_lock`); `_lock` object
 
-**Thread Safety**: Not thread-safe (single consumer model)
+**Thread Safety**: `Read()` and `Rematerialize()` are synchronized via `_lock`; `ToRangeData()` is unsynchronized and must only be called from the rebalance path (conditionally compliant with Invariant A.2 — see storage-strategies.md)
 
 **Best for**: Rematerialization-heavy workloads, large sliding windows, background cache layers
 

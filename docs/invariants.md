@@ -192,6 +192,10 @@ without polling or timing dependencies.
 **A.2** 🟢 **[Behavioral — Test: `Invariant_A2_2_UserPathNeverWaitsForRebalance`]** The User Path **never waits for rebalance execution** to complete.
 - *Observable via*: Request completion time vs. debounce delay
 - *Test verifies*: Request completes in <500ms with 1-second debounce
+- *Conditional compliance*: `CopyOnReadStorage` acquires a short-lived `_lock` in `Read()` shared with
+  `Rematerialize()`. The lock is held only for the buffer swap and `Range` update — not for data fetching
+  or the full rebalance cycle. Contention is sub-millisecond and bounded. `SnapshotReadStorage` remains
+  fully lock-free. See [Storage Strategies Guide](storage-strategies.md#invariant-a2---user-path-never-waits-for-rebalance-conditional-compliance) for details.
 
 **A.3** 🔵 **[Architectural]** The User Path is the **sole source of rebalance intent**.
 
