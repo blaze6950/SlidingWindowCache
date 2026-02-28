@@ -322,6 +322,25 @@ public sealed class BoundaryHandlingTests : IAsyncDisposable
         Assert.Equal(rightExpanded, rightResult.Range);
     }
 
+    [Fact]
+    public async Task RebalancePath_CompleteDataMiss_IncrementsDataSegmentUnavailable()
+    {
+        // ARRANGE - Configure cache to expand far beyond physical bounds
+        var cache = CreateCacheWithLeftExpansion();
+        _cacheDiagnostics.Reset();
+
+        // Request at exact lower boundary to create an out-of-bounds missing segment
+        var initialRequest = Intervals.NET.Factories.Range.Closed<int>(1000, 1010);
+
+        // ACT
+        await cache.GetDataAsync(initialRequest, CancellationToken.None);
+        await cache.WaitForIdleAsync();
+
+        // ASSERT - At least one segment should be reported as unavailable
+        Assert.True(_cacheDiagnostics.DataSegmentUnavailable >= 1,
+            "Expected DataSegmentUnavailable to be recorded when rebalance requests out-of-bounds data.");
+    }
+
     #endregion
 
     #region Helper Methods

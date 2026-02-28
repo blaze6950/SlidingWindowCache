@@ -149,6 +149,29 @@ public class WindowCacheDisposalTests
         Assert.All(exceptions, ex => Assert.Null(ex));
     }
 
+    [Fact]
+    public async Task DisposeAsync_ConcurrentLoserThread_WaitsForWinnerCompletion()
+    {
+        // ARRANGE
+        var cache = CreateCache();
+        var range = Intervals.NET.Factories.Range.Closed<int>(0, 10);
+
+        // Trigger background work so disposal takes some time
+        _ = await cache.GetDataAsync(range, CancellationToken.None);
+
+        // ACT - Start two concurrent disposals
+        var firstDispose = cache.DisposeAsync().AsTask();
+        var secondDispose = cache.DisposeAsync().AsTask();
+
+        var exceptions = await Task.WhenAll(
+            Record.ExceptionAsync(async () => await firstDispose),
+            Record.ExceptionAsync(async () => await secondDispose)
+        );
+
+        // ASSERT - Both dispose calls complete without exception
+        Assert.All(exceptions, ex => Assert.Null(ex));
+    }
+
     #endregion
 
     #region Post-Disposal Operation Tests

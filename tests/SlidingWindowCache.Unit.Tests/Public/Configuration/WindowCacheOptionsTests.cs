@@ -760,6 +760,42 @@ public class WindowCacheOptionsTests
         Assert.Equal(0.0001, options.RightThreshold);
     }
 
+    [Fact]
+    public void Constructor_WithLeftThresholdAboveOne_ThrowsArgumentOutOfRangeException()
+    {
+        // ARRANGE, ACT & ASSERT
+        var exception = Record.Exception(() => new WindowCacheOptions(
+            leftCacheSize: 1.0,
+            rightCacheSize: 1.0,
+            readMode: UserCacheReadMode.Snapshot,
+            leftThreshold: 1.01,
+            rightThreshold: null
+        ));
+
+        Assert.NotNull(exception);
+        Assert.IsType<ArgumentOutOfRangeException>(exception);
+        var argException = (ArgumentOutOfRangeException)exception;
+        Assert.Equal("leftThreshold", argException.ParamName);
+    }
+
+    [Fact]
+    public void Constructor_WithRightThresholdAboveOne_ThrowsArgumentOutOfRangeException()
+    {
+        // ARRANGE, ACT & ASSERT
+        var exception = Record.Exception(() => new WindowCacheOptions(
+            leftCacheSize: 1.0,
+            rightCacheSize: 1.0,
+            readMode: UserCacheReadMode.Snapshot,
+            leftThreshold: null,
+            rightThreshold: 1.01
+        ));
+
+        Assert.NotNull(exception);
+        Assert.IsType<ArgumentOutOfRangeException>(exception);
+        var argException = (ArgumentOutOfRangeException)exception;
+        Assert.Equal("rightThreshold", argException.ParamName);
+    }
+
     #endregion
 
     #region Documentation and Usage Scenario Tests
@@ -919,4 +955,3 @@ public class WindowCacheOptionsTests
 
     #endregion
 }
-

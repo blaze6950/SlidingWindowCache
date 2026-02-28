@@ -197,6 +197,106 @@ public class RebalanceExceptionHandlingTests : IDisposable
         Assert.Contains("Data source is unhealthy", exception.Message);
     }
 
+    [Theory]
+    [InlineData(null)]
+    [InlineData(3)]
+    public async Task RebalanceFailure_IsRecorded_ForBothExecutionStrategies(int? rebalanceQueueCapacity)
+    {
+        _diagnostics.Reset();
+
+        // Arrange: data source fails on second fetch (rebalance)
+        var callCount = 0;
+        var faultyDataSource = new FaultyDataSource<int, string>(
+            fetchSingleRange: range =>
+            {
+                callCount++;
+                if (callCount == 2)
+                {
+                    throw new InvalidOperationException("Simulated rebalance failure");
+                }
+
+                return FaultyDataSource<int, string>.GenerateStringData(range);
+            }
+        );
+
+        var options = new WindowCacheOptions(
+            leftCacheSize: 1.0,
+            rightCacheSize: 1.0,
+            readMode: UserCacheReadMode.Snapshot,
+            leftThreshold: 0.0,
+            rightThreshold: 0.0,
+            debounceDelay: TimeSpan.FromMilliseconds(10),
+            rebalanceQueueCapacity: rebalanceQueueCapacity
+        );
+
+        await using var cache = new WindowCache<int, string, IntegerFixedStepDomain>(
+            faultyDataSource,
+            new IntegerFixedStepDomain(),
+            options,
+            _diagnostics
+        );
+
+        // Act
+        await cache.GetDataAsync(Intervals.NET.Factories.Range.Closed<int>(100, 110), CancellationToken.None);
+        await cache.WaitForIdleAsync();
+
+        // Assert
+        Assert.Equal(1, _diagnostics.RebalanceExecutionFailed);
+        Assert.Equal(1, _diagnostics.RebalanceExecutionStarted);
+        Assert.Equal(0, _diagnostics.RebalanceExecutionCompleted);
+    }
+
+    [Fact]
+    public async Task IntentProcessingLoop_ContinuesAfterRebalanceFailure()
+    {
+        _diagnostics.Reset();
+
+        // Arrange: fail on second fetch (rebalance), succeed afterwards
+        var callCount = 0;
+        var faultyDataSource = new FaultyDataSource<int, string>(
+            fetchSingleRange: range =>
+            {
+                callCount++;
+                if (callCount == 2)
+                {
+                    throw new InvalidOperationException("Rebalance failed");
+                }
+
+                return FaultyDataSource<int, string>.GenerateStringData(range);
+            }
+        );
+
+        var options = new WindowCacheOptions(
+            leftCacheSize: 1.0,
+            rightCacheSize: 1.0,
+            readMode: UserCacheReadMode.Snapshot,
+            leftThreshold: 0.0,
+            rightThreshold: 0.0,
+            debounceDelay: TimeSpan.FromMilliseconds(10)
+        );
+
+        await using var cache = new WindowCache<int, string, IntegerFixedStepDomain>(
+            faultyDataSource,
+            new IntegerFixedStepDomain(),
+            options,
+            _diagnostics
+        );
+
+        // Act: trigger failure then continue with another request
+        await cache.GetDataAsync(Intervals.NET.Factories.Range.Closed<int>(100, 110), CancellationToken.None);
+        await cache.WaitForIdleAsync();
+
+        await cache.GetDataAsync(Intervals.NET.Factories.Range.Closed<int>(200, 210), CancellationToken.None);
+        await cache.WaitForIdleAsync();
+
+        // Assert: intent processing loop stayed alive
+        Assert.Equal(2, _diagnostics.UserRequestServed);
+        Assert.True(_diagnostics.RebalanceIntentPublished >= 2,
+            "Expected intents to continue publishing after a rebalance failure.");
+        Assert.True(_diagnostics.RebalanceExecutionFailed >= 1,
+            "Expected at least one rebalance failure to be recorded.");
+    }
+
     #region Helper Classes
 
     /// <summary>

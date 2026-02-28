@@ -293,5 +293,35 @@ public class ExecutionStrategySelectionTests
         });
     }
 
+    [Fact]
+    public async Task ChannelBasedStrategy_DisposalDuringActiveRebalance_CompletesGracefully()
+    {
+        // ARRANGE
+        var dataSource = new SimpleTestDataSource<string>(i => $"Item_{i}", simulateAsyncDelay: true);
+        var domain = new IntegerFixedStepDomain();
+        var options = new WindowCacheOptions(
+            leftCacheSize: 1.0,
+            rightCacheSize: 1.0,
+            readMode: UserCacheReadMode.Snapshot,
+            leftThreshold: 0.0,
+            rightThreshold: 0.0,
+            debounceDelay: TimeSpan.FromMilliseconds(50),
+            rebalanceQueueCapacity: 1
+        );
+
+        var cache = new WindowCache<int, string, IntegerFixedStepDomain>(
+            dataSource,
+            domain,
+            options
+        );
+
+        // ACT - Trigger a rebalance, then dispose immediately
+        _ = cache.GetDataAsync(Intervals.NET.Factories.Range.Closed<int>(0, 10), CancellationToken.None);
+        var exception = await Record.ExceptionAsync(async () => await cache.DisposeAsync());
+
+        // ASSERT
+        Assert.Null(exception);
+    }
+
     #endregion
 }
