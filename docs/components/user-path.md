@@ -10,12 +10,12 @@ User requests must not block on background optimization. The user path does the 
 
 ## Key Components
 
-| Component                                           | File                                                                          | Role                                                |
-|-----------------------------------------------------|-------------------------------------------------------------------------------|-----------------------------------------------------|
-| `WindowCache<TRange, TData, TDomain>`               | `src/SlidingWindowCache/Public/WindowCache.cs`                                | Public facade; delegates to `UserRequestHandler`    |
-| `UserRequestHandler<TRange, TData, TDomain>`        | `src/SlidingWindowCache/Core/UserPath/UserRequestHandler.cs`                  | Internal user-path logic; sole publisher of intents |
-| `CacheDataExtensionService<TRange, TData, TDomain>` | `src/SlidingWindowCache/Infrastructure/Services/CacheDataExtensionService.cs` | Assembles requested range from cache + IDataSource  |
-| `IntentController<TRange, TData, TDomain>`          | `src/SlidingWindowCache/Core/Rebalance/Intent/IntentController.cs`            | Publish-side only from user path                    |
+| Component                                           | File                                                                           | Role                                                |
+|-----------------------------------------------------|--------------------------------------------------------------------------------|-----------------------------------------------------|
+| `WindowCache<TRange, TData, TDomain>`               | `src/SlidingWindowCache/Public/WindowCache.cs`                                 | Public facade; delegates to `UserRequestHandler`    |
+| `UserRequestHandler<TRange, TData, TDomain>`        | `src/SlidingWindowCache/Core/UserPath/UserRequestHandler.cs`                   | Internal user-path logic; sole publisher of intents |
+| `CacheDataExtensionService<TRange, TData, TDomain>` | `src/SlidingWindowCache/Core/Rebalance/Execution/CacheDataExtensionService.cs` | Assembles requested range from cache + IDataSource  |
+| `IntentController<TRange, TData, TDomain>`          | `src/SlidingWindowCache/Core/Rebalance/Intent/IntentController.cs`             | Publish-side only from user path                    |
 
 ## Execution Context
 
@@ -44,14 +44,14 @@ All user-path code executes on the **⚡ User Thread** (the caller's thread). No
 
 ## Invariants
 
-| Invariant | Description                                                                                                              |
-|-----------|--------------------------------------------------------------------------------------------------------------------------|
-| A.0       | User requests always served immediately (never blocked by rebalance)                                                     |
-| A.3       | `UserRequestHandler` is the sole publisher of rebalance intents                                                          |
-| A.4       | Intent publication is fire-and-forget (background only)                                                                  |
-| A.5       | User path is strictly read-only w.r.t. `CacheState`                                                                      |
-| A.10      | Returns exactly `RequestedRange` data                                                                                    |
-| G.45      | I/O isolation: `IDataSource` never called from background on user's behalf (extension service runs on background thread) |
+| Invariant | Description                                                                                                                                                                            |
+|-----------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| A.0       | User requests always served immediately (never blocked by rebalance)                                                                                                                   |
+| A.3       | `UserRequestHandler` is the sole publisher of rebalance intents                                                                                                                        |
+| A.4       | Intent publication is fire-and-forget (background only)                                                                                                                                |
+| A.5       | User path is strictly read-only w.r.t. `CacheState`                                                                                                                                    |
+| A.10      | Returns exactly `RequestedRange` data                                                                                                                                                  |
+| G.45      | I/O isolation: `IDataSource` called on user's behalf from User Thread (partial hits) or Background Thread (rebalance execution); shared `CacheDataExtensionService` used by both paths |
 
 See `docs/invariants.md` (Section A: User Path invariants) for full specification.
 
