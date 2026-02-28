@@ -6,10 +6,10 @@ Intent management bridges the user path and background work. It receives access 
 
 ## Key Components
 
-| Component                                  | File                                                               | Role                                                             |
-|--------------------------------------------|--------------------------------------------------------------------|------------------------------------------------------------------|
-| `IntentController<TRange, TData, TDomain>` | `src/SlidingWindowCache/Core/Rebalance/Intent/IntentController.cs` | Manages intent lifecycle; runs background processing loop        |
-| `Intent<TRange, TData, TDomain>`           | `src/SlidingWindowCache/Core/Rebalance/Intent/Intent.cs`           | Carries `RequestedRange` + `DeliveredData` + `CancellationToken` |
+| Component                                  | File                                                               | Role                                                                                          |
+|--------------------------------------------|--------------------------------------------------------------------|-----------------------------------------------------------------------------------------------|
+| `IntentController<TRange, TData, TDomain>` | `src/SlidingWindowCache/Core/Rebalance/Intent/IntentController.cs` | Manages intent lifecycle; runs background processing loop                                     |
+| `Intent<TRange, TData, TDomain>`           | `src/SlidingWindowCache/Core/Rebalance/Intent/Intent.cs`           | Carries `RequestedRange` + `AssembledRangeData`; cancellation is owned by execution requests |
 
 ## Execution Contexts
 
