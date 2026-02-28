@@ -134,7 +134,7 @@ internal sealed class UserRequestHandler<TRange, TData, TDomain>
 
         var cacheStorage = _state.Storage;
         var fullyInCache = _state.IsInitialized && cacheStorage.Range.Contains(requestedRange);
-        var hasOverlap   = _state.IsInitialized && !fullyInCache && cacheStorage.Range.Overlaps(requestedRange);
+        var hasOverlap = _state.IsInitialized && !fullyInCache && cacheStorage.Range.Overlaps(requestedRange);
 
         RangeData<TRange, TData, TDomain>? assembledData;
         Range<TRange>? actualRange;
@@ -154,8 +154,8 @@ internal sealed class UserRequestHandler<TRange, TData, TDomain>
             // Scenario 2: Full Cache Hit
             // All requested data is available in cache - read directly (no IDataSource call).
             assembledData = cacheStorage.ToRangeData();
-            actualRange   = requestedRange; // Fully in cache, so actual == requested
-            resultData    = cacheStorage.Read(requestedRange);
+            actualRange = requestedRange; // Fully in cache, so actual == requested
+            resultData = cacheStorage.Read(requestedRange);
             _cacheDiagnostics.UserRequestFullCacheHit();
         }
         else
@@ -186,7 +186,7 @@ internal sealed class UserRequestHandler<TRange, TData, TDomain>
             {
                 // No actual intersection after extension (defensive fallback).
                 assembledData = null;
-                resultData    = ReadOnlyMemory<TData>.Empty;
+                resultData = ReadOnlyMemory<TData>.Empty;
             }
         }
 
