@@ -2,7 +2,20 @@
 
 Comprehensive BenchmarkDotNet performance suite for SlidingWindowCache, measuring architectural performance characteristics using **public API only**.
 
-**🎯 Methodologically Correct Benchmarks**: This suite follows rigorous benchmark methodology to ensure deterministic, reliable, and interpretable results.
+**Methodologically Correct Benchmarks**: This suite follows rigorous benchmark methodology to ensure deterministic, reliable, and interpretable results.
+
+---
+
+## Current Performance Baselines
+
+For current measured performance data, see the committed reports in `benchmarks/SlidingWindowCache.Benchmarks/Results/`:
+
+- **User Request Flow**: [UserFlowBenchmarks-report-github.md](Results/SlidingWindowCache.Benchmarks.Benchmarks.UserFlowBenchmarks-report-github.md)
+- **Rebalance Mechanics**: [RebalanceFlowBenchmarks-report-github.md](Results/SlidingWindowCache.Benchmarks.Benchmarks.RebalanceFlowBenchmarks-report-github.md)
+- **End-to-End Scenarios**: [ScenarioBenchmarks-report-github.md](Results/SlidingWindowCache.Benchmarks.Benchmarks.ScenarioBenchmarks-report-github.md)
+- **Execution Strategy Comparison**: [ExecutionStrategyBenchmarks-report-github.md](Results/SlidingWindowCache.Benchmarks.Benchmarks.ExecutionStrategyBenchmarks-report-github.md)
+
+These reports are updated when benchmarks are re-run and committed to track performance over time.
 
 ---
 
@@ -82,7 +95,6 @@ These benchmarks use a 3-axis orthogonal design to isolate rebalance behavior:
 - ⚠️ **LOH pressure at large sizes** (RangeSpan ≥ 10,000)
   - Array allocations go to LOH (no compaction)
   - GC pressure increases with Gen2 collections visible
-- 📊 **Observed**: ~224KB allocation for Fixed/Snapshot at BaseSpanSize=100 vs ~92KB for CopyOnRead
 
 **CopyOnRead Mode:**
 - ❌ **Disadvantage at small sizes** (RangeSpan < 1,000)
@@ -91,10 +103,6 @@ These benchmarks use a 3-axis orthogonal design to isolate rebalance behavior:
 - ✅ **Competitive at medium-to-large sizes** (RangeSpan ≥ 1,000)
   - List growth amortizes allocation cost
   - Reduced LOH pressure
-- ✅ **Consistent allocation advantage**
-  - 2-3x lower allocations across most scenarios
-  - Buffer reuse shows in steady-state operations
-- 📊 **Observed**: Allocation differences scale with BaseSpanSize (e.g., ~2.5MB vs ~16MB at BaseSpanSize=10,000)
 
 ### Interpretation Guide
 
@@ -103,18 +111,14 @@ When analyzing results, look for:
 1. **Allocation patterns**: 
    - Snapshot: Zero on read, large on rebalance
    - CopyOnRead: Constant on read, incremental on rebalance
-   - **Actual measurements show 2-3x allocation reduction for CopyOnRead**
 
 2. **Memory usage trends**:
-   - Watch for Gen2 collections (LOH pressure indicator at BaseSpanSize=10,000)
+   - Watch for Gen2 collections (LOH pressure indicator at large BaseSpanSize)
    - Compare total allocated bytes across modes
-   - CopyOnRead consistently shows lower memory footprint
 
 3. **Execution time patterns**:
-   - **Rebalance benchmarks cluster around ~1 second baseline** across all parameters
-   - This isolation reveals pure rebalance cost without I/O variance
-   - User flow benchmarks show microsecond-level latencies for cache hits
-   - Cold start scenarios show ~97-98ms for initial population
+   - Compare rebalance cost across parameters
+   - Observe user flow latencies for cache hits vs misses
 
 4. **Behavior-driven insights (RebalanceFlowBenchmarks)**:
    - Fixed span: Predictable, stable costs
@@ -152,7 +156,7 @@ When analyzing results, look for:
 
 Benchmarks are organized by **execution flow** to clearly separate user-facing costs from background maintenance costs.
 
-### 📱 User Request Flow Benchmarks
+### User Request Flow Benchmarks
 
 **File**: `UserFlowBenchmarks.cs`
 
@@ -170,35 +174,35 @@ Benchmarks are organized by **execution flow** to clearly separate user-facing c
 
 **Benchmark Methods** (grouped by category):
 
-| Category | Method | Purpose |
-|----------|--------|---------|
-| **FullHit** | `User_FullHit_Snapshot` | Baseline: Full cache hit with Snapshot mode |
-| **FullHit** | `User_FullHit_CopyOnRead` | Full cache hit with CopyOnRead mode |
-| **PartialHit** | `User_PartialHit_ForwardShift_Snapshot` | Partial hit moving right (Snapshot) |
-| **PartialHit** | `User_PartialHit_ForwardShift_CopyOnRead` | Partial hit moving right (CopyOnRead) |
-| **PartialHit** | `User_PartialHit_BackwardShift_Snapshot` | Partial hit moving left (Snapshot) |
-| **PartialHit** | `User_PartialHit_BackwardShift_CopyOnRead` | Partial hit moving left (CopyOnRead) |
-| **FullMiss** | `User_FullMiss_Snapshot` | Full cache miss (Snapshot) |
-| **FullMiss** | `User_FullMiss_CopyOnRead` | Full cache miss (CopyOnRead) |
+| Category       | Method                                     | Purpose                                     |
+|----------------|--------------------------------------------|---------------------------------------------|
+| **FullHit**    | `User_FullHit_Snapshot`                    | Baseline: Full cache hit with Snapshot mode |
+| **FullHit**    | `User_FullHit_CopyOnRead`                  | Full cache hit with CopyOnRead mode         |
+| **PartialHit** | `User_PartialHit_ForwardShift_Snapshot`    | Partial hit moving right (Snapshot)         |
+| **PartialHit** | `User_PartialHit_ForwardShift_CopyOnRead`  | Partial hit moving right (CopyOnRead)       |
+| **PartialHit** | `User_PartialHit_BackwardShift_Snapshot`   | Partial hit moving left (Snapshot)          |
+| **PartialHit** | `User_PartialHit_BackwardShift_CopyOnRead` | Partial hit moving left (CopyOnRead)        |
+| **FullMiss**   | `User_FullMiss_Snapshot`                   | Full cache miss (Snapshot)                  |
+| **FullMiss**   | `User_FullMiss_CopyOnRead`                 | Full cache miss (CopyOnRead)                |
 
 **Expected Results**:
-- Full hit: Snapshot ~25-30µs (minimal allocation), CopyOnRead scales with cache size
+- Full hit: Snapshot shows minimal allocation, CopyOnRead allocation scales with cache size
 - Partial hit: Both modes serve request immediately, rebalance deferred to cleanup
 - Full miss: Request served from data source, rebalance deferred to cleanup
 - **Scaling**: CopyOnRead allocation grows linearly with `CacheCoefficientSize`
 
 ---
 
-### ⚙️ Rebalance Flow Benchmarks
+### Rebalance Flow Benchmarks
 
 **File**: `RebalanceFlowBenchmarks.cs`
 
 **Goal**: Measure rebalance mechanics and storage rematerialization cost through behavior-driven modeling. This suite isolates how storage strategies handle different range span evolution patterns.
 
 **Philosophy**: Models system behavior through three orthogonal axes:
-- ✔ **Span Behavior** (Fixed/Growing/Shrinking) - How requested range span evolves
-- ✔ **Storage Strategy** (Snapshot/CopyOnRead) - Rematerialization approach
-- ✔ **Base Span Size** (100/1,000/10,000) - Scaling behavior
+- **Span Behavior** (Fixed/Growing/Shrinking) - How requested range span evolves
+- **Storage Strategy** (Snapshot/CopyOnRead) - Rematerialization approach
+- **Base Span Size** (100/1,000/10,000) - Scaling behavior
 
 **Parameters**: `Behavior` × `Strategy` × `BaseSpanSize` = **18 combinations**
 - Behavior: `[Fixed, Growing, Shrinking]`
@@ -214,8 +218,8 @@ Benchmarks are organized by **execution flow** to clearly separate user-facing c
 
 **Benchmark Method**:
 
-| Method | Purpose |
-|--------|---------|
+| Method      | Purpose                                                                                      |
+|-------------|----------------------------------------------------------------------------------------------|
 | `Rebalance` | Measures complete rebalance cycle cost for the configured span behavior and storage strategy |
 
 **Span Behaviors Explained**:
@@ -224,19 +228,17 @@ Benchmarks are organized by **execution flow** to clearly separate user-facing c
 - **Shrinking**: Span decreases by 100 elements per request (models contracting data requirements)
 
 **Expected Results**:
-- **Execution time**: Clusters around ~1.05-1.07 seconds across all parameters
-  - Cumulative rebalance overhead for 10 operations (~50-70ms each)
-  - Pure rebalance overhead is ~50-70ms cumulative
+- **Execution time**: Cumulative rebalance overhead for 10 operations
 - **Allocation patterns**:
-  - Fixed/Snapshot: ~224KB (BaseSpanSize=100) → ~16MB (BaseSpanSize=10,000)
-  - Fixed/CopyOnRead: ~92KB (BaseSpanSize=100) → ~2.5MB (BaseSpanSize=10,000)
-  - **CopyOnRead shows 2-3x allocation reduction** through buffer reuse
-- **GC pressure**: Gen2 collections visible at BaseSpanSize=10,000 for Snapshot mode
-- **Behavior impact**: Growing span slightly increases allocation for CopyOnRead (~560KB vs ~92KB at BaseSpanSize=100)
+  - Fixed/Snapshot: Higher allocations, scales with BaseSpanSize
+  - Fixed/CopyOnRead: Lower allocations due to buffer reuse
+  - CopyOnRead shows allocation reduction through buffer reuse
+- **GC pressure**: Gen2 collections may be visible at large BaseSpanSize for Snapshot mode
+- **Behavior impact**: Growing span may increase allocation for CopyOnRead compared to Fixed
 
 ---
 
-### 🌍 Scenario Benchmarks (End-to-End)
+### Scenario Benchmarks (End-to-End)
 
 **File**: `ScenarioBenchmarks.cs`
 
@@ -253,26 +255,26 @@ Benchmarks are organized by **execution flow** to clearly separate user-facing c
 
 **Benchmark Methods** (grouped by category):
 
-| Category | Method | Purpose |
-|----------|---------|---------|
-| **ColdStart** | `ColdStart_Rebalance_Snapshot` | Baseline: Initial cache population (Snapshot) |
-| **ColdStart** | `ColdStart_Rebalance_CopyOnRead` | Initial cache population (CopyOnRead) |
+| Category      | Method                           | Purpose                                       |
+|---------------|----------------------------------|-----------------------------------------------|
+| **ColdStart** | `ColdStart_Rebalance_Snapshot`   | Baseline: Initial cache population (Snapshot) |
+| **ColdStart** | `ColdStart_Rebalance_CopyOnRead` | Initial cache population (CopyOnRead)         |
 
 **Expected Results**:
-- Cold start: ~97-98ms for initial population (measured end-to-end including rebalance)
+- Cold start: Measures complete initialization including rebalance
 - Allocation patterns differ between modes:
   - Snapshot: Single upfront array allocation
   - CopyOnRead: List-based incremental allocation, less memory spike
-- **Scaling**: Both modes show similar execution time (~97-150ms)
+- **Scaling**: Both modes should show comparable execution times
 - **Memory differences**: 
-  - Small ranges (RangeSpan=100, CacheCoefficientSize=1): Minimal difference (~7KB vs ~9KB)
-  - Large ranges (RangeSpan=10,000, CacheCoefficientSize=100): Snapshot ~15.8MB, CopyOnRead ~16.5MB
-  - CopyOnRead allocation ratio: 1.04-1.72x depending on cache size
-- **GC impact**: Gen2 collections visible at largest parameter combination
+  - Small ranges: Minimal differences between storage modes
+  - Large ranges: Both modes show substantial allocations, with varying ratios
+  - CopyOnRead allocation ratio varies depending on cache size
+- **GC impact**: Gen2 collections may be visible at largest parameter combinations
 
 ---
 
-### 📊 Execution Strategy Benchmarks
+### Execution Strategy Benchmarks
 
 **File**: `ExecutionStrategyBenchmarks.cs`
 
@@ -297,77 +299,40 @@ Benchmarks are organized by **execution flow** to clearly separate user-facing c
 
 **Benchmark Methods**:
 
-| Method | Baseline | Configuration | Implementation | Purpose |
-|--------|----------|---------------|----------------|---------|
-| `BurstPattern_NoCapacity` | ✓ Yes | `RebalanceQueueCapacity = null` | Task-based unbounded execution | Baseline for ratio calculations |
-| `BurstPattern_WithCapacity` | - | `RebalanceQueueCapacity = 10` | Channel-based bounded execution | Measured relative to baseline |
-
-**Expected Results**:
-
-**Ratio Column Interpretation**:
-- **Ratio < 1.0**: WithCapacity is faster than NoCapacity
-  - Example: Ratio = 0.012 means WithCapacity is **83× faster** (1 / 0.012 ≈ 83)
-- **Ratio > 1.0**: WithCapacity is slower than NoCapacity
-  - Example: Ratio = 1.44 means WithCapacity is **1.44× slower** (44% overhead)
-- **Ratio ≈ 1.0**: Both strategies perform similarly
-
-**Actual Benchmark Results** (Intel Core i7-1065G7, .NET 8.0):
-
-1. **Low Latency (0ms) - Fast Local Data**:
-   - **Burst 10**: Ratio = **1.01** (nearly identical, ~100μs both)
-   - **Burst 100**: Ratio = **1.01** (nearly identical, ~128μs both)
-   - **Burst 1000**: Ratio = **0.83** (WithCapacity 1.2× faster, 571μs vs 468μs)
-   - **Interpretation**: Both strategies perform identically for typical bursts; bounded shows slight advantage at extreme burst even with zero latency
-
-2. **Typical Workload (50ms latency, Network I/O)**:
-   - **Burst 10**: Ratio = **1.01** (identical, ~385μs both)
-   - **Burst 100**: Ratio = **0.98** (nearly identical, 404μs vs 393μs)
-   - **Burst 1000**: Ratio = **0.04** (WithCapacity **25× faster**, 56.5ms vs 698μs)
-   - **Interpretation**: Both strategies handle moderate bursts identically; dramatic speedup appears at extreme burst
-
-3. **High Latency (100ms latency, High Network I/O)**:
-   - **Burst 10**: Ratio = **0.97** (nearly identical, 393μs vs 374μs)
-   - **Burst 100**: Ratio = **0.59** (WithCapacity **1.7× faster**, 393μs vs 231μs)
-   - **Burst 1000**: Ratio = **0.38** (WithCapacity **196× faster**, 71.7ms vs 365μs)
-   - **Interpretation**: Bounded advantage emerges at burst=100; becomes dramatic at burst=1000
-
-**Key Findings**:
-- **0ms latency**: Both strategies excellent, bounded has 1.2× advantage at burst=1000
-- **50ms latency, burst ≤100**: Nearly identical performance (ratio ~1.0)
-- **50ms latency, burst=1000**: Bounded provides **25× speedup** (critical finding)
-- **100ms latency, burst=1000**: Bounded provides **196× speedup** (even more dramatic)
-
-**Memory Allocation**:
-- WithCapacity consistently uses **5-9% less memory** (Alloc Ratio: 0.91-0.95)
-- Example: 131KB vs 125KB at burst=1000 scenarios
-- Memory advantage consistent across all parameter combinations
-
-**When to Use Each Strategy**:
-
-✅ **Unbounded (NoCapacity) - Recommended for 99% of use cases**:
-- Web APIs with moderate scrolling (10-100 rapid requests)
-- Gaming/real-time with fast local data (0ms latency scenarios)
-- Any scenario where burst ≤100 with typical network latency (50-100ms)
-- Minimal overhead, excellent typical-case performance
-- **Validated by benchmarks**: Performs identically to bounded for burst ≤100
-
-✅ **Bounded (WithCapacity) - High-frequency edge cases**:
-- Streaming sensor data at 1000+ Hz with network I/O (50-100ms latency)
-- Any scenario with 1000+ rapid requests and significant I/O latency
-- When predictable bounded behavior is critical
-- **Validated by benchmarks**: 25-196× faster under extreme burst (1000 requests with latency)
-- Memory advantage: 5-9% less allocation across all scenarios
-
-**Critical Insight**: 
-The bounded strategy's advantage only appears under **extreme conditions** (burst ≥1000 with I/O latency). For typical workloads (burst ≤100), both strategies perform identically (ratio ~1.0), making unbounded the safer default choice with zero performance penalty.
+| Method                      | Baseline | Configuration                   | Implementation                  | Purpose                         |
+|-----------------------------|----------|---------------------------------|---------------------------------|---------------------------------|
+| `BurstPattern_NoCapacity`   | ✓ Yes    | `RebalanceQueueCapacity = null` | Task-based unbounded execution  | Baseline for ratio calculations |
+| `BurstPattern_WithCapacity` | -        | `RebalanceQueueCapacity = 10`   | Channel-based bounded execution | Measured relative to baseline   |
 
 **Interpretation Guide**:
 
-Both strategies are production-ready with different trade-offs:
-- **Unbounded**: Identical performance for typical workloads (burst ≤100), excellent general-purpose choice (default)
-- **Bounded**: Prevents accumulation under extreme burst, provides 25-196× speedup at burst=1000 with latency
+**Ratio Column Interpretation**:
+- **Ratio < 1.0**: WithCapacity is faster than NoCapacity
+  - Example: Ratio = 0.012 means WithCapacity is 83× faster (1 / 0.012 ≈ 83)
+- **Ratio > 1.0**: WithCapacity is slower than NoCapacity
+  - Example: Ratio = 1.44 means WithCapacity is 1.44× slower (44% overhead)
+- **Ratio ≈ 1.0**: Both strategies perform similarly
 
-The negligible differences in typical scenarios (burst ≤100, ratio ~1.0) prove both are well-optimized. The dramatic 25-196× speedup for bounded strategy at burst=1000 with I/O latency validates the backpressure design for high-frequency edge cases.
+**What to Look For**:
+
+1. **Low Latency Scenarios**: Both strategies typically perform similarly at low burst sizes; bounded may show advantages at extreme burst sizes
+
+2. **High Latency + High Burst**: Bounded strategy's backpressure mechanism should provide significant speedup when both I/O latency and burst size are high
+
+3. **Memory Allocation**: Compare Alloc Ratio column to assess memory efficiency differences between strategies
+
+**When to Use Each Strategy**:
+
+✅ **Unbounded (NoCapacity) - Recommended for typical use cases**:
+- Web APIs with moderate scrolling (10-100 rapid requests)
+- Gaming/real-time with fast local data
+- Scenarios where burst sizes remain moderate
+- Minimal overhead, excellent typical-case performance
+
+✅ **Bounded (WithCapacity) - High-frequency edge cases**:
+- Streaming sensor data at very high frequencies (1000+ Hz) with network I/O
+- Scenarios with extreme burst sizes and significant I/O latency
+- When predictable bounded behavior is critical
 
 ---
 
@@ -465,41 +430,6 @@ var dataSource = new SynchronousDataSource(domain);
 
 ---
 
-## Running Benchmarks
-
-### Run All Benchmarks
-```bash
-cd benchmarks/SlidingWindowCache.Benchmarks
-dotnet run -c Release
-```
-
-### Run Specific Benchmark Class
-```bash
-# User request flow benchmarks
-dotnet run -c Release -- --filter *UserFlowBenchmarks*
-
-# Rebalance/maintenance flow benchmarks
-dotnet run -c Release -- --filter *RebalanceFlowBenchmarks*
-
-# Scenario benchmarks (cold start + locality)
-dotnet run -c Release -- --filter *ScenarioBenchmarks*
-```
-
-### Run Specific Method
-```bash
-# User flow examples
-dotnet run -c Release -- --filter *User_FullHit*
-dotnet run -c Release -- --filter *User_PartialHit*
-
-# Rebalance flow examples
-dotnet run -c Release -- --filter *Rebalance*
-
-# Scenario examples
-dotnet run -c Release -- --filter *ColdStart_Rebalance*
-```
-
----
-
 ## Interpreting Results
 
 ### Mean Execution Time
@@ -583,7 +513,7 @@ benchmarks/SlidingWindowCache.Benchmarks/Results/
 ├── SlidingWindowCache.Benchmarks.Benchmarks.UserFlowBenchmarks-report-github.md
 ├── SlidingWindowCache.Benchmarks.Benchmarks.RebalanceFlowBenchmarks-report-github.md
 ├── SlidingWindowCache.Benchmarks.Benchmarks.ScenarioBenchmarks-report-github.md
-└── SlidingWindowCache.Benchmarks.Benchmarks.ExecutionStrategyBenchmarks-report-default.md
+└── SlidingWindowCache.Benchmarks.Benchmarks.ExecutionStrategyBenchmarks-report-github.md
 ```
 
 These markdown reports are checked into version control for:
