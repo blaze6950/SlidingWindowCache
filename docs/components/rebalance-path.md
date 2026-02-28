@@ -14,10 +14,10 @@ Rebalancing is expensive: it involves debounce delays, optional I/O, and atomic 
 |---------------------------------------------------------|------------------------------------------------------------------------------------|--------------------------------------------------------------|
 | `IntentController<TRange, TData, TDomain>`              | `src/SlidingWindowCache/Core/Rebalance/Intent/IntentController.cs`                 | Background loop; decision orchestration; cancellation        |
 | `RebalanceDecisionEngine<TRange, TDomain>`              | `src/SlidingWindowCache/Core/Rebalance/Decision/RebalanceDecisionEngine.cs`        | **Sole authority** for rebalance necessity; 5-stage pipeline |
-| `NoRebalanceSatisfactionPolicy<TRange>`                 | `src/SlidingWindowCache/Core/Planning/NoRebalanceSatisfactionPolicy.cs`            | Stages 1 & 2: NoRebalanceRange containment checks            |
+| `NoRebalanceSatisfactionPolicy<TRange>`                 | `src/SlidingWindowCache/Core/Rebalance/Decision/NoRebalanceSatisfactionPolicy.cs`  | Stages 1 & 2: NoRebalanceRange containment checks            |
 | `ProportionalRangePlanner<TRange, TDomain>`             | `src/SlidingWindowCache/Core/Planning/ProportionalRangePlanner.cs`                 | Stage 3: desired cache range computation                     |
 | `NoRebalanceRangePlanner<TRange, TDomain>`              | `src/SlidingWindowCache/Core/Planning/NoRebalanceRangePlanner.cs`                  | Stage 3: desired NoRebalanceRange computation                |
-| `IRebalanceExecutionController<TRange, TData, TDomain>` | `src/SlidingWindowCache/Infrastructure/Execution/IRebalanceExecutionController.cs` | Debounce + single-flight execution contract                  |
+| `IRebalanceExecutionController<TRange, TData, TDomain>` | `src/SlidingWindowCache/Core/Rebalance/Execution/IRebalanceExecutionController.cs` | Debounce + single-flight execution contract                  |
 | `RebalanceExecutor<TRange, TData, TDomain>`             | `src/SlidingWindowCache/Core/Rebalance/Execution/RebalanceExecutor.cs`             | Sole writer; performs `Rematerialize`                        |
 
 See also the split component pages for deeper detail:
