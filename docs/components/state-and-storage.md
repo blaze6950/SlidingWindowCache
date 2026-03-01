@@ -21,15 +21,15 @@ State and storage define how cached data is held, read, and published. `CacheSta
 
 | Field              | Type            | Written by               | Read by                                |
 |--------------------|-----------------|--------------------------|----------------------------------------|
-| `Cache` (storage)  | `ICacheStorage` | `RebalanceExecutor` only | `UserRequestHandler`, `DecisionEngine` |
+| `Storage`          | `ICacheStorage` | `RebalanceExecutor` only | `UserRequestHandler`, `DecisionEngine` |
 | `IsInitialized`    | `bool`          | `RebalanceExecutor` only | `UserRequestHandler`                   |
 | `NoRebalanceRange` | `Range?`        | `RebalanceExecutor` only | `DecisionEngine`                       |
 
 **Single-Writer Rule (Invariant A.7):** Only `RebalanceExecutor` writes any field of `CacheState`. User path components are read-only. This is enforced by internal visibility modifiers (setters are `internal`), not by locks.
 
-**No internal locking:** The single-writer constraint makes locks unnecessary. `Volatile.Write` / `Volatile.Read` patterns ensure visibility across threads where needed.
+**Visibility model:** `CacheState` itself has no locks. Cross-thread visibility for `IsInitialized` and `NoRebalanceRange` is provided by the single-writer architecture — only one background thread ever writes these fields, and readers accept eventual consistency. Storage-level thread safety is handled inside each `ICacheStorage` implementation: `SnapshotReadStorage` uses a `volatile` array field with release/acquire fence ordering; `CopyOnReadStorage` uses a `lock` for its active-buffer swap and all reads.
 
-**Atomic updates via `Rematerialize`:** The `Rematerialize` method replaces the storage contents in a single atomic operation. No intermediate states are visible to readers.
+**Atomic updates via `Rematerialize`:** The `Rematerialize` method replaces the storage contents in a single atomic operation (under `lock` for `CopyOnReadStorage`, via `volatile` write for `SnapshotReadStorage`). No intermediate states are visible to readers.
 
 ## Storage Strategies
 
@@ -57,17 +57,17 @@ State and storage define how cached data is held, read, and published. `CacheSta
 
 **Strategy**: Dual-buffer pattern — active storage is never mutated during enumeration.
 
-| Operation       | Behavior                                                                                |
-|-----------------|-----------------------------------------------------------------------------------------|
-| `Rematerialize` | Clears staging buffer, fills with new data, atomically swaps with active                |
-| `Read`          | Acquires lock, allocates `TData[]`, copies from active buffer, returns `ReadOnlyMemory` |
-| `ToRangeData`   | Returns lazy enumerable over active storage (unsynchronized; rebalance path only)       |
+| Operation       | Behavior                                                                                         |
+|-----------------|--------------------------------------------------------------------------------------------------|
+| `Rematerialize` | Fills staging buffer outside the lock, then atomically swaps staging/active buffers under lock   |
+| `Read`          | Acquires lock, allocates `TData[]`, copies from active buffer, returns `ReadOnlyMemory`          |
+| `ToRangeData`   | Acquires lock, copies active buffer via `.ToArray()`, returns immutable `RangeData` snapshot     |
 
 **Staging Buffer Pattern:**
 ```
-Active buffer:   [existing data]  ← user reads here (immutable during enumeration)
-Staging buffer:  [new data]       ← rematerialization builds here
-                      ↓ swap (under lock)
+Active buffer:   [existing data]  ← user reads here (lock-protected)
+Staging buffer:  [new data]       ← rematerialization builds here (outside lock)
+                      ↓ swap (under lock, sub-microsecond)
 Active buffer:   [new data]       ← now visible to reads
 Staging buffer:  [old data]       ← reused next rematerialization (capacity preserved)
 ```
@@ -75,11 +75,11 @@ Staging buffer:  [old data]       ← reused next rematerialization (capacity pr
 **Characteristics**:
 - ✅ Cheap rematerialization (amortized O(1) when capacity sufficient)
 - ✅ No LOH pressure (List growth strategy)
-- ✅ Correct enumeration during LINQ-derived expansion
+- ✅ Correct enumeration during LINQ-derived expansion (staging buffer filled outside lock using LINQ chains over immutable data)
 - ❌ Allocation on every read (lock + array copy)
 - Best for: rematerialization-heavy workloads, large sliding windows
 
-> **Note**: `ToRangeData()` is unsynchronized and must only be called from the rebalance path. See `docs/storage-strategies.md`.
+> **Note**: `ToRangeData()` acquires the same lock as `Read()` and `Rematerialize()` (the critical section). It returns an immutable snapshot — a freshly allocated array — that is fully decoupled from the mutable buffer lifecycle. See `docs/storage-strategies.md`.
 
 ### Strategy Selection
 
@@ -90,14 +90,14 @@ Controlled by `WindowCacheOptions.UserCacheReadMode`:
 ## Read/Write Pattern Summary
 
 ```
-UserRequestHandler  ──reads───▶ CacheState.Cache.Read()
-                                CacheState.Cache.ToRangeData()
+UserRequestHandler  ──reads───▶ CacheState.Storage.Read()
+                                CacheState.Storage.ToRangeData()
                                 CacheState.IsInitialized
 
 DecisionEngine      ──reads───▶ CacheState.NoRebalanceRange
-                                CacheState.Cache.Range
+                                CacheState.Storage.Range
 
-RebalanceExecutor   ──writes──▶ CacheState.Cache.Rematerialize()    ← SOLE WRITER
+RebalanceExecutor   ──writes──▶ CacheState.Storage.Rematerialize()  ← SOLE WRITER
                                 CacheState.NoRebalanceRange         ← SOLE WRITER
                                 CacheState.IsInitialized            ← SOLE WRITER
 ```

@@ -8,9 +8,9 @@ The execution subsystem performs debounced, cancellable background work and is t
 
 | Component                                                          | File                                                                                          | Role                                                               |
 |--------------------------------------------------------------------|-----------------------------------------------------------------------------------------------|--------------------------------------------------------------------|
-| `IRebalanceExecutionController<TRange, TData, TDomain>`            | `src/SlidingWindowCache/Infrastructure/Execution/IRebalanceExecutionController.cs`            | Execution serialization contract                                   |
-| `TaskBasedRebalanceExecutionController<TRange, TData, TDomain>`    | `src/SlidingWindowCache/Infrastructure/Execution/TaskBasedRebalanceExecutionController.cs`    | Default: Task.Run-based debounce + cancellation                    |
-| `ChannelBasedRebalanceExecutionController<TRange, TData, TDomain>` | `src/SlidingWindowCache/Infrastructure/Execution/ChannelBasedRebalanceExecutionController.cs` | Optional: Channel-based bounded execution queue                    |
+| `IRebalanceExecutionController<TRange, TData, TDomain>`            | `src/SlidingWindowCache/Core/Rebalance/Execution/IRebalanceExecutionController.cs`            | Execution serialization contract                                   |
+| `TaskBasedRebalanceExecutionController<TRange, TData, TDomain>`    | `src/SlidingWindowCache/Core/Rebalance/Execution/TaskBasedRebalanceExecutionController.cs`    | Default: async task-chaining debounce + per-request cancellation   |
+| `ChannelBasedRebalanceExecutionController<TRange, TData, TDomain>` | `src/SlidingWindowCache/Core/Rebalance/Execution/ChannelBasedRebalanceExecutionController.cs` | Optional: channel-based bounded execution queue with backpressure  |
 | `RebalanceExecutor<TRange, TData, TDomain>`                        | `src/SlidingWindowCache/Core/Rebalance/Execution/RebalanceExecutor.cs`                        | Sole writer; performs `Rematerialize`; the single-writer authority |
 | `CacheDataExtensionService<TRange, TData, TDomain>`                | `src/SlidingWindowCache/Infrastructure/Services/CacheDataExtensionService.cs`                 | Incremental data fetching; range gap analysis                      |
 
@@ -18,14 +18,16 @@ The execution subsystem performs debounced, cancellable background work and is t
 
 ### TaskBasedRebalanceExecutionController (default)
 
-- Uses `Task.Run` with debounce delay and `CancellationTokenSource`
-- On each new execution request: cancels previous task, starts new task after debounce
+- Uses **async task chaining**: each `PublishExecutionRequest` call creates a new `async Task` that first `await`s the previous task, then runs `ExecuteRequestAsync` after the debounce delay. No `Task.Run` is used — the async state machine naturally schedules continuations on the thread pool via `ConfigureAwait(false)`.
+- On each new execution request: a new task is chained onto the tail of the previous one; a per-request `CancellationTokenSource` is created so any in-progress debounce delay can be cancelled when superseded.
+- The chaining approach is lock-free: `_currentExecutionTask` is updated via `Volatile.Write` after each chain step.
 - Selected when `WindowCacheOptions.RebalanceQueueCapacity` is `null`
 
 ### ChannelBasedRebalanceExecutionController (optional)
 
-- Uses `System.Threading.Channels.Channel<T>` with bounded capacity
-- Provides backpressure semantics; oldest unprocessed request may be dropped on overflow
+- Uses `System.Threading.Channels.Channel<T>` with `BoundedChannelFullMode.Wait`
+- Provides backpressure semantics: when the channel is at capacity, `PublishExecutionRequest` (an `async ValueTask`) awaits the channel write, throttling the background intent processing loop. **No requests are ever dropped.**
+- A dedicated `ProcessExecutionRequestsAsync` loop reads from the channel and executes requests sequentially.
 - Selected when `WindowCacheOptions.RebalanceQueueCapacity` is set
 
 **Strategy comparison:**
@@ -83,29 +85,36 @@ The execution subsystem performs debounced, cancellable background work and is t
 
 ## Exception Handling
 
-Exceptions in `RebalanceExecutor` are caught by `IntentController.ProcessIntentsAsync` and reported via `ICacheDiagnostics.RebalanceExecutionFailed`. They are **never propagated to the user thread**.
+Exceptions thrown by `RebalanceExecutor` are caught **inside the execution controllers**, not in `IntentController.ProcessIntentsAsync`:
+
+- **`TaskBasedRebalanceExecutionController`**: Exceptions from `ExecuteRequestAsync` (including `OperationCanceledException`) are caught in `ChainExecutionAsync`. An outer try/catch in `ChainExecutionAsync` also handles failures propagated from the previous chained task.
+- **`ChannelBasedRebalanceExecutionController`**: Exceptions from `ExecuteRequestAsync` are caught inside the `ProcessExecutionRequestsAsync` reader loop.
+
+In both cases, `OperationCanceledException` is reported via `ICacheDiagnostics.RebalanceExecutionCancelled` and other exceptions via `ICacheDiagnostics.RebalanceExecutionFailed`. Background execution exceptions are **never propagated to the user thread**.
+
+`IntentController.ProcessIntentsAsync` has its own exception handling for the intent processing loop itself (e.g., decision evaluation failures or channel write errors during `PublishExecutionRequest`), which are also reported via `ICacheDiagnostics.RebalanceExecutionFailed` and swallowed to keep the loop alive.
 
 > ⚠️ Always wire `RebalanceExecutionFailed` in production — it is the only signal for background execution failures. See `docs/diagnostics.md`.
 
 ## Invariants
 
-| Invariant | Description                                                               |
-|-----------|---------------------------------------------------------------------------|
-| A.7       | Only `RebalanceExecutor` writes to `CacheState` (single-writer)           |
-| A.8       | User path never blocks waiting for rebalance                              |
-| B.12      | Cache updates are atomic (all-or-nothing via `Rematerialize`)             |
-| B.13      | Consistency under cancellation: mutations discarded if cancelled          |
-| B.15      | Cache contiguity maintained after every `Rematerialize`                   |
-| B.16      | Obsolete results never applied (cancellation token identity check)        |
-| C.21      | Serial execution: at most one active rebalance at a time                  |
-| F.35      | Multiple cancellation checkpoints: before I/O, after I/O, before mutation |
-| F.35a     | Cancellation-before-mutation guarantee                                    |
-| F.37      | `Rematerialize` accepts arbitrary range and data (full replacement)       |
-| F.38      | Incremental fetching: only missing subranges fetched                      |
-| F.39      | Data preservation: existing cached data merged during expansion           |
-| G.45      | I/O isolation: `IDataSource` only called on background thread             |
-| H.47      | Activity counter incremented before channel write / Task.Run              |
-| H.48      | Activity counter decremented in `finally` blocks                          |
+| Invariant | Description                                                                                            |
+|-----------|--------------------------------------------------------------------------------------------------------|
+| A.7       | Only `RebalanceExecutor` writes to `CacheState` (single-writer)                                        |
+| A.8       | User path never blocks waiting for rebalance                                                           |
+| B.12      | Cache updates are atomic (all-or-nothing via `Rematerialize`)                                          |
+| B.13      | Consistency under cancellation: mutations discarded if cancelled                                       |
+| B.15      | Cache contiguity maintained after every `Rematerialize`                                                |
+| B.16      | Obsolete results never applied (cancellation token identity check)                                     |
+| C.21      | Serial execution: at most one active rebalance at a time                                               |
+| F.35      | Multiple cancellation checkpoints: before I/O, after I/O, before mutation                              |
+| F.35a     | Cancellation-before-mutation guarantee                                                                 |
+| F.37      | `Rematerialize` accepts arbitrary range and data (full replacement)                                    |
+| F.38      | Incremental fetching: only missing subranges fetched                                                   |
+| F.39      | Data preservation: existing cached data merged during expansion                                        |
+| G.45      | I/O isolation: `IDataSource` called by execution path only (not by user path during normal cache hits) |
+| H.47      | Activity counter incremented before channel write / task chain step                                    |
+| H.48      | Activity counter decremented in `finally` blocks                                                       |
 
 See `docs/invariants.md` (Sections A, B, C, F, G, H) for full specification.
 

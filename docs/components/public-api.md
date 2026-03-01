@@ -66,9 +66,11 @@ Configuration parameters:
 - Batch fetch (optional): default implementation uses parallel single-range fetches
 - Cancellation is cooperative; implementations must respect `CancellationToken`
 
-**Used by**: `CacheDataExtensionService` (background execution path only — never called on the user thread).
+**Called from two contexts:**
+- **User Path** (`UserRequestHandler`): on cold start (uninitialized cache), full cache miss (no overlap with current cache range), and partial cache hit (for the uncached portion via `CacheDataExtensionService`). These are synchronous to the user request — the user awaits the result.
+- **Background Execution Path** (`CacheDataExtensionService` via `RebalanceExecutor`): for incremental cache expansion during background rebalance. Only missing sub-ranges are fetched.
 
-**Invariant**: G.45 (I/O isolation — IDataSource is never called from the user path).
+**Implementations must be safe to call from both contexts** and must not assume a single caller thread.
 
 ## DTOs
 

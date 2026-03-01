@@ -211,6 +211,14 @@ internal sealed class IntentController<TRange, TData, TDomain>
                     // All decision evaluation (DecisionEngine, Planners, Policy) happens HERE in background
                     // Evaluate DecisionEngine INSIDE loop (avoids race conditions)
                     var lastExecutionRequest = _executionController.LastExecutionRequest;
+                    // _state.Storage.Range and _state.NoRebalanceRange are read without explicit
+                    // synchronization. This is intentional: the decision engine operates on an
+                    // eventually-consistent snapshot of cache state. A slightly stale range or
+                    // NoRebalanceRange value may cause one extra or skipped rebalance, but the
+                    // system self-corrects on the next intent. The single-writer architecture
+                    // guarantees no torn writes; CopyOnReadStorage protects the Range value via its
+                    // internal lock only for reads inside Read()/ToRangeData(); bare Range reads
+                    // here accept the same eventual-consistency contract.
                     var decision = _decisionEngine.Evaluate(
                         requestedRange: intent.RequestedRange,
                         currentNoRebalanceRange: _state.NoRebalanceRange,

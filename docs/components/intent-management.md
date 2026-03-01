@@ -35,9 +35,9 @@ Called by `UserRequestHandler` after serving a request:
 
 Runs for the lifetime of the cache on a dedicated background task:
 
-1. Wait on semaphore (no CPU spinning)
-2. Atomically read and clear pending intent
-3. Check cancellation (post-debounce early exit)
+1. Wait on semaphore (no CPU spinning) — passes `_loopCancellation.Token` to `WaitAsync` so disposal cancels the wait cleanly
+2. Atomically read and clear pending intent via `Interlocked.Exchange`
+3. If intent is null (multiple intents collapsed before the loop read): decrement activity counter in `finally`, continue
 4. Invoke `RebalanceDecisionEngine.Evaluate()` (5-stage pipeline, CPU-only)
 5. If no execution required: record skip diagnostic, decrement activity counter, continue
 6. If execution required: cancel previous `CancellationTokenSource`, enqueue to `IRebalanceExecutionController`
@@ -69,12 +69,12 @@ User burst: intent₁ → intent₂ → intent₃
 
 ## Internal State
 
-| Field              | Type                      | Description                                                        |
-|--------------------|---------------------------|--------------------------------------------------------------------|
-| `_pendingIntent`   | `Intent?` (volatile)      | Latest unprocessed intent; written by user thread, cleared by loop |
-| `_semaphore`       | `SemaphoreSlim`           | Wakes background loop when new intent arrives                      |
-| `_loopCts`         | `CancellationTokenSource` | Cancels the background loop on disposal                            |
-| `_activityCounter` | `AsyncActivityCounter`    | Tracks in-flight operations for `WaitForIdleAsync`                 |
+| Field                | Type                      | Description                                                        |
+|----------------------|---------------------------|--------------------------------------------------------------------|
+| `_pendingIntent`     | `Intent?` (volatile)      | Latest unprocessed intent; written by user thread, cleared by loop |
+| `_intentSignal`      | `SemaphoreSlim`           | Wakes background loop when new intent arrives                      |
+| `_loopCancellation`  | `CancellationTokenSource` | Cancels the background loop on disposal                            |
+| `_activityCounter`   | `AsyncActivityCounter`    | Tracks in-flight operations for `WaitForIdleAsync`                 |
 
 ## Invariants
 

@@ -18,15 +18,13 @@ Most concurrency complexity disappears if we can answer two questions unambiguou
 The cache is in one of three states:
 
 **1. Uninitialized**
-- `CurrentCacheRange == null`
-- `CacheData == null`
-- `IsInitialized == false`
-- `NoRebalanceRange == null`
+- `CacheState.IsInitialized == false`
+- `CacheState.Storage` exists but contains no data (empty buffer)
+- `CacheState.NoRebalanceRange == null`
 
 **2. Initialized**
-- `CurrentCacheRange != null`
-- `CacheData != null`
-- `CacheData` is consistent with `CurrentCacheRange` (Invariant B.11)
+- `CacheState.IsInitialized == true`
+- `CacheState.Storage` holds a contiguous, non-empty range of data consistent with `CacheState.Storage.Range` (Invariant B.11)
 - Cache is contiguous — no gaps (Invariant A.9a)
 - Ready to serve user requests
 
@@ -87,8 +85,7 @@ See `docs/invariants.md` for the formal single-writer rule (Invariants A.-1, A.7
   3. User Path publishes intent with delivered data
   4. Rebalance Execution performs first cache write
 - **Mutations** (Rebalance Execution only):
-  - Set `CacheData` = delivered data from intent
-  - Set `CurrentCacheRange` = delivered range
+  - Call `Storage.Rematerialize()` with delivered data and range
   - Set `IsInitialized = true`
 - **Atomicity**: Changes applied atomically (Invariant B.12)
 - **Postcondition**: Cache enters `Initialized` after execution completes
@@ -118,7 +115,7 @@ See `docs/invariants.md` for the formal single-writer rule (Invariants A.-1, A.7
   - Fetch missing data for `DesiredCacheRange` (only truly missing parts)
   - Merge delivered data with fetched data
   - Trim to `DesiredCacheRange` (normalization)
-  - Set `CacheData` and `CurrentCacheRange` via `Rematerialize()`
+  - Call `Storage.Rematerialize()` with merged, trimmed data (sets storage contents and `Storage.Range`)
   - Set `IsInitialized = true`
   - Recompute `NoRebalanceRange`
 - **Atomicity**: Changes applied atomically (Invariant B.12)
@@ -147,7 +144,7 @@ See `docs/invariants.md` for the formal single-writer rule (Invariants A.-1, A.7
 | Rebalancing   | None                | All cache mutations (expand, trim, Rematerialize, IsInitialized, NoRebalanceRange) — must yield on cancellation |
 
 **User Path mutations (Invariants A.7, A.8)**:
-- User Path NEVER calls `Cache.Rematerialize()`
+- User Path NEVER calls `Storage.Rematerialize()`
 - User Path NEVER writes to `IsInitialized`
 - User Path NEVER writes to `NoRebalanceRange`
 
@@ -155,7 +152,7 @@ See `docs/invariants.md` for the formal single-writer rule (Invariants A.-1, A.7
 1. Uses delivered data from intent as authoritative base
 2. Expands to `DesiredCacheRange` (fetches only truly missing ranges)
 3. Trims excess data outside `DesiredCacheRange`
-4. Writes to `Cache.Rematerialize()` (cache data and range)
+4. Calls `Storage.Rematerialize()` (atomically replaces storage data and `Storage.Range`)
 5. Writes to `IsInitialized = true`
 6. Recomputes and writes to `NoRebalanceRange`
 
@@ -177,25 +174,25 @@ See `docs/invariants.md` for the formal single-writer rule (Invariants A.-1, A.7
 
 **State Safety**:
 - **Atomicity**: All cache mutations are atomic (Invariant B.12)
-- **Consistency**: `CacheData ↔ CurrentCacheRange` always consistent (Invariant B.11)
+- **Consistency**: `Storage` data and `Storage.Range` always consistent (Invariant B.11)
 - **Contiguity**: Cache data never contains gaps (Invariant A.9a)
 - **Idempotence**: Multiple cancellations are safe
 
 ### State Invariants by State
 
 **In Uninitialized**:
-- All range and data fields are null
+- `IsInitialized == false`; `Storage` contains no data; `NoRebalanceRange == null`
 - User Path is read-only (no mutations)
 - Rebalance Execution is not active (activates after first intent)
 
 **In Initialized**:
-- `CacheData ↔ CurrentCacheRange` consistent (Invariant B.11)
+- `Storage` data and `Storage.Range` consistent (Invariant B.11)
 - Cache is contiguous (Invariant A.9a)
 - User Path is read-only (Invariant A.8)
 - Rebalance Execution is not active
 
 **In Rebalancing**:
-- `CacheData ↔ CurrentCacheRange` remain consistent (Invariant B.11)
+- `Storage` data and `Storage.Range` remain consistent (Invariant B.11)
 - Cache is contiguous (Invariant A.9a)
 - User Path may cause cancellation but NOT mutate (Invariants A.0, A.0a)
 - Rebalance Execution is active and sole writer (Invariant F.36)
@@ -212,7 +209,7 @@ User requests [100, 200]
 → User Path fetches [100, 200] from IDataSource
 → User Path returns data to user immediately
 → User Path publishes intent with delivered data [100, 200]
-→ Rebalance Execution writes: CacheData, CurrentCacheRange=[100,200], IsInitialized=true
+→ Rebalance Execution calls Storage.Rematerialize([100,200]), sets IsInitialized=true
 State: Initialized
 ```
 
@@ -220,7 +217,7 @@ State: Initialized
 
 ```
 State: Initialized
-CurrentCacheRange = [100, 200]
+Storage.Range = [100, 200]
 
 User requests [150, 250]
 → User Path reads [150,200] from cache, fetches [201,250] from IDataSource
@@ -241,10 +238,10 @@ State: Rebalancing (R2 executing with new DesiredCacheRange)
 
 ```
 State: Rebalancing
-CurrentCacheRange = [100, 200]
+Storage.Range = [100, 200]
 R1 executing for DesiredCacheRange = [50, 250]
 
-User requests [500, 600] (no intersection with CurrentCacheRange)
+User requests [500, 600] (no intersection with Storage.Range)
 → User Path fetches [500, 600] from IDataSource (full miss)
 → User Path returns data to user
 → User Path publishes intent with delivered data [500, 600]

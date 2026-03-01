@@ -133,6 +133,12 @@ internal sealed class UserRequestHandler<TRange, TData, TDomain>
         }
 
         var cacheStorage = _state.Storage;
+        // Bare Range reads without lock/volatile fence are intentional.
+        // CacheState follows an eventual-consistency model on the user path: IsInitialized,
+        // Storage.Range, and the storage contents are all written by the single rebalance writer.
+        // A slightly stale Range observation here at most causes the user path to take a
+        // suboptimal branch (e.g., treating a full hit as a partial hit), but the intent
+        // published at the end of this method will drive the system back to the correct state.
         var fullyInCache = _state.IsInitialized && cacheStorage.Range.Contains(requestedRange);
         var hasOverlap = _state.IsInitialized && !fullyInCache && cacheStorage.Range.Overlaps(requestedRange);
 
