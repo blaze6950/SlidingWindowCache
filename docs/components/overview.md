@@ -82,7 +82,7 @@ The system is easier to reason about when components are grouped by:
 🟦 WindowCacheDataSourceAdapter<TRange, TData, TDomain>    [IDataSource adapter]
 │  Wraps IWindowCache as IDataSource
 │  FetchAsync() → calls inner cache's GetDataAsync()
-│                 converts ReadOnlyMemory<TData> → array for RangeChunk
+│                 wraps ReadOnlyMemory<TData> in ReadOnlyMemoryEnumerable<TData> for RangeChunk (avoids temp TData[] alloc)
 ```
 
 **Component Type Legend:**

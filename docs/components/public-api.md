@@ -157,7 +157,7 @@ Three classes support building layered cache stacks where each layer's data sour
 
 Wraps an `IWindowCache` as an `IDataSource`, allowing any `WindowCache` to act as the data source for an outer `WindowCache`. Data is retrieved using eventual consistency (`GetDataAsync`).
 
-- Converts `ReadOnlyMemory<TData>` (returned by `IWindowCache.GetDataAsync`) to `IEnumerable<TData>` (required by `IDataSource.FetchAsync`) via `.ToArray()`.
+- Wraps `ReadOnlyMemory<TData>` (returned by `IWindowCache.GetDataAsync`) in a `ReadOnlyMemoryEnumerable<TData>` to satisfy the `IEnumerable<TData>` contract of `IDataSource.FetchAsync`. This avoids allocating a temporary `TData[]` copy — the wrapper holds only a reference to the existing backing array via `ReadOnlyMemory<TData>`, and the data is enumerated lazily in a single pass during the outer cache's rematerialization.
 - Does **not** own the wrapped cache; the caller is responsible for disposing it.
 
 ### LayeredWindowCache\<TRange, TData, TDomain\>
@@ -188,7 +188,7 @@ await using var cache = LayeredWindowCacheBuilder<int, byte[], IntegerFixedStepD
     .Build();
 ```
 
-- `Create(dataSource, domain)` — factory entry point; validates `dataSource` is not null.
+- `Create(dataSource, domain)` — factory entry point; validates both `dataSource` and `domain` are not null.
 - `AddLayer(options, diagnostics?)` — adds a layer on top; first call = innermost layer, last call = outermost (user-facing).
 - `Build()` — constructs all `WindowCache` instances, wires them via `WindowCacheDataSourceAdapter`, and wraps them in `LayeredWindowCache`.
 - Throws `InvalidOperationException` from `Build()` if no layers were added.

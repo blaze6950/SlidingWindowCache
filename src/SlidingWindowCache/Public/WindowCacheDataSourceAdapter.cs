@@ -35,7 +35,8 @@ namespace SlidingWindowCache.Public;
 /// which returns data from the inner cache's window (possibly triggering a background rebalance
 /// in the inner cache). The <see cref="ReadOnlyMemory{T}"/> from <see cref="RangeResult{TRange,TData}"/>
 /// is wrapped in a <see cref="ReadOnlyMemoryEnumerable{T}"/> and passed directly as
-/// <see cref="RangeChunk{TRange,TData}.Data"/>, avoiding an intermediate array allocation.
+/// <see cref="RangeChunk{TRange,TData}.Data"/>, avoiding a temporary <typeparamref name="TData"/>[]
+/// allocation proportional to the data range.
 /// </para>
 /// <para><strong>Consistency Model:</strong></para>
 /// <para>
@@ -125,11 +126,12 @@ public sealed class WindowCacheDataSourceAdapter<TRange, TData, TDomain>
     /// </para>
     /// <para>
     /// The <see cref="ReadOnlyMemory{T}"/> returned by the inner cache is wrapped in a
-    /// <see cref="ReadOnlyMemoryEnumerable{T}"/> without copying the underlying data.
-    /// The <see cref="ReadOnlyMemory{T}"/> captures a reference to the backing array,
-    /// keeping it reachable for the lifetime of the enumerable. Enumeration is deferred:
-    /// the data is read lazily when the outer cache's rebalance path materializes the
-    /// <see cref="RangeChunk{TRange,TData}.Data"/> sequence (a single pass).
+    /// <see cref="ReadOnlyMemoryEnumerable{T}"/>, avoiding a temporary <typeparamref name="TData"/>[]
+    /// allocation proportional to the data range. The wrapper holds only a reference to the
+    /// existing backing array via <see cref="ReadOnlyMemory{T}"/>, keeping it reachable for the
+    /// lifetime of the enumerable. Enumeration is deferred: the data is read lazily when the
+    /// outer cache's rebalance path materializes the <see cref="RangeChunk{TRange,TData}.Data"/>
+    /// sequence (a single pass).
     /// </para>
     /// </remarks>
     public async Task<RangeChunk<TRange, TData>> FetchAsync(

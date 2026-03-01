@@ -3,8 +3,8 @@ using System.Collections;
 namespace SlidingWindowCache.Infrastructure.Collections;
 
 /// <summary>
-/// A zero-allocation <see cref="IEnumerable{T}"/> wrapper over a <see cref="ReadOnlyMemory{T}"/>.
-/// Enables lazy, single-pass enumeration of memory-backed data without copying the underlying array.
+/// A lightweight <see cref="IEnumerable{T}"/> wrapper over a <see cref="ReadOnlyMemory{T}"/>
+/// that avoids allocating temp TData[] and copying the underlying data.
 /// </summary>
 /// <typeparam name="T">The element type.</typeparam>
 /// <remarks>
@@ -18,7 +18,7 @@ namespace SlidingWindowCache.Infrastructure.Collections;
 /// method and holds no state across yield boundaries.
 /// </para>
 /// </remarks>
-internal readonly struct ReadOnlyMemoryEnumerable<T> : IEnumerable<T>
+internal sealed class ReadOnlyMemoryEnumerable<T> : IEnumerable<T>
 {
     private readonly ReadOnlyMemory<T> _memory;
 

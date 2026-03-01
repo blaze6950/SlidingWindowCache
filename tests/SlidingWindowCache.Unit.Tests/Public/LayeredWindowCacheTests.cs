@@ -21,17 +21,15 @@ public sealed class LayeredWindowCacheTests
     private static LayeredWindowCache<int, int, IntegerFixedStepDomain> CreateLayeredCache(
         params IWindowCache<int, int, IntegerFixedStepDomain>[] layers)
     {
-        // Use reflection-free approach: the internal constructor takes IReadOnlyList
-        // We use the builder with real caches in integration tests; here we test the wrapper
-        // by constructing it directly via internal constructor using a subclass trick.
-        // Since the constructor is internal, we leverage InternalsVisibleTo in the test project.
+        // The internal constructor is accessible via InternalsVisibleTo.
+        // Integration tests use the builder with real caches; here we test the wrapper directly.
         return CreateLayeredCacheFromList(layers.ToList());
     }
 
     private static LayeredWindowCache<int, int, IntegerFixedStepDomain> CreateLayeredCacheFromList(
         IReadOnlyList<IWindowCache<int, int, IntegerFixedStepDomain>> layers)
     {
-        // Instantiate via the internal constructor using the test project's InternalsVisibleTo access
+        // Instantiate via the internal constructor using the test project's InternalsVisibleTo access.
         return new LayeredWindowCache<int, int, IntegerFixedStepDomain>(layers);
     }
 
