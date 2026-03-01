@@ -115,6 +115,29 @@ Strong Consistency Mode
 - Not recommended for hot paths: adds latency equal to the rebalance execution time (debounce delay + I/O).
 - See `README.md` and `docs/components/public-api.md`.
 
+## Multi-Layer Caches
+
+Layered Cache
+- A pipeline of two or more `WindowCache` instances where each layer's `IDataSource` is the layer below it. Created via `LayeredWindowCacheBuilder`. The user interacts with the outermost layer; inner layers serve as warm prefetch buffers. See `docs/architecture.md` and `README.md`.
+
+Cascading Rebalance
+- When an outer layer's rebalance fetches missing ranges from the inner layer via `GetDataAsync`, each fetch publishes a rebalance intent on the inner layer. If those ranges fall outside the inner layer's `NoRebalanceRange`, the inner layer also schedules a rebalance. Under correct configuration (inner buffers 5–10× larger than outer buffers) this is rare — the inner layer's Decision Engine rejects the intent at Stage 1. Under misconfiguration it becomes continuous (see "Cascading Rebalance Thrashing"). See `docs/architecture.md` (Cascading Rebalance Behavior) and `docs/scenarios.md` (Scenarios L6, L7).
+
+Cascading Rebalance Thrashing
+- The failure mode of a misconfigured layered cache where every outer layer rebalance triggers an inner layer rebalance, which re-centers the inner layer toward only one side of the outer layer's gap, leaving it poorly positioned for the next rebalance. Symptoms: `l2.RebalanceExecutionCompleted ≈ l1.RebalanceExecutionCompleted`; the inner layer provides no buffering benefit. Resolution: increase inner layer buffer sizes to 5–10× the outer layer's and use thresholds of 0.2–0.3. See `docs/scenarios.md` (Scenario L7).
+
+Layer
+- A single `WindowCache` instance in a layered cache stack. Layers are ordered by proximity to the user: L1 = outermost (user-facing), L2 = next inner, Lₙ = innermost (closest to the real data source).
+
+WindowCacheDataSourceAdapter
+- Adapts an `IWindowCache` to the `IDataSource` interface, enabling it to act as the backing store for an outer `WindowCache`. This is the composition point for building layered caches. The adapter does not own the inner cache; ownership is managed by `LayeredWindowCache`. See `src/SlidingWindowCache/Public/WindowCacheDataSourceAdapter.cs`.
+
+LayeredWindowCacheBuilder
+- Fluent builder that wires `WindowCache` layers into a `LayeredWindowCache`. Layers are added bottom-up (deepest/innermost first, user-facing last). Each `AddLayer` call adds one `WindowCache` on top of the current stack. `Build()` returns a `LayeredWindowCache` that owns all layers. See `src/SlidingWindowCache/Public/LayeredWindowCacheBuilder.cs`.
+
+LayeredWindowCache
+- A thin `IWindowCache` wrapper that owns a stack of `WindowCache` layers. Delegates `GetDataAsync` to the outermost layer. `WaitForIdleAsync` awaits all layers sequentially, outermost to innermost, ensuring full-stack convergence (required for correct behavior of `GetDataAndWaitForIdleAsync`). Disposes all layers outermost-first on `DisposeAsync`. Exposes `LayerCount`. See `src/SlidingWindowCache/Public/LayeredWindowCache.cs`.
+
 ## Storage And Materialization
 
 UserCacheReadMode

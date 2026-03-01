@@ -762,6 +762,139 @@ public class PrometheusMetricsDiagnostics : ICacheDiagnostics
 
 ---
 
+## Per-Layer Diagnostics in Layered Caches
+
+When using `LayeredWindowCacheBuilder`, each cache layer can be given its own independent
+`ICacheDiagnostics` instance. This lets you observe the behavior of each layer in isolation,
+which is the primary tool for tuning buffer sizes and thresholds in a multi-layer setup.
+
+### Attaching Diagnostics to Individual Layers
+
+Pass a diagnostics instance as the second argument to `AddLayer`:
+
+```csharp
+var l2Diagnostics = new EventCounterCacheDiagnostics();
+var l1Diagnostics = new EventCounterCacheDiagnostics();
+
+await using var cache = LayeredWindowCacheBuilder<int, byte[], IntegerFixedStepDomain>
+    .Create(realDataSource, domain)
+    .AddLayer(deepOptions, l2Diagnostics)   // L2: inner / deep layer
+    .AddLayer(userOptions, l1Diagnostics)   // L1: outermost / user-facing layer
+    .Build();
+```
+
+Omit the second argument (or pass `null`) to use the default `NoOpDiagnostics` for that layer.
+
+### What Each Layer's Diagnostics Report
+
+Because each layer is a fully independent `WindowCache`, every `ICacheDiagnostics` event has
+the same meaning as documented in the single-cache sections above — but scoped to that layer:
+
+| Event                                     | Meaning in a layered context                                                       |
+|-------------------------------------------|------------------------------------------------------------------------------------|
+| `UserRequestServed`                       | A request was served by **this layer** (whether from cache or via adapter)         |
+| `UserRequestFullCacheHit`                 | The request was served entirely from **this layer's** window                       |
+| `UserRequestPartialCacheHit`              | This layer partially served the request; the rest was fetched from the layer below |
+| `UserRequestFullCacheMiss`                | This layer had no data; the full request was delegated to the layer below          |
+| `DataSourceFetchSingleRange`              | This layer called the layer below (via the adapter) for a single range             |
+| `DataSourceFetchMissingSegments`          | This layer called the layer below for gap-filling segments only                    |
+| `RebalanceExecutionCompleted`             | This layer completed a background rebalance (window expansion/shrink)              |
+| `RebalanceSkippedCurrentNoRebalanceRange` | This layer's rebalance was skipped — still within its stability zone               |
+
+### Detecting Cascading Rebalances
+
+A **cascading rebalance** occurs when the outer layer's rebalance fetches ranges from the
+inner layer that fall outside the inner layer's `NoRebalanceRange`, causing the inner layer
+to also rebalance. Under correct configuration this should be rare. Under misconfiguration
+it becomes continuous and defeats the purpose of layering.
+
+**Primary indicator — compare rebalance completion counts:**
+
+```csharp
+// After a sustained sequential access session:
+var l1Rate = l1Diagnostics.RebalanceExecutionCompleted;
+var l2Rate = l2Diagnostics.RebalanceExecutionCompleted;
+
+// Healthy: L2 rebalances much less often than L1
+// l2Rate should be << l1Rate for normal sequential access
+
+// Unhealthy: L2 rebalances nearly as often as L1
+// l2Rate ≈ l1Rate  →  cascading rebalance thrashing
+```
+
+**Secondary confirmation — check skip counts on the inner layer:**
+
+```csharp
+// Under correct configuration, the inner layer's Decision Engine
+// should reject most L1-driven intents at Stage 1 (NoRebalanceRange containment).
+// This counter should be much higher than l2.RebalanceExecutionCompleted.
+var l2SkippedStage1 = l2Diagnostics.RebalanceSkippedCurrentNoRebalanceRange;
+
+// Healthy ratio: l2SkippedStage1 >> l2Rate
+// Unhealthy ratio: l2SkippedStage1 ≈ 0 while l2Rate is high
+```
+
+**Confirming the data source is being hit too frequently:**
+
+```csharp
+// If the inner layer is rebalancing on every L1 rebalance,
+// it will also be fetching from the real data source frequently.
+// This counter on the innermost layer should grow slowly under correct config.
+var dataSourceFetches = lInnerDiagnostics.DataSourceFetchMissingSegments
+                      + lInnerDiagnostics.DataSourceFetchSingleRange;
+```
+
+**Resolution checklist when cascading is detected:**
+
+1. Increase inner layer `leftCacheSize` and `rightCacheSize` to 5–10× the outer layer's values
+2. Set inner layer `leftThreshold` and `rightThreshold` to 0.2–0.3
+3. Re-run the access pattern and verify `l2.RebalanceSkippedCurrentNoRebalanceRange` dominates
+4. See `docs/architecture.md` (Cascading Rebalance Behavior) and `docs/scenarios.md` (L6, L7)
+   for a full explanation of the mechanics and the anti-pattern
+```
+l2Diagnostics.UserRequestFullCacheHit / l2Diagnostics.UserRequestServed
+```
+A low hit rate on the inner layer means L1 is frequently delegating to L2 — consider
+increasing L2's buffer sizes (`leftCacheSize` / `rightCacheSize`).
+
+**Outer layer hit rate:**
+```
+l1Diagnostics.UserRequestFullCacheHit / l1Diagnostics.UserRequestServed
+```
+The outer layer hit rate is what users directly experience. If it is low, consider increasing
+L1's buffer size or tightening the `leftThreshold` / `rightThreshold` to reduce rebalancing.
+
+**Real data source access rate (bypassing all layers):**
+
+Monitor `l_innermost_diagnostics.DataSourceFetchSingleRange` or
+`DataSourceFetchMissingSegments` on the innermost layer. These represent requests that went
+all the way to the real data source. Reducing this rate (by widening inner layer buffers) is
+the primary goal of a multi-layer setup.
+
+**Rebalance frequency:**
+```
+l1Diagnostics.RebalanceExecutionCompleted   // How often L1 is re-centering
+l2Diagnostics.RebalanceExecutionCompleted   // How often L2 is re-centering
+```
+If L1 rebalances much more frequently than L2, it is either too narrowly configured or the
+access pattern has high variability. Consider loosening L1's thresholds or widening L2.
+
+### Production Guidance for Layered Caches
+
+- **Always handle `RebalanceExecutionFailed` on each layer.** Background rebalance failures
+  on any layer are silent without a proper implementation. See the production requirements
+  section above — they apply to every layer independently.
+
+- **Use separate `EventCounterCacheDiagnostics` instances per layer** during development
+  and staging to establish baseline metrics. In production, replace with custom
+  implementations that export to your monitoring infrastructure.
+
+- **Layer diagnostics are completely independent.** There is no aggregate or combined
+  diagnostics object; you observe each layer separately and interpret the metrics in
+  relation to each other.
+
+---
+
 ## See Also
 
 - **[Invariants](invariants.md)** - System invariants tracked by diagnostics

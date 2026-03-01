@@ -43,7 +43,9 @@ public sealed class SimpleTestDataSource<TData> : IDataSource<int, TData>
         CancellationToken cancellationToken)
     {
         if (_simulateAsyncDelay)
+        {
             await Task.Delay(1, cancellationToken);
+        }
 
         return new RangeChunk<int, TData>(requestedRange, GenerateData(requestedRange));
     }

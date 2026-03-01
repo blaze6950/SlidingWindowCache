@@ -133,8 +133,10 @@ public class CopyOnReadStorageTests : CacheStorageTestsBase
                         for (var j = 0; j < data.Length; j++)
                         {
                             if (data.Span[j] != expectedStart + j)
+                            {
                                 throw new InvalidOperationException(
                                     $"Data corruption at index {j}: expected {expectedStart + j}, got {data.Span[j]}. Range={currentRange}");
+                            }
                         }
                     }
                 }

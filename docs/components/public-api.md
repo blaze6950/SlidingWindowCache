@@ -145,7 +145,55 @@ Composes `GetDataAsync` + `WaitForIdleAsync` into a single call. Returns the sam
 
 **See**: `README.md` (Strong Consistency Mode section) and `docs/architecture.md` for broader context.
 
-## See Also
+## Multi-Layer Cache
+
+Three classes support building layered cache stacks where each layer's data source is the layer below it:
+
+### WindowCacheDataSourceAdapter\<TRange, TData, TDomain\>
+
+**File**: `src/SlidingWindowCache/Public/WindowCacheDataSourceAdapter.cs`
+
+**Type**: `sealed class` implementing `IDataSource<TRange, TData>`
+
+Wraps an `IWindowCache` as an `IDataSource`, allowing any `WindowCache` to act as the data source for an outer `WindowCache`. Data is retrieved using eventual consistency (`GetDataAsync`).
+
+- Converts `ReadOnlyMemory<TData>` (returned by `IWindowCache.GetDataAsync`) to `IEnumerable<TData>` (required by `IDataSource.FetchAsync`) via `.ToArray()`.
+- Does **not** own the wrapped cache; the caller is responsible for disposing it.
+
+### LayeredWindowCache\<TRange, TData, TDomain\>
+
+**File**: `src/SlidingWindowCache/Public/LayeredWindowCache.cs`
+
+**Type**: `sealed class` implementing `IWindowCache<TRange, TData, TDomain>` and `IAsyncDisposable`
+
+A thin wrapper that:
+- Delegates `GetDataAsync` to the outermost layer.
+- **`WaitForIdleAsync` awaits all layers sequentially, outermost to innermost.** The outer layer is awaited first because its rebalance drives fetch requests into inner layers. This ensures `GetDataAndWaitForIdleAsync` correctly waits for the entire cache stack to converge.
+- **Owns** all layer `WindowCache` instances and disposes them in reverse order (outermost first) when disposed.
+- Exposes `LayerCount` for inspection.
+
+Typically created via `LayeredWindowCacheBuilder.Build()` rather than directly.
+
+### LayeredWindowCacheBuilder\<TRange, TData, TDomain\>
+
+**File**: `src/SlidingWindowCache/Public/LayeredWindowCacheBuilder.cs`
+
+**Type**: `sealed class` — fluent builder
+
+```csharp
+await using var cache = LayeredWindowCacheBuilder<int, byte[], IntegerFixedStepDomain>
+    .Create(realDataSource, domain)
+    .AddLayer(deepOptions)   // L2: inner layer (CopyOnRead, large buffers)
+    .AddLayer(userOptions)   // L1: outer layer (Snapshot, small buffers)
+    .Build();
+```
+
+- `Create(dataSource, domain)` — factory entry point; validates `dataSource` is not null.
+- `AddLayer(options, diagnostics?)` — adds a layer on top; first call = innermost layer, last call = outermost (user-facing).
+- `Build()` — constructs all `WindowCache` instances, wires them via `WindowCacheDataSourceAdapter`, and wraps them in `LayeredWindowCache`.
+- Throws `InvalidOperationException` from `Build()` if no layers were added.
+
+**See**: `README.md` (Multi-Layer Cache section) and `docs/storage-strategies.md` for recommended layer configuration patterns.
 
 - `docs/boundary-handling.md`
 - `docs/diagnostics.md`

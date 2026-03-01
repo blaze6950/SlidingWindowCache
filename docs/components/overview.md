@@ -18,6 +18,7 @@ The system is easier to reason about when components are grouped by:
 
 - Public facade: `WindowCache<TRange, TData, TDomain>`
 - Public extensions: `WindowCacheExtensions` — opt-in strong consistency mode (`GetDataAndWaitForIdleAsync`)
+- Multi-layer support: `WindowCacheDataSourceAdapter`, `LayeredWindowCacheBuilder`, `LayeredWindowCache`
 - User Path: assembles requested data and publishes intent
 - Intent loop: observes latest intent and runs analytical validation
 - Execution: performs debounced, cancellable rebalance work and mutates cache state
@@ -54,6 +55,34 @@ The system is easier to reason about when components are grouped by:
     ├── 🟦 RebalanceExecutor<TRange, TData, TDomain>
     └── 🟦 CacheDataExtensionService<TRange, TData, TDomain>
         └── uses → 🟧 IDataSource<TRange, TData> (user-provided)
+
+──────────────────────────── Multi-Layer Support ────────────────────────────
+
+🟦 LayeredWindowCacheBuilder<TRange, TData, TDomain>       [Fluent Builder]
+│  Static Create(dataSource, domain) → builder
+│  AddLayer(options, diagnostics?) → builder (fluent chain)
+│  Build() → LayeredWindowCache
+│
+│  internally wires:
+│    IDataSource  →  WindowCache  →  WindowCacheDataSourceAdapter
+│                                          │
+│                                          ▼
+│                                    WindowCache  →  WindowCacheDataSourceAdapter  → ...
+│                                          │
+│                                          ▼  (outermost)
+└─────────────────────────────────►  WindowCache
+                                         (user-facing layer, index = LayerCount-1)
+
+🟦 LayeredWindowCache<TRange, TData, TDomain>              [IWindowCache wrapper]
+│  LayerCount: int
+│  GetDataAsync()      → delegates to outermost WindowCache
+│  WaitForIdleAsync()  → awaits all layers sequentially, outermost to innermost
+│  DisposeAsync()      → disposes all layers outermost-first
+
+🟦 WindowCacheDataSourceAdapter<TRange, TData, TDomain>    [IDataSource adapter]
+│  Wraps IWindowCache as IDataSource
+│  FetchAsync() → calls inner cache's GetDataAsync()
+│                 converts ReadOnlyMemory<TData> → array for RangeChunk
 ```
 
 **Component Type Legend:**

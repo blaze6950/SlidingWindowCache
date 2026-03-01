@@ -351,6 +351,58 @@ This is a thin composition of `GetDataAsync` followed by `WaitForIdleAsync`. The
 
 `WaitForIdleAsync()` provides race-free synchronization with background operations for tests. Uses "was idle at some point" semantics — does not guarantee still idle after completion. See `docs/invariants.md` (Activity tracking invariants).
 
+## Multi-Layer Cache
+
+For workloads with high-latency data sources, you can compose multiple `WindowCache` instances into a layered stack. Each layer uses the layer below it as its data source, allowing you to trade memory for reduced data-source I/O.
+
+```csharp
+await using var cache = LayeredWindowCacheBuilder<int, byte[], IntegerFixedStepDomain>
+    .Create(realDataSource, domain)
+    .AddLayer(new WindowCacheOptions(        // L2: deep background cache
+        leftCacheSize: 10.0,
+        rightCacheSize: 10.0,
+        readMode: UserCacheReadMode.CopyOnRead,
+        leftThreshold: 0.3,
+        rightThreshold: 0.3))
+    .AddLayer(new WindowCacheOptions(        // L1: user-facing cache
+        leftCacheSize: 0.5,
+        rightCacheSize: 0.5,
+        readMode: UserCacheReadMode.Snapshot))
+    .Build();
+
+var result = await cache.GetDataAsync(range, ct);
+```
+
+`LayeredWindowCache` implements `IWindowCache` and is `IAsyncDisposable` — it owns and disposes all layers when you dispose it.
+
+**Recommended layer configuration pattern:**
+- **Inner layers** (closest to the data source): `CopyOnRead`, large buffer sizes (5–10×), handles the heavy prefetching
+- **Outer (user-facing) layer**: `Snapshot`, small buffer sizes (0.3–1.0×), zero-allocation reads
+
+> **Important — buffer ratio requirement:** Inner layer buffers must be **substantially** larger
+> than outer layer buffers, not merely slightly larger. When the outer layer rebalances, it
+> fetches missing ranges from the inner layer via `GetDataAsync`. Each fetch publishes a
+> rebalance intent on the inner layer. If the inner layer's `NoRebalanceRange` is not wide
+> enough to contain the outer layer's full `DesiredCacheRange`, the inner layer will also
+> rebalance — and re-center toward only one side of the outer layer's gap, leaving it poorly
+> positioned for the next rebalance. With undersized inner buffers this becomes a continuous
+> cycle (cascading rebalance thrashing). Use a 5–10× ratio and `leftThreshold`/`rightThreshold`
+> of 0.2–0.3 on inner layers to ensure the inner layer's stability zone absorbs the outer
+> layer's rebalance fetches. See `docs/architecture.md` (Cascading Rebalance Behavior) and
+> `docs/scenarios.md` (Scenarios L6 and L7) for the full explanation.
+
+**Three-layer example:**
+```csharp
+await using var cache = LayeredWindowCacheBuilder<int, byte[], IntegerFixedStepDomain>
+    .Create(realDataSource, domain)
+    .AddLayer(l3Options)   // L3: 10× CopyOnRead — network/disk absorber
+    .AddLayer(l2Options)   // L2: 2× CopyOnRead  — mid-level buffer
+    .AddLayer(l1Options)   // L1: 0.5× Snapshot  — user-facing
+    .Build();
+```
+
+For detailed guidance see `docs/storage-strategies.md`.
+
 ## License
 
 MIT

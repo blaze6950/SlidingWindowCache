@@ -337,6 +337,212 @@ For concurrency correctness, the following guarantees hold:
 
 Temporary non-optimal cache geometry is acceptable. Permanent inconsistency is not.
 
+---
+
+## V. Multi-Layer Cache Scenarios
+
+These scenarios describe the temporal behavior when `LayeredWindowCacheBuilder` is used to
+create a cache stack of two or more `WindowCache` layers.
+
+**Notation:** L1 = outermost (user-facing) layer; L2 = next inner layer; Lₙ = innermost layer
+(directly above the real `IDataSource`). Data requests flow L1 → L2 → ... → Lₙ → data source;
+data returns in reverse order.
+
+---
+
+### L1 — Cold Start (All Layers Uninitialized)
+
+**Preconditions:**
+- All layers uninitialized (`IsInitialized == false` at every layer)
+
+**Action Sequence:**
+1. User calls `GetDataAsync(range)` on `LayeredWindowCache` → delegates to L1
+2. L1 (cold): calls `FetchAsync(range)` on the adapter → calls L2's `GetDataAsync(range)`
+3. L2 (cold): calls `FetchAsync(range)` on the adapter → continues inward until Lₙ
+4. Lₙ (cold): fetches `range` from the real `IDataSource`; returns data; publishes intent
+5. Each inner layer returns data upward, each publishes its own rebalance intent (fire-and-forget)
+6. L1 receives data from L2 adapter; publishes its own intent; returns data to user
+7. In the background, each layer independently rebalances to its configured `DesiredCacheRange`
+
+**Key insight:** The first user request traverses the full stack. Subsequent requests will be
+served from whichever layer has the data in its window (L1 first, then L2, etc.).
+
+---
+
+### L2 — L1 Cache Hit (Outermost Layer Serves Request)
+
+**Preconditions:**
+- All layers initialized
+- L1 `CurrentCacheRange.Contains(requestedRange) == true`
+
+**Action Sequence:**
+1. User calls `GetDataAsync(requestedRange)` → L1 has the data
+2. L1 serves the request from its cache without contacting L2
+3. L1 publishes an intent (fire-and-forget); Decision Engine evaluates whether L1 needs rebalancing
+4. L2 and deeper layers are NOT contacted; they continue their own background rebalancing independently
+
+**Key insight:** The outermost layer absorbs requests that fall within its window, providing the
+lowest latency. Inner layers are only contacted on L1 misses.
+
+---
+
+### L3 — L1 Miss, L2 Hit (Outer Miss Delegates to Next Layer)
+
+**Preconditions:**
+- All layers initialized
+- L1 does NOT have `requestedRange` in its window
+- L2 `CurrentCacheRange.Contains(requestedRange) == true`
+
+**Action Sequence:**
+1. User calls `GetDataAsync(requestedRange)` → L1 misses
+2. L1 calls `FetchAsync(requestedRange)` on the L2 adapter
+3. L2 serves the request from its own cache; publishes its own rebalance intent
+4. L2 adapter returns a `RangeChunk` to L1
+5. L1 assembles and returns data to the user; publishes its rebalance intent
+6. L1's background rebalance subsequently fetches the wider range from L2 (via adapter),
+   expanding L1's window to cover similar future requests without contacting L2
+
+**Key insight:** L2 acts as a warm prefetch buffer. L1 pays one adapter call on miss, then
+rebalances to prevent the same miss on the next request.
+
+---
+
+### L4 — Full Stack Miss (Request Falls Outside All Layer Windows)
+
+**Preconditions:**
+- All layers initialized
+- `requestedRange` falls outside every layer's current window (e.g., a large jump)
+
+**Action Sequence:**
+1. User calls `GetDataAsync(requestedRange)` → L1 misses
+2. L1 adapter → L2 misses → ... → Lₙ misses → real `IDataSource` fetches data
+3. Data flows back up the chain; each layer publishes its own rebalance intent
+4. User receives data immediately; all layers' background rebalances cascade independently
+
+**Note:** In a large jump, each layer's rebalance independently re-centers around the new region.
+The stack converges from the inside out: Lₙ expands first (driving real I/O), then L(n-1) expands
+from Lₙ's new window, and finally L1 expands from L2.
+
+---
+
+### L5 — Per-Layer Diagnostics Observation
+
+**Setup:**
+```csharp
+var l2Diagnostics = new EventCounterCacheDiagnostics();
+var l1Diagnostics = new EventCounterCacheDiagnostics();
+
+await using var cache = LayeredWindowCacheBuilder<int, byte[], IntegerFixedStepDomain>
+    .Create(dataSource, domain)
+    .AddLayer(deepOptions,  l2Diagnostics)   // L2
+    .AddLayer(userOptions,  l1Diagnostics)   // L1
+    .Build();
+```
+
+**Observation pattern:**
+- `l1Diagnostics.UserRequestFullCacheHit` — requests served entirely from L1
+- `l2Diagnostics.UserRequestFullCacheHit` — requests L1 delegated to L2 that L2 served from cache
+- `l2Diagnostics.DataSourceFetchSingleRange` — requests that reached the real data source
+- `l1Diagnostics.RebalanceExecutionCompleted` — how often L1's window was re-centered
+
+**Key insight:** Each layer has fully independent diagnostics. By comparing hit rates across
+layers you can tune buffer sizes and thresholds for the access pattern in production.
+
+---
+
+### L6 — Cascading Rebalance (L1 Rebalance Triggers L2 Rebalance)
+
+This scenario describes the internal mechanics of a cascading rebalance. Understanding it
+is essential for correct layer configuration. See also `docs/architecture.md` (Cascading
+Rebalance Behavior) and Scenario L7 for the anti-pattern case.
+
+**Preconditions:**
+- Both layers initialized
+- User has scrolled forward enough that L1's `DesiredCacheRange` now extends **beyond** L2's
+  `NoRebalanceRange` on at least one side (e.g., L2's buffers are too small relative to L1's)
+
+**Action Sequence:**
+1. User calls `GetDataAsync(range)` → L1 serves from cache; publishes rebalance intent
+2. L1's Decision Engine confirms rebalance needed (range outside L1's `NoRebalanceRange`)
+3. L1's rebalance computes: `AssembledRangeData = [100, 250]`, `DesiredCacheRange = [50, 300]`
+4. Missing ranges: left gap `[50, 100)` and right gap `(250, 300]`
+5. L1 calls `dataSource.FetchAsync({[50,100), (250,300]}, ct)` on the adapter
+6. The adapter's default batch implementation dispatches **two parallel** `GetDataAsync` calls to L2
+7. L2 serves both ranges from its cache (or its own data source); returns data to L1
+8. **L2 publishes two rebalance intents** — one per `GetDataAsync` call (fire-and-forget)
+9. L2's intent loop applies "latest wins" — one intent supersedes the other
+10. L2's Decision Engine evaluates the surviving intent against L2's `NoRebalanceRange`
+
+**Branch A — Cascading rebalance avoided (correct configuration):**
+- The surviving range falls inside L2's `NoRebalanceRange` (Stage 1 rejection)
+- L2 skips rebalance entirely — no I/O, no cache mutation
+- This is the **desired steady-state**: L2's large buffer absorbed L1's fetch without reacting
+
+**Branch B — Cascading rebalance occurs (buffer too small):**
+- The surviving range falls outside L2's `NoRebalanceRange`
+- L2 schedules its own background rebalance
+- L2 re-centers toward the surviving intent range (one gap side, not the midpoint of L1's desired range)
+- L2's `CurrentCacheRange` shifts — potentially leaving it poorly positioned for L1's next rebalance
+
+**Key insight:** Whether Branch A or Branch B occurs is determined entirely by configuration.
+Making L2's `leftCacheSize`/`rightCacheSize` 5–10× larger than L1's, and using
+`leftThreshold`/`rightThreshold` of 0.2–0.3, makes Branch A the norm.
+
+---
+
+### L7 — Anti-Pattern: Cascading Rebalance Thrashing
+
+This scenario describes the failure mode when inner layer buffers are too close in size to outer
+layer buffers. Do not configure a layered cache this way.
+
+**Configuration (wrong):**
+```
+L1: leftCacheSize=1.0, rightCacheSize=1.0, leftThreshold=0.1, rightThreshold=0.1
+L2: leftCacheSize=1.5, rightCacheSize=1.5, leftThreshold=0.1, rightThreshold=0.1
+```
+L2's buffers are only 1.5× L1's — not nearly enough.
+
+**Access pattern:** User scrolls sequentially, one step per second.
+
+**What happens (step by step):**
+
+1. **Step 1** — User requests `[100, 110]`
+   - Cold start: both layers fetch from data source; L2 rebalances to `[0, 260]`; L1 rebalances to `[0, 220]`
+   - Both layers converge around `[100, 110]`
+
+2. **Step 2** — User requests `[200, 210]`
+   - L1: `[200, 210]` is within L1's window → cache hit; L1 publishes intent; L1 rebalances to `[100, 310]`
+   - L1's rebalance fetches right gap `(220, 310]` from L2 via adapter
+   - L2: `(220, 310]` extends slightly beyond L2's `NoRebalanceRange` (L2 only has window to ~260)
+   - L2 re-centers to `[110, 410]` — **L2 rebalanced unnecessarily**
+
+3. **Step 3** — User requests `[300, 310]`
+   - L1 rebalances to `[200, 410]`; fetches right gap `(310, 410]` from L2
+   - L2: right gap at `(310, 410]` is near L2's new boundary → L2 rebalances again
+   - L2 re-centers to `[210, 510]` — **L2 rebalanced again**
+
+4. **Pattern repeats every scroll step** — L2's rebalance count tracks L1's rebalance count
+
+**Observed symptoms:**
+- `l2.RebalanceExecutionCompleted ≈ l1.RebalanceExecutionCompleted` (L2 rebalances as often as L1)
+- `l2.DataSourceFetchMissingSegments` is high (L2 repeatedly fetches from the real data source)
+- L2 provides no meaningful prefetch advantage over a single-layer cache
+- Data source I/O is not reduced compared to using L1 alone
+
+**Resolution:**
+```
+L2: leftCacheSize=8.0, rightCacheSize=8.0, leftThreshold=0.25, rightThreshold=0.25
+```
+With 8× buffers, L2's `DesiredCacheRange` spans `[100 - 800, 100 + 800]` after the first
+rebalance. L1's subsequent `DesiredCacheRange` values (length ~300) remain well within L2's
+`NoRebalanceRange` (L2's window shrunk by 25% thresholds on each side). L2's Decision Engine
+rejects rebalance at Stage 1 for every normal sequential scroll step.
+
+**Diagnostic check:** After resolving misconfiguration, `l2.RebalanceSkippedCurrentNoRebalanceRange`
+should be much higher than `l2.RebalanceExecutionCompleted` during normal sequential access.
+
+---
+
 ## Invariants
 
 Scenarios must be consistent with:

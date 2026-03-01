@@ -201,48 +201,43 @@ lock (_lock)
 
 ### Example Scenario: Multi-Level Cache Composition
 
+The library provides built-in support for layered cache composition via `LayeredWindowCacheBuilder` and `WindowCacheDataSourceAdapter`.
+
 ```csharp
-// BACKGROUND LAYER: Large distant cache with CopyOnRead
-var backgroundOptions = new WindowCacheOptions(
-    leftCacheSize: 10.0,      // Cache 10x requested range
-    rightCacheSize: 10.0,
-    leftThreshold: 0.3,
-    rightThreshold: 0.3,
-    readMode: UserCacheReadMode.CopyOnRead  // ← Cheap rematerialization
-);
+// Two-layer cache: L2 (CopyOnRead, large) → L1 (Snapshot, small)
+await using var cache = LayeredWindowCacheBuilder<int, byte[], IntegerFixedStepDomain>
+    .Create(slowDataSource, domain)      // real (bottom-most) data source
+    .AddLayer(new WindowCacheOptions(    // L2: deep background cache
+        leftCacheSize: 10.0,
+        rightCacheSize: 10.0,
+        leftThreshold: 0.3,
+        rightThreshold: 0.3,
+        readMode: UserCacheReadMode.CopyOnRead))  // ← cheap rematerialization
+    .AddLayer(new WindowCacheOptions(    // L1: user-facing cache
+        leftCacheSize: 0.5,
+        rightCacheSize: 0.5,
+        readMode: UserCacheReadMode.Snapshot))    // ← zero-allocation reads
+    .Build();
 
-var backgroundCache = new WindowCache<int, byte[], IntegerFixedStepDomain>(
-    slowDataSource,  // Network/disk
-    domain,
-    backgroundOptions
-);
-
-// USER-FACING LAYER: Small nearby cache with Snapshot
-var userOptions = new WindowCacheOptions(
-    leftCacheSize: 0.5,
-    rightCacheSize: 0.5,
-    readMode: UserCacheReadMode.Snapshot  // ← Zero-allocation reads
-);
-
-// Wrap background cache as IDataSource for user cache
-// (Implement IDataSource<int, byte[]> wrapping the background cache — not provided by the library)
-IDataSource<int, byte[]> cachedDataSource = new BackgroundCacheAdapter(backgroundCache);
-
-var userCache = new WindowCache<int, byte[], IntegerFixedStepDomain>(
-    cachedDataSource,  // Reads from background cache
-    domain,
-    userOptions
-);
-
-// User scrolls: 
-// - userCache: many reads (zero-alloc), rare rebalancing
-// - backgroundCache: infrequent reads (copy), frequent rebalancing
+// User scrolls:
+// - L1 cache: many reads (zero-alloc), rare rebalancing
+// - L2 cache: infrequent reads (copy), frequent rebalancing against slowDataSource
+var result = await cache.GetDataAsync(range, ct);
 ```
 
-This composition leverages the strengths of both strategies:
+If you need lower-level control, you can compose layers manually using `WindowCacheDataSourceAdapter`:
 
-- **Background layer**: Handles large distant window, absorbs rebalancing cost
-- **User layer**: Handles small nearby window, serves reads with zero allocation
+```csharp
+var backgroundCache = new WindowCache<int, byte[], IntegerFixedStepDomain>(
+    slowDataSource, domain, backgroundOptions);
+
+// Wrap background cache as IDataSource for user cache
+IDataSource<int, byte[]> cachedDataSource =
+    new WindowCacheDataSourceAdapter<int, byte[], IntegerFixedStepDomain>(backgroundCache);
+
+var userCache = new WindowCache<int, byte[], IntegerFixedStepDomain>(
+    cachedDataSource, domain, userOptions);
+```
 
 ---
 
@@ -473,7 +468,8 @@ public async Task CopyOnReadMode_CorrectDuringExpansion()
 - **Snapshot**: Fast reads (zero-allocation), expensive rematerialization, best for read-heavy workloads
 - **CopyOnRead with Staging Buffer**: Fast rematerialization, all reads copy under lock (`Read()` and
   `ToRangeData()`), best for rematerialization-heavy workloads
-- **Composition**: Combine both strategies in multi-level caches for optimal performance
+- **Composition**: Combine both strategies in multi-level caches using `LayeredWindowCacheBuilder` for
+  optimal performance; or wire layers manually via `WindowCacheDataSourceAdapter`
 - **Staging Buffer**: Critical correctness pattern preventing enumeration corruption during cache expansion
 - **`ToRangeData()` safety**: `CopyOnReadStorage.ToRangeData()` copies `_activeStorage` to an immutable
   array snapshot under the lock. This is required because `ToRangeData()` is called from the user thread
