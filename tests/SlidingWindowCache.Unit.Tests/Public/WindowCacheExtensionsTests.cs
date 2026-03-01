@@ -12,7 +12,7 @@ namespace SlidingWindowCache.Unit.Tests.Public;
 /// Uses mocked <see cref="IWindowCache{TRange, TData, TDomain}"/> to isolate the extension method
 /// from any real cache implementation.
 /// </summary>
-public class WindowCacheExtensionsTests
+public sealed class WindowCacheExtensionsTests
 {
     #region Test Infrastructure
 
