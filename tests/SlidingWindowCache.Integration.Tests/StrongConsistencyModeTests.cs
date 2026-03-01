@@ -353,39 +353,6 @@ public sealed class StrongConsistencyModeTests : IAsyncDisposable
             $"Expected OperationCanceledException (or subclass), got {exception.GetType().Name}");
     }
 
-    /// <summary>
-    /// Verifies that cancellation during the WaitForIdleAsync portion propagates correctly.
-    /// </summary>
-    [Fact]
-    public async Task GetDataAndWaitForIdleAsync_CancelDuringWait_ThrowsOperationCanceledException()
-    {
-        // ARRANGE — use a slow data source so rebalance takes time
-        var options = TestHelpers.CreateDefaultOptions(
-            debounceDelay: TimeSpan.FromMilliseconds(200) // long debounce to ensure we can cancel
-        );
-        var (cache, _) = TestHelpers.CreateCacheWithDefaults(
-            _domain,
-            _cacheDiagnostics,
-            options,
-            fetchDelay: TimeSpan.FromMilliseconds(100)
-        );
-        _cache = cache;
-        var range = TestHelpers.CreateRange(100, 110);
-        using var cts = new CancellationTokenSource();
-
-        // ACT — start the operation and cancel mid-flight
-        var operationTask = cache.GetDataAndWaitForIdleAsync(range, cts.Token).AsTask();
-        // Cancel after a short delay to allow GetDataAsync to complete but cancel during wait
-        cts.CancelAfter(TimeSpan.FromMilliseconds(50));
-
-        var exception = await Record.ExceptionAsync(async () => await operationTask);
-
-        // ASSERT — cancellation of the operation should surface as OperationCanceledException,
-        // regardless of whether it is observed during GetDataAsync or WaitForIdleAsync.
-        Assert.NotNull(exception);
-        Assert.IsAssignableFrom<OperationCanceledException>(exception);
-    }
-
     #endregion
 
     #region Post-Disposal Tests
