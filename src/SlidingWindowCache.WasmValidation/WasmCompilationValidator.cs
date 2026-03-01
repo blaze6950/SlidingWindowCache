@@ -221,4 +221,76 @@ public static class WasmCompilationValidator
         await cache.WaitForIdleAsync();
         _ = result.Data.Length;
     }
+
+    /// <summary>
+    /// Validates layered cache: <see cref="LayeredWindowCacheBuilder{TRange,TData,TDomain}"/>,
+    /// <see cref="WindowCacheDataSourceAdapter{TRange,TData,TDomain}"/>, and
+    /// <see cref="LayeredWindowCache{TRange,TData,TDomain}"/> compile for net8.0-browser.
+    /// Uses the recommended configuration: CopyOnRead inner layer (large buffers) +
+    /// Snapshot outer layer (small buffers).
+    /// </summary>
+    /// <remarks>
+    /// <para><strong>Types Validated:</strong></para>
+    /// <list type="bullet">
+    /// <item><description>
+    /// <see cref="LayeredWindowCacheBuilder{TRange,TData,TDomain}"/> — fluent builder
+    /// wiring layers together via <see cref="WindowCacheDataSourceAdapter{TRange,TData,TDomain}"/>
+    /// </description></item>
+    /// <item><description>
+    /// <see cref="WindowCacheDataSourceAdapter{TRange,TData,TDomain}"/> — adapter bridging
+    /// <see cref="IWindowCache{TRange,TData,TDomain}"/> to <see cref="IDataSource{TRange,TData}"/>
+    /// </description></item>
+    /// <item><description>
+    /// <see cref="LayeredWindowCache{TRange,TData,TDomain}"/> — wrapper that delegates
+    /// <see cref="IWindowCache{TRange,TData,TDomain}.GetDataAsync"/> to the outermost layer and
+    /// awaits all layers sequentially on <see cref="IWindowCache{TRange,TData,TDomain}.WaitForIdleAsync"/>
+    /// </description></item>
+    /// </list>
+    /// <para><strong>Why One Method Is Sufficient:</strong></para>
+    /// <para>
+    /// The layered cache types introduce no new strategy axes: they delegate to underlying
+    /// <see cref="WindowCache{TRange,TData,TDomain}"/> instances whose internal strategies
+    /// are already covered by Configurations 1–4. A single method proving all three new
+    /// public types compile on WASM is therefore sufficient.
+    /// </para>
+    /// </remarks>
+    public static async Task ValidateLayeredCache_TwoLayer_RecommendedConfig()
+    {
+        var domain = new IntegerFixedStepDomain();
+
+        // Inner layer: CopyOnRead + large buffers (recommended for deep/backing layers)
+        var innerOptions = new WindowCacheOptions(
+            leftCacheSize: 5.0,
+            rightCacheSize: 5.0,
+            readMode: UserCacheReadMode.CopyOnRead,
+            leftThreshold: 0.3,
+            rightThreshold: 0.3
+        );
+
+        // Outer (user-facing) layer: Snapshot + small buffers (recommended for user-facing layer)
+        var outerOptions = new WindowCacheOptions(
+            leftCacheSize: 0.5,
+            rightCacheSize: 0.5,
+            readMode: UserCacheReadMode.Snapshot,
+            leftThreshold: 0.2,
+            rightThreshold: 0.2
+        );
+
+        // Build the layered cache — exercises LayeredWindowCacheBuilder,
+        // WindowCacheDataSourceAdapter, and LayeredWindowCache
+        await using var cache = LayeredWindowCacheBuilder<int, int, IntegerFixedStepDomain>
+            .Create(new SimpleDataSource(), domain)
+            .AddLayer(innerOptions)
+            .AddLayer(outerOptions)
+            .Build();
+
+        var range = Intervals.NET.Factories.Range.Closed<int>(0, 10);
+        var result = await cache.GetDataAsync(range, CancellationToken.None);
+
+        // WaitForIdleAsync on LayeredWindowCache awaits all layers (outermost to innermost)
+        await cache.WaitForIdleAsync();
+
+        _ = result.Data.Length;
+        _ = cache.LayerCount;
+    }
 }

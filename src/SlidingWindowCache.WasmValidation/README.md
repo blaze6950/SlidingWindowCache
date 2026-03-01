@@ -21,6 +21,7 @@ The sole purpose of this project is to ensure that the SlidingWindowCache librar
 - ✅ **CI/CD compatibility check** - Ensures library can target browser environments
 - ✅ **Strategy coverage validation** - Validates all internal storage and serialization strategies
 - ✅ **Minimal API usage** - Instantiates core types to validate no platform-incompatible APIs are used
+- ✅ **Layered cache coverage** - Validates `LayeredWindowCacheBuilder`, `WindowCacheDataSourceAdapter`, and `LayeredWindowCache` compile for WASM
 
 ## Implementation
 
@@ -55,6 +56,7 @@ Each configuration has a dedicated validation method:
 2. `ValidateConfiguration2_CopyOnReadMode_UnboundedQueue()`
 3. `ValidateConfiguration3_SnapshotMode_BoundedQueue()`
 4. `ValidateConfiguration4_CopyOnReadMode_BoundedQueue()`
+5. `ValidateLayeredCache_TwoLayer_RecommendedConfig()`
 
 All methods perform identical operations:
 1. Implement a simple `IDataSource<int, int>`
@@ -64,6 +66,21 @@ All methods perform identical operations:
 5. Call `WaitForIdleAsync` for completeness
 
 All code uses deterministic, synchronous-friendly patterns suitable for compile-time validation.
+
+### Layered Cache Validation
+
+Method 5 (`ValidateLayeredCache_TwoLayer_RecommendedConfig`) validates that the three new public
+layered cache types compile for `net8.0-browser`:
+
+- `LayeredWindowCacheBuilder<TRange, TData, TDomain>` — fluent builder wiring layers via the adapter
+- `WindowCacheDataSourceAdapter<TRange, TData, TDomain>` — bridges `IWindowCache` to `IDataSource`
+- `LayeredWindowCache<TRange, TData, TDomain>` — wrapper owning all layers; `WaitForIdleAsync`
+  awaits all layers sequentially (outermost to innermost)
+
+Uses the recommended configuration: `CopyOnRead` inner layer (large buffers) + `Snapshot` outer
+layer (small buffers). A single method is sufficient because the layered cache types introduce no
+new strategy axes — they delegate to underlying `WindowCache` instances whose internal strategies
+are already covered by methods 1–4.
 
 ## Build Validation
 
@@ -79,6 +96,7 @@ A successful build confirms that:
 - Intervals.NET dependencies are WebAssembly-compatible
 - **All internal storage strategies** (SnapshotReadStorage, CopyOnReadStorage) are WASM-compatible
 - **All serialization strategies** (task-based, channel-based) are WASM-compatible
+- **All layered cache types** (LayeredWindowCacheBuilder, WindowCacheDataSourceAdapter, LayeredWindowCache) are WASM-compatible
 
 ## Target Framework
 
