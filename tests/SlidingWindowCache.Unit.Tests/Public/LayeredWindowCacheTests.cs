@@ -32,13 +32,7 @@ public sealed class LayeredWindowCacheTests
         IReadOnlyList<IWindowCache<int, int, IntegerFixedStepDomain>> layers)
     {
         // Instantiate via the internal constructor using the test project's InternalsVisibleTo access
-        return (LayeredWindowCache<int, int, IntegerFixedStepDomain>)
-            Activator.CreateInstance(
-                typeof(LayeredWindowCache<int, int, IntegerFixedStepDomain>),
-                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance,
-                null,
-                [layers],
-                null)!;
+        return new LayeredWindowCache<int, int, IntegerFixedStepDomain>(layers);
     }
 
     private static Intervals.NET.Range<int> MakeRange(int start, int end)
