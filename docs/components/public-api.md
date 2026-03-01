@@ -96,9 +96,9 @@ Batch fetch result from `IDataSource`. Contains:
 
 Optional observability interface with 18 event recording methods covering:
 - User request outcomes (full hit, partial hit, full miss)
-- Data source access events
-- Rebalance intent lifecycle (published, cancelled)
-- Rebalance execution lifecycle (started, completed, cancelled)
+- Data source access events and data unavailability (`DataSegmentUnavailable`)
+- Rebalance intent events (published)
+- Rebalance execution lifecycle (started, completed, failed via `RebalanceExecutionFailed`)
 - Rebalance skip optimizations (NoRebalanceRange stage 1 & 2, same-range short-circuit)
 
 **Implementations**:
