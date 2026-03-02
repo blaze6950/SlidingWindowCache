@@ -153,10 +153,6 @@ public static class WindowCacheExtensions
     /// configured debounce delay. On a miss path, the caller has already paid an <c>IDataSource</c>
     /// round-trip; the additional wait is proportionally less significant.
     /// </para>
-    /// <!-- TODO: Consider bypassing or reducing the debounce delay in the execution controller
-    ///      when a caller is actively waiting for idle in hybrid/WaitOnMiss mode, to avoid
-    ///      unnecessary user-facing latency on miss paths. This requires infrastructure changes
-    ///      to propagate the "caller is waiting" signal down to the execution controller. -->
     /// <para><strong>Serialized Access Requirement:</strong></para>
     /// <para>
     /// This method provides its "cache will be warm for the next call" guarantee only under
