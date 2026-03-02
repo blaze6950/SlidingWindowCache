@@ -252,6 +252,8 @@ Assert.Equal(1, diagnostics.CacheReplaced);
 **Scenarios:** User Scenarios U2, U3 (full cache hit)  
 **Interpretation:** Optimal performance - requested range fully contained in cache
 
+**Per-request programmatic alternative:** `result.CacheInteraction == CacheInteraction.FullHit` on the returned `RangeResult`. `ICacheDiagnostics` callbacks are aggregate counters; `CacheInteraction` is the per-call value for branching logic (e.g., `GetDataAndWaitOnMissAsync` uses it to skip `WaitForIdleAsync` on full hits).
+
 **Example Usage:**
 ```csharp
 // Request 1: [100, 200] - cache miss, cache becomes [100, 200]
@@ -271,6 +273,8 @@ Assert.Equal(1, diagnostics.UserRequestFullCacheHit);
 **Scenarios:** User Scenario U4 (partial cache hit)  
 **Interpretation:** Efficient cache extension - some data reused, missing parts fetched
 
+**Per-request programmatic alternative:** `result.CacheInteraction == CacheInteraction.PartialHit` on the returned `RangeResult`.
+
 **Example Usage:**
 ```csharp
 // Request 1: [100, 200]
@@ -289,6 +293,8 @@ Assert.Equal(1, diagnostics.UserRequestPartialCacheHit);
 **Location:** `UserRequestHandler.HandleRequestAsync` (Scenarios 1 and 4)  
 **Scenarios:** U1 (cold start), U5 (non-intersecting jump)  
 **Interpretation:** Most expensive path - no cache reuse
+
+**Per-request programmatic alternative:** `result.CacheInteraction == CacheInteraction.FullMiss` on the returned `RangeResult`.
 
 **Example Usage:**
 ```csharp

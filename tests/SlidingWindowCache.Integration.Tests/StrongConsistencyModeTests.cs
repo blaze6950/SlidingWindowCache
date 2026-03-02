@@ -333,11 +333,13 @@ public sealed class StrongConsistencyModeTests : IAsyncDisposable
     #region Cancellation Integration Tests
 
     /// <summary>
-    /// Verifies that a pre-cancelled token causes the operation to fail (either
-    /// GetDataAsync or WaitForIdleAsync will see the cancellation).
+    /// Verifies that a pre-cancelled token causes graceful degradation: if GetDataAsync
+    /// succeeds before observing the cancellation, WaitForIdleAsync's OperationCanceledException
+    /// is caught and the already-obtained result is returned (eventual consistency degradation).
+    /// The background rebalance is not affected.
     /// </summary>
     [Fact]
-    public async Task GetDataAndWaitForIdleAsync_PreCancelledToken_ThrowsOperationCanceledException()
+    public async Task GetDataAndWaitForIdleAsync_PreCancelledToken_ReturnsResultGracefully()
     {
         // ARRANGE
         var cache = CreateCache();
@@ -345,14 +347,20 @@ public sealed class StrongConsistencyModeTests : IAsyncDisposable
         using var cts = new CancellationTokenSource();
         cts.Cancel();
 
-        // ACT
+        // ACT — GetDataAsync may succeed even with a pre-cancelled token (no explicit
+        // ThrowIfCancellationRequested on the user path when data is already in cache or
+        // when the fetch completes before observing cancellation). If WaitForIdleAsync
+        // then throws OperationCanceledException it is caught and the result is returned.
         var exception = await Record.ExceptionAsync(
             async () => await cache.GetDataAndWaitForIdleAsync(range, cts.Token));
 
-        // ASSERT
-        Assert.NotNull(exception);
-        Assert.True(exception is OperationCanceledException,
-            $"Expected OperationCanceledException (or subclass), got {exception.GetType().Name}");
+        // ASSERT — graceful degradation: either no exception (WaitForIdleAsync cancelled
+        // and caught), or OperationCanceledException from GetDataAsync itself (if the
+        // data source fetch observed the cancellation). Both outcomes are valid.
+        if (exception is not null)
+        {
+            Assert.IsAssignableFrom<OperationCanceledException>(exception);
+        }
     }
 
     #endregion

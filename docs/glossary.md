@@ -50,7 +50,7 @@ RangeChunk
 - See `docs/boundary-handling.md`.
 
 RangeResult
-- The public API return from `GetDataAsync`: the delivered `Range<TRange>?` and the materialized data.
+- The public API return from `GetDataAsync`: the delivered `Range<TRange>?`, the materialized data, and the `CacheInteraction` classification (`FullHit`, `PartialHit`, or `FullMiss`).
 - See `docs/boundary-handling.md`.
 
 ## Architectural Concepts
@@ -107,11 +107,41 @@ AsyncActivityCounter
 WaitForIdleAsync (“Was Idle” Semantics)
 - Completes when the system was idle at some point, which is appropriate for tests and convergence checks.
 - It does not guarantee the system is still idle after the task completes.
+- Under serialized (one-at-a-time) access this is sufficient for hybrid and strong consistency guarantees. Under parallel access the guarantee degrades: a caller may observe an already-completed (stale) idle TCS if another thread incremented the activity counter between the 0→1 transition and the new TCS publication. See Invariant H.49 and `docs/architecture.md`.
+
+CacheInteraction
+- A per-request classification set on every `RangeResult` by `UserRequestHandler`, indicating how the cache contributed to serving the request.
+- Values: `FullHit` (request fully served from cache), `PartialHit` (request partially served from cache; missing portion fetched from `IDataSource`), `FullMiss` (cache was uninitialized or had no overlap; full range fetched from `IDataSource`).
+- Provides a programmatic per-request alternative to the aggregate `ICacheDiagnostics` callbacks (`UserRequestFullCacheHit`, `UserRequestPartialCacheHit`, `UserRequestFullCacheMiss`).
+- See `docs/invariants.md` (A.10a, A.10b) and `docs/boundary-handling.md`.
+
+Hybrid Consistency Mode
+- An opt-in mode provided by the `GetDataAndWaitOnMissAsync` extension method on `IWindowCache`.
+- Composes `GetDataAsync` with conditional `WaitForIdleAsync`: waits only when `CacheInteraction` is `PartialHit` or `FullMiss`; returns immediately on `FullHit`.
+- Provides warm-cache-speed hot paths with convergence guarantees on cold or near-boundary requests.
+- The convergence guarantee holds only under serialized (one-at-a-time) access; under parallel access the "was idle" semantics may return a stale completed TCS.
+- If cancellation is requested during the idle wait, the already-obtained result is returned gracefully (degrades to eventual consistency for that call); the background rebalance is not affected.
+- See `README.md` and `docs/components/public-api.md`.
+
+Serialized Access
+- An access pattern in which calls to a cache are issued one at a time (each call completes before the next begins).
+- Required for the `GetDataAndWaitOnMissAsync` and `GetDataAndWaitForIdleAsync` extension methods to provide their “cache has converged” guarantee.
+- Under parallel access the extension methods remain safe (no deadlocks or data corruption) but the idle-wait may return early due to `AsyncActivityCounter`’s “was idle at some point” semantics (see Invariant H.49).
+
+GetDataAndWaitOnMissAsync
+- Extension method on `IWindowCache` providing hybrid consistency mode.
+- Calls `GetDataAsync`, then conditionally calls `WaitForIdleAsync` only when the result's `CacheInteraction` is not `FullHit`.
+- On `FullHit`, returns immediately (no idle wait). On `PartialHit` or `FullMiss`, waits for the cache to converge.
+- If `WaitForIdleAsync` throws `OperationCanceledException`, the already-obtained result is returned gracefully (degrades to eventual consistency); the background rebalance continues.
+- See `Hybrid Consistency Mode` above and `docs/components/public-api.md`.
 
 Strong Consistency Mode
 - An opt-in mode provided by the `GetDataAndWaitForIdleAsync` extension method on `IWindowCache`.
 - Composes `GetDataAsync` (returns data immediately) with `WaitForIdleAsync` (waits for convergence), returning the same `RangeResult` as `GetDataAsync` but only after the cache has reached an idle state.
+- Unlike hybrid mode, always waits regardless of `CacheInteraction` value.
 - Useful for cold start synchronization, integration testing, and any scenario requiring a guarantee that the cache window has converged before proceeding.
+- The convergence guarantee holds only under serialized (one-at-a-time) access; see `Serialized Access` above.
+- If `WaitForIdleAsync` throws `OperationCanceledException`, the already-obtained result is returned gracefully (degrades to eventual consistency for that call); the background rebalance continues.
 - Not recommended for hot paths: adds latency equal to the rebalance execution time (debounce delay + I/O).
 - See `README.md` and `docs/components/public-api.md`.
 

@@ -137,7 +137,7 @@ The canonical formal definition of the validation pipeline is in `docs/invariant
 
 Cache state converges to optimal configuration asynchronously through decision-driven rebalance execution:
 
-1. **User Path** returns correct data immediately (from cache or `IDataSource`)
+1. **User Path** returns correct data immediately (from cache or `IDataSource`) and classifies the request as `FullHit`, `PartialHit`, or `FullMiss` — exposed on `RangeResult.CacheInteraction`
 2. **User Path** publishes intent with delivered data (synchronously in user thread — lightweight signal only)
 3. **Intent processing loop** (background) wakes on semaphore signal, reads latest intent via `Interlocked.Exchange`
 4. **Rebalance Decision Engine** validates rebalance necessity through multi-stage analytical pipeline (background intent loop — CPU-only, side-effect free)
@@ -197,7 +197,11 @@ Idle detection requires state-based semantics: when the system becomes idle, ALL
 
 **"Was idle" semantics — not "is idle":** `WaitForIdleAsync` completes when the system was idle at some point. It does not guarantee the system is still idle after completion. This is correct for eventual consistency models. Callers requiring stronger guarantees must re-check state after await.
 
-**Opt-in strong consistency mode:** For scenarios that require the cache to be fully converged before proceeding, the `GetDataAndWaitForIdleAsync` extension method on `IWindowCache` composes `GetDataAsync` and `WaitForIdleAsync` into a single call. This provides a convenient strong consistency mode on top of the default eventual consistency model, at the cost of waiting for rebalance to complete. See `README.md` and `docs/components/public-api.md` for usage details.
+**Opt-in consistency modes:** Two extension methods on `IWindowCache` layer consistency guarantees on top of the default eventual consistency model:
+- `GetDataAndWaitOnMissAsync` — **hybrid mode**: waits for idle only when `CacheInteraction` is `PartialHit` or `FullMiss`; returns immediately on `FullHit`. Provides warm-cache performance on hot paths while ensuring convergence on cold or near-boundary requests.
+- `GetDataAndWaitForIdleAsync` — **strong mode**: always waits for idle regardless of cache interaction type. Useful for cold start synchronization and integration tests.
+
+**Serialized access requirement:** Both extension methods provide their "cache has converged" guarantee only under serialized (one-at-a-time) access. Under parallel access the guarantee degrades: a caller may observe an already-completed (stale) idle `TaskCompletionSource` due to the gap between `Interlocked.Increment` (0→1) and `Volatile.Write` of the new TCS in `AsyncActivityCounter.IncrementActivity`. The methods remain safe (no deadlocks or data corruption) but may return before convergence is actually complete. See `README.md` and `docs/components/public-api.md` for usage details.
 
 ---
 
