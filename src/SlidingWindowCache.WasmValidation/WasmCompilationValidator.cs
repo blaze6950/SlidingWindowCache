@@ -59,6 +59,22 @@ internal sealed class SimpleDataSource : IDataSource<int, int>
 /// This ensures all storage strategies (SnapshotReadStorage, CopyOnReadStorage) and
 /// serialization strategies (task-based, channel-based) are WebAssembly-compatible.
 /// </para>
+/// <para><strong>Opt-In Consistency Modes:</strong></para>
+/// <para>
+/// The validator also covers the <see cref="WindowCacheExtensions"/> extension methods
+/// for hybrid and strong consistency modes, including the cancellation graceful degradation
+/// path (<c>OperationCanceledException</c> from <c>WaitForIdleAsync</c> caught, result returned):
+/// </para>
+/// <list type="bullet">
+/// <item><description>
+/// <see cref="WindowCacheExtensions.GetDataAndWaitForIdleAsync{TRange,TData,TDomain}"/> —
+/// strong consistency (always waits for idle)
+/// </description></item>
+/// <item><description>
+/// <see cref="WindowCacheExtensions.GetDataAndWaitOnMissAsync{TRange,TData,TDomain}"/> —
+/// hybrid consistency (waits on miss/partial hit, returns immediately on full hit)
+/// </description></item>
+/// </list>
 /// </remarks>
 public static class WasmCompilationValidator
 {
@@ -220,6 +236,134 @@ public static class WasmCompilationValidator
         var result = await cache.GetDataAsync(range, CancellationToken.None);
         await cache.WaitForIdleAsync();
         _ = result.Data.Length;
+    }
+
+    /// <summary>
+    /// Validates strong consistency mode: <see cref="WindowCacheExtensions.GetDataAndWaitForIdleAsync{TRange,TData,TDomain}"/>
+    /// compiles for net8.0-browser. Exercises both the normal path (idle wait completes) and the
+    /// cancellation graceful degradation path (OperationCanceledException from WaitForIdleAsync is
+    /// caught and the already-obtained result is returned).
+    /// </summary>
+    /// <remarks>
+    /// <para><strong>Types Validated:</strong></para>
+    /// <list type="bullet">
+    /// <item><description>
+    /// <see cref="WindowCacheExtensions.GetDataAndWaitForIdleAsync{TRange,TData,TDomain}"/> —
+    /// strong consistency extension method; composes GetDataAsync + unconditional WaitForIdleAsync
+    /// </description></item>
+    /// <item><description>
+    /// The <c>try { await WaitForIdleAsync } catch (OperationCanceledException) { }</c> pattern
+    /// inside the extension method — validates that exception handling compiles on WASM
+    /// </description></item>
+    /// </list>
+    /// <para><strong>Why One Configuration Is Sufficient:</strong></para>
+    /// <para>
+    /// The extension method introduces no new strategy axes (storage or serialization). It is a
+    /// thin wrapper over GetDataAsync + WaitForIdleAsync; the four internal strategy combinations
+    /// are already covered by Configurations 1–4.
+    /// </para>
+    /// </remarks>
+    public static async Task ValidateStrongConsistencyMode_GetDataAndWaitForIdleAsync()
+    {
+        var dataSource = new SimpleDataSource();
+        var domain = new IntegerFixedStepDomain();
+
+        var options = new WindowCacheOptions(
+            leftCacheSize: 1.0,
+            rightCacheSize: 1.0,
+            readMode: UserCacheReadMode.Snapshot,
+            leftThreshold: 0.2,
+            rightThreshold: 0.2
+        );
+
+        var cache = new WindowCache<int, int, IntegerFixedStepDomain>(
+            dataSource,
+            domain,
+            options
+        );
+
+        var range = Intervals.NET.Factories.Range.Closed<int>(0, 10);
+
+        // Normal path: waits for idle and returns the result
+        var result = await cache.GetDataAndWaitForIdleAsync(range, CancellationToken.None);
+        _ = result.Data.Length;
+        _ = result.CacheInteraction;
+
+        // Cancellation graceful degradation path: pre-cancelled token; WaitForIdleAsync
+        // throws OperationCanceledException which is caught — result returned gracefully
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+        var degradedResult = await cache.GetDataAndWaitForIdleAsync(range, cts.Token);
+        _ = degradedResult.Data.Length;
+        _ = degradedResult.CacheInteraction;
+    }
+
+    /// <summary>
+    /// Validates hybrid consistency mode: <see cref="WindowCacheExtensions.GetDataAndWaitOnMissAsync{TRange,TData,TDomain}"/>
+    /// compiles for net8.0-browser. Exercises the FullHit path (no idle wait), the FullMiss path
+    /// (conditional idle wait), and the cancellation graceful degradation path.
+    /// </summary>
+    /// <remarks>
+    /// <para><strong>Types Validated:</strong></para>
+    /// <list type="bullet">
+    /// <item><description>
+    /// <see cref="WindowCacheExtensions.GetDataAndWaitOnMissAsync{TRange,TData,TDomain}"/> —
+    /// hybrid consistency extension method; composes GetDataAsync + conditional WaitForIdleAsync
+    /// gated on <see cref="CacheInteraction"/>
+    /// </description></item>
+    /// <item><description>
+    /// <see cref="CacheInteraction"/> enum — read from <see cref="RangeResult{TRange,TData}.CacheInteraction"/>
+    /// on the returned result
+    /// </description></item>
+    /// <item><description>
+    /// The <c>try { await WaitForIdleAsync } catch (OperationCanceledException) { }</c> pattern
+    /// inside the extension method — validates that exception handling compiles on WASM
+    /// </description></item>
+    /// </list>
+    /// <para><strong>Why One Configuration Is Sufficient:</strong></para>
+    /// <para>
+    /// The extension method introduces no new strategy axes. The four internal strategy
+    /// combinations are already covered by Configurations 1–4.
+    /// </para>
+    /// </remarks>
+    public static async Task ValidateHybridConsistencyMode_GetDataAndWaitOnMissAsync()
+    {
+        var dataSource = new SimpleDataSource();
+        var domain = new IntegerFixedStepDomain();
+
+        var options = new WindowCacheOptions(
+            leftCacheSize: 1.0,
+            rightCacheSize: 1.0,
+            readMode: UserCacheReadMode.Snapshot,
+            leftThreshold: 0.2,
+            rightThreshold: 0.2
+        );
+
+        var cache = new WindowCache<int, int, IntegerFixedStepDomain>(
+            dataSource,
+            domain,
+            options
+        );
+
+        var range = Intervals.NET.Factories.Range.Closed<int>(0, 10);
+
+        // FullMiss path (first request — cold cache): idle wait is triggered
+        var missResult = await cache.GetDataAndWaitOnMissAsync(range, CancellationToken.None);
+        _ = missResult.Data.Length;
+        _ = missResult.CacheInteraction; // FullMiss
+
+        // FullHit path (warm cache): no idle wait, returns immediately
+        var hitResult = await cache.GetDataAndWaitOnMissAsync(range, CancellationToken.None);
+        _ = hitResult.Data.Length;
+        _ = hitResult.CacheInteraction; // FullHit
+
+        // Cancellation graceful degradation path: pre-cancelled token on a miss scenario;
+        // WaitForIdleAsync throws OperationCanceledException which is caught — result returned gracefully
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+        var degradedResult = await cache.GetDataAndWaitOnMissAsync(range, cts.Token);
+        _ = degradedResult.Data.Length;
+        _ = degradedResult.CacheInteraction;
     }
 
     /// <summary>
