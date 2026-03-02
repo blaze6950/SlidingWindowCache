@@ -44,24 +44,31 @@ ReadOnlyMemory<TData> data = result.Data;   // The data for that range
 ## RangeResult Structure
 
 ```csharp
-public sealed record RangeResult<TRange, TData>(
-    Range<TRange>? Range,
-    ReadOnlyMemory<TData> Data
-) where TRange : IComparable<TRange>;
+// RangeResult is a sealed record (reference type) with an internal constructor.
+// Instances are created exclusively by UserRequestHandler.
+public sealed record RangeResult<TRange, TData>
+    where TRange : IComparable<TRange>
+{
+    public Range<TRange>?        Range              { get; }
+    public ReadOnlyMemory<TData> Data               { get; }
+    public CacheInteraction      CacheInteraction   { get; }
+}
 ```
 
 ### Properties
 
-| Property | Type                    | Description                                                                                      |
-|----------|-------------------------|--------------------------------------------------------------------------------------------------|
-| `Range`  | `Range<TRange>?`        | **Nullable**. The actual range covered by the returned data. `null` indicates no data available. |
-| `Data`   | `ReadOnlyMemory<TData>` | The materialized data elements. May be empty if `Range` is `null`.                               |
+| Property           | Type                    | Description                                                                                                                 |
+|--------------------|-------------------------|-----------------------------------------------------------------------------------------------------------------------------|
+| `Range`            | `Range<TRange>?`        | **Nullable**. The actual range covered by the returned data. `null` indicates no data available.                            |
+| `Data`             | `ReadOnlyMemory<TData>` | The materialized data elements. May be empty if `Range` is `null`.                                                          |
+| `CacheInteraction` | `CacheInteraction`      | How the request was served: `FullHit` (from cache), `PartialHit` (cache + fetch), or `FullMiss` (cold start or jump fetch). |
 
 ### Invariants
 
 1. **Range-Data Consistency**: When `Range` is non-null, `Data.Length` MUST equal `Range.Span(domain)`
 2. **Empty Data Semantics**: `Data.IsEmpty` when `Range` is `null` (no data available)
 3. **Contiguity**: `Data` contains sequential elements matching the boundaries of `Range`
+4. **CacheInteraction Accuracy**: `CacheInteraction` accurately reflects the cache scenario — `FullMiss` on cold start or jump, `FullHit` when fully cached, `PartialHit` on partial overlap (Invariant A.10b)
 
 ---
 
@@ -385,9 +392,9 @@ dotnet test --filter "FullyQualifiedName~RangeResult_WithFullData_ReturnsRangeAn
 
 ### Thread Safety
 
-**RangeResult is immutable** (`readonly record struct`), making it inherently thread-safe:
-- No mutable state
-- Value semantics (struct)
+**RangeResult is immutable** (`sealed record` — a reference type), making it inherently thread-safe:
+- No mutable state; all properties are `init`-only
+- Reference semantics (class, not struct); safe to share across threads
 - `ReadOnlyMemory<TData>` is safe to share across threads
 - Multiple threads can hold references to the same `RangeResult` safely
 
@@ -407,7 +414,7 @@ dotnet test --filter "FullyQualifiedName~RangeResult_WithFullData_ReturnsRangeAn
 ✅ **Nullable Range signals data unavailability** without exceptions  
 ✅ **Data sources truncate gracefully** at physical boundaries  
 ✅ **Comprehensive test coverage** validates all boundary scenarios  
-✅ **Thread-safe immutable design** with value semantics
+✅ **Thread-safe immutable design** (sealed record, reference type)
 
 ---
 

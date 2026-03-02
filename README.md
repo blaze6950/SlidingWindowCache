@@ -1,6 +1,6 @@
 # Sliding Window Cache
 
-A read-only, range-based, sequential-optimized cache with decision-driven background rebalancing, smart eventual consistency, and intelligent work avoidance.
+A read-only, range-based, sequential-optimized cache with decision-driven background rebalancing, three consistency modes (eventual/hybrid/strong), and intelligent work avoidance.
 
 [![CI/CD](https://github.com/blaze6950/SlidingWindowCache/actions/workflows/slidingwindowcache.yml/badge.svg)](https://github.com/blaze6950/SlidingWindowCache/actions/workflows/slidingwindowcache.yml)
 [![NuGet](https://img.shields.io/nuget/v/SlidingWindowCache.svg)](https://www.nuget.org/packages/SlidingWindowCache/)
@@ -17,6 +17,7 @@ Optimized for access patterns that move predictably across a domain (scrolling, 
 - Single-writer architecture: only rebalance execution mutates shared cache state
 - Decision-driven execution: multi-stage analytical validation prevents thrashing and unnecessary I/O
 - Smart eventual consistency: cache converges to optimal configuration while avoiding unnecessary work
+- Opt-in hybrid or strong consistency via extension methods (`GetDataAndWaitOnMissAsync`, `GetDataAndWaitForIdleAsync`)
 
 For the canonical architecture docs, see `docs/architecture.md`.
 
@@ -126,7 +127,7 @@ Key points:
 2. **Decision happens in background** — CPU-only validation (microseconds) in the intent processing loop
 3. **Work avoidance prevents thrashing** — validation may skip rebalance entirely if unnecessary
 4. **Only I/O happens asynchronously** — debounce + data fetching + cache updates run in background
-5. **Smart eventual consistency** — cache converges to optimal state while avoiding unnecessary operations
+5. **Smart eventual consistency** — cache converges to optimal state while avoiding unnecessary operations; opt-in hybrid or strong consistency via extension methods
 
 ## Materialization for Fast Access
 
@@ -169,7 +170,7 @@ foreach (var item in result.Data.Span)
 
 ## Boundary Handling
 
-`GetDataAsync` returns `RangeResult<TRange, TData>` where `Range` may be `null` when the data source has no data for the requested range. Always check before accessing data:
+`GetDataAsync` returns `RangeResult<TRange, TData>` where `Range` may be `null` when the data source has no data for the requested range, and `CacheInteraction` indicates whether the request was a `FullHit`, `PartialHit`, or `FullMiss`. Always check `Range` before accessing data:
 
 ```csharp
 var result = await cache.GetDataAsync(Range.Closed(100, 200), ct);
@@ -320,9 +321,52 @@ Canonical guide: `docs/diagnostics.md`.
 6. `docs/state-machine.md` — formal state transitions and mutation ownership
 7. `docs/actors.md` — actor responsibilities and execution contexts
 
-## Strong Consistency Mode
+## Consistency Modes
 
-By default, `GetDataAsync` is **eventually consistent**: data is returned immediately while the cache window converges asynchronously in the background. For scenarios where you need the cache to be fully converged before proceeding, use the `GetDataAndWaitForIdleAsync` extension method:
+By default, `GetDataAsync` is **eventually consistent**: data is returned immediately while the cache window converges asynchronously in the background. Two opt-in extension methods provide stronger consistency guarantees. Both require a `using SlidingWindowCache.Public;` import.
+
+> **Serialized access requirement:** The hybrid and strong consistency modes provide their warm-cache guarantee only when requests are made one at a time (serialized). Under concurrent/parallel callers they remain safe (no crashes or hangs) but the guarantee degrades — due to `AsyncActivityCounter`'s "was idle at some point" semantics (Invariant H.49) and a brief gap between the counter increment and TCS publication in `IncrementActivity`, a concurrent waiter may observe a previously completed idle TCS and return without waiting for the new rebalance.
+
+### Eventual Consistency (Default)
+
+```csharp
+// Returns immediately; rebalance converges asynchronously in background
+var result = await cache.GetDataAsync(Range.Closed(100, 200), cancellationToken);
+```
+
+Use for all hot paths and rapid sequential access. No latency beyond data assembly.
+
+### Hybrid Consistency — `GetDataAndWaitOnMissAsync`
+
+```csharp
+using SlidingWindowCache.Public;
+
+// Waits for idle only if the request was a PartialHit or FullMiss; returns immediately on FullHit
+var result = await cache.GetDataAndWaitOnMissAsync(
+    Range.Closed(100, 200),
+    cancellationToken);
+
+// result.CacheInteraction tells you which path was taken:
+// CacheInteraction.FullHit     → returned immediately (no wait)
+// CacheInteraction.PartialHit  → waited for cache to converge
+// CacheInteraction.FullMiss    → waited for cache to converge
+if (result.Range.HasValue)
+    ProcessData(result.Data);
+```
+
+**When to use:**
+- Warm-cache fast path: pays no penalty on cache hits, still waits on misses
+- Access patterns where most requests are hits but you want convergence on misses
+
+**When NOT to use:**
+- First request (always a miss — pays full debounce + I/O wait)
+- Hot paths with many misses
+
+> **Cancellation:** If the cancellation token fires during the idle wait (after `GetDataAsync` has already returned data), the method catches `OperationCanceledException` and returns the already-obtained result gracefully — degrading to eventual consistency for that call. The background rebalance is not affected.
+
+> **Note:** A TODO exists in the implementation about bypassing/reducing debounce delay in hybrid mode. Currently the full debounce delay applies on wait paths, same as strong consistency.
+
+### Strong Consistency — `GetDataAndWaitForIdleAsync`
 
 ```csharp
 using SlidingWindowCache.Public;
@@ -347,9 +391,23 @@ This is a thin composition of `GetDataAsync` followed by `WaitForIdleAsync`. The
 **When NOT to use:**
 - Hot paths or rapid sequential requests — each call waits for full rebalance, which includes the debounce delay plus data fetching. For normal usage, the default eventual consistency model is faster.
 
+> **Cancellation:** If the cancellation token fires during the idle wait (after `GetDataAsync` has already returned data), the method catches `OperationCanceledException` and returns the already-obtained result gracefully — degrading to eventual consistency for that call. The background rebalance is not affected.
+
 ### Deterministic Testing
 
 `WaitForIdleAsync()` provides race-free synchronization with background operations for tests. Uses "was idle at some point" semantics — does not guarantee still idle after completion. See `docs/invariants.md` (Activity tracking invariants).
+
+### CacheInteraction on RangeResult
+
+Every `RangeResult` carries a `CacheInteraction` property classifying the request:
+
+| Value        | Meaning                                                                         |
+|--------------|---------------------------------------------------------------------------------|
+| `FullHit`    | Entire requested range was served from cache                                    |
+| `PartialHit` | Request partially overlapped the cache; missing part fetched from `IDataSource` |
+| `FullMiss`   | No overlap (cold start or jump); full range fetched from `IDataSource`          |
+
+This is the per-request programmatic alternative to the `UserRequestFullCacheHit` / `UserRequestPartialCacheHit` / `UserRequestFullCacheMiss` diagnostics callbacks.
 
 ## Multi-Layer Cache
 

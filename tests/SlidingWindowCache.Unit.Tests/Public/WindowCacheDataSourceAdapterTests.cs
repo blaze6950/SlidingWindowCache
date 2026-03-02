@@ -31,7 +31,7 @@ public sealed class WindowCacheDataSourceAdapterTests
     {
         var range = MakeRange(start, end);
         var data = new ReadOnlyMemory<int>(Enumerable.Range(start, end - start + 1).ToArray());
-        return new RangeResult<int, int>(range, data);
+        return new RangeResult<int, int>(range, data, CacheInteraction.FullHit);
     }
 
     #endregion
@@ -118,7 +118,7 @@ public sealed class WindowCacheDataSourceAdapterTests
         var mock = CreateCacheMock();
         var range = MakeRange(1, 5);
         var innerArray = new[] { 1, 2, 3, 4, 5 };
-        var result = new RangeResult<int, int>(range, new ReadOnlyMemory<int>(innerArray));
+        var result = new RangeResult<int, int>(range, new ReadOnlyMemory<int>(innerArray), CacheInteraction.FullHit);
         var adapter = CreateAdapter(mock.Object);
 
         mock.Setup(c => c.GetDataAsync(range, It.IsAny<CancellationToken>()))
@@ -140,7 +140,7 @@ public sealed class WindowCacheDataSourceAdapterTests
         var mock = CreateCacheMock();
         var range = MakeRange(1, 5);
         var innerArray = new[] { 1, 2, 3, 4, 5 };
-        var result = new RangeResult<int, int>(range, new ReadOnlyMemory<int>(innerArray));
+        var result = new RangeResult<int, int>(range, new ReadOnlyMemory<int>(innerArray), CacheInteraction.FullHit);
         var adapter = CreateAdapter(mock.Object);
 
         mock.Setup(c => c.GetDataAsync(range, It.IsAny<CancellationToken>()))
@@ -213,7 +213,7 @@ public sealed class WindowCacheDataSourceAdapterTests
         // ARRANGE — inner cache returns null range (out-of-bounds boundary miss)
         var mock = CreateCacheMock();
         var range = MakeRange(9000, 9999);
-        var boundaryResult = new RangeResult<int, int>(null, ReadOnlyMemory<int>.Empty);
+        var boundaryResult = new RangeResult<int, int>(null, ReadOnlyMemory<int>.Empty, CacheInteraction.FullMiss);
         var adapter = CreateAdapter(mock.Object);
 
         mock.Setup(c => c.GetDataAsync(range, It.IsAny<CancellationToken>()))
@@ -232,7 +232,7 @@ public sealed class WindowCacheDataSourceAdapterTests
         // ARRANGE
         var mock = CreateCacheMock();
         var range = MakeRange(9000, 9999);
-        var boundaryResult = new RangeResult<int, int>(null, ReadOnlyMemory<int>.Empty);
+        var boundaryResult = new RangeResult<int, int>(null, ReadOnlyMemory<int>.Empty, CacheInteraction.FullMiss);
         var adapter = CreateAdapter(mock.Object);
 
         mock.Setup(c => c.GetDataAsync(range, It.IsAny<CancellationToken>()))
@@ -253,7 +253,7 @@ public sealed class WindowCacheDataSourceAdapterTests
         var requestedRange = MakeRange(900, 1100);
         var truncatedRange = MakeRange(900, 999);           // truncated at upper bound
         var truncatedData = new ReadOnlyMemory<int>(Enumerable.Range(900, 100).ToArray());
-        var truncatedResult = new RangeResult<int, int>(truncatedRange, truncatedData);
+        var truncatedResult = new RangeResult<int, int>(truncatedRange, truncatedData, CacheInteraction.PartialHit);
         var adapter = CreateAdapter(mock.Object);
 
         mock.Setup(c => c.GetDataAsync(requestedRange, It.IsAny<CancellationToken>()))

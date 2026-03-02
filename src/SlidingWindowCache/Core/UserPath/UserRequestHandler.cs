@@ -145,6 +145,7 @@ internal sealed class UserRequestHandler<TRange, TData, TDomain>
         RangeData<TRange, TData, TDomain>? assembledData;
         Range<TRange>? actualRange;
         ReadOnlyMemory<TData> resultData;
+        CacheInteraction cacheInteraction;
 
         if (!fullyInCache && !hasOverlap)
         {
@@ -153,6 +154,7 @@ internal sealed class UserRequestHandler<TRange, TData, TDomain>
             // Fetch ONLY the requested range from IDataSource.
             (assembledData, actualRange, resultData) =
                 await FetchSingleRangeAsync(requestedRange, cancellationToken).ConfigureAwait(false);
+            cacheInteraction = CacheInteraction.FullMiss;
             _cacheDiagnostics.UserRequestFullCacheMiss();
         }
         else if (fullyInCache)
@@ -162,6 +164,7 @@ internal sealed class UserRequestHandler<TRange, TData, TDomain>
             assembledData = cacheStorage.ToRangeData();
             actualRange = requestedRange; // Fully in cache, so actual == requested
             resultData = cacheStorage.Read(requestedRange);
+            cacheInteraction = CacheInteraction.FullHit;
             _cacheDiagnostics.UserRequestFullCacheHit();
         }
         else
@@ -176,6 +179,7 @@ internal sealed class UserRequestHandler<TRange, TData, TDomain>
                 cancellationToken
             ).ConfigureAwait(false);
 
+            cacheInteraction = CacheInteraction.PartialHit;
             _cacheDiagnostics.UserRequestPartialCacheHit();
 
             // Compute actual available range (intersection of requested and assembled).
@@ -208,7 +212,7 @@ internal sealed class UserRequestHandler<TRange, TData, TDomain>
         // where assembledData == null (full vacuum / out-of-physical-bounds).
         _cacheDiagnostics.UserRequestServed();
 
-        return new RangeResult<TRange, TData>(actualRange, resultData);
+        return new RangeResult<TRange, TData>(actualRange, resultData, cacheInteraction);
     }
 
     /// <summary>

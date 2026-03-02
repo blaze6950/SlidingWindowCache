@@ -40,7 +40,7 @@ public sealed class LayeredWindowCacheTests
     {
         var range = MakeRange(start, end);
         var data = new ReadOnlyMemory<int>(Enumerable.Range(start, end - start + 1).ToArray());
-        return new RangeResult<int, int>(range, data);
+        return new RangeResult<int, int>(range, data, CacheInteraction.FullHit);
     }
 
     #endregion

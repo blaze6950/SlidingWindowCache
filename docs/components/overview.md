@@ -17,7 +17,7 @@ The system is easier to reason about when components are grouped by:
 ### Top-Level Component Roles
 
 - Public facade: `WindowCache<TRange, TData, TDomain>`
-- Public extensions: `WindowCacheExtensions` — opt-in strong consistency mode (`GetDataAndWaitForIdleAsync`)
+- Public extensions: `WindowCacheExtensions` — opt-in hybrid and strong consistency modes (`GetDataAndWaitOnMissAsync`, `GetDataAndWaitForIdleAsync`)
 - Multi-layer support: `WindowCacheDataSourceAdapter`, `LayeredWindowCacheBuilder`, `LayeredWindowCache`
 - User Path: assembles requested data and publishes intent
 - Intent loop: observes latest intent and runs analytical validation
