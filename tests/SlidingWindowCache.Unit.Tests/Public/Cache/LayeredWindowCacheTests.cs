@@ -1,10 +1,11 @@
 using Intervals.NET.Domain.Default.Numeric;
 using Moq;
 using SlidingWindowCache.Public;
+using SlidingWindowCache.Public.Cache;
 using SlidingWindowCache.Public.Configuration;
 using SlidingWindowCache.Public.Dto;
 
-namespace SlidingWindowCache.Unit.Tests.Public;
+namespace SlidingWindowCache.Unit.Tests.Public.Cache;
 
 /// <summary>
 /// Unit tests for <see cref="LayeredWindowCache{TRange,TData,TDomain}"/>.

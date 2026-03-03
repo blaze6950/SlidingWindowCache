@@ -1,8 +1,10 @@
 ﻿using Intervals.NET;
 using Intervals.NET.Domain.Default.Numeric;
 using SlidingWindowCache.Public;
+using SlidingWindowCache.Public.Cache;
 using SlidingWindowCache.Public.Configuration;
 using SlidingWindowCache.Public.Dto;
+using SlidingWindowCache.Public.Extensions;
 
 namespace SlidingWindowCache.WasmValidation;
 

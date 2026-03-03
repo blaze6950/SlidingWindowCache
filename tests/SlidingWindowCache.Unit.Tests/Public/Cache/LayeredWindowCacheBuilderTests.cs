@@ -1,12 +1,13 @@
 using Intervals.NET.Domain.Abstractions;
 using Intervals.NET.Domain.Default.Numeric;
 using SlidingWindowCache.Public;
+using SlidingWindowCache.Public.Cache;
 using SlidingWindowCache.Public.Configuration;
 using SlidingWindowCache.Public.Instrumentation;
 using SlidingWindowCache.Tests.Infrastructure.DataSources;
 using SlidingWindowCache.Tests.Infrastructure.Helpers;
 
-namespace SlidingWindowCache.Unit.Tests.Public;
+namespace SlidingWindowCache.Unit.Tests.Public.Cache;
 
 /// <summary>
 /// Unit tests for <see cref="LayeredWindowCacheBuilder{TRange,TData,TDomain}"/>.

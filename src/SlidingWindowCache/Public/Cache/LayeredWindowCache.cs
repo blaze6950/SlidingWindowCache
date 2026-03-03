@@ -3,7 +3,7 @@ using Intervals.NET.Domain.Abstractions;
 using SlidingWindowCache.Public.Configuration;
 using SlidingWindowCache.Public.Dto;
 
-namespace SlidingWindowCache.Public;
+namespace SlidingWindowCache.Public.Cache;
 
 /// <summary>
 /// A thin wrapper around a stack of <see cref="WindowCache{TRange,TData,TDomain}"/> instances

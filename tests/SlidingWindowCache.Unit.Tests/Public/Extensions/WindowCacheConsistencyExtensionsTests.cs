@@ -2,8 +2,9 @@ using Intervals.NET.Domain.Default.Numeric;
 using Moq;
 using SlidingWindowCache.Public;
 using SlidingWindowCache.Public.Dto;
+using SlidingWindowCache.Public.Extensions;
 
-namespace SlidingWindowCache.Unit.Tests.Public;
+namespace SlidingWindowCache.Unit.Tests.Public.Extensions;
 
 /// <summary>
 /// Unit tests for <see cref="WindowCacheConsistencyExtensions.GetDataAndWaitForIdleAsync{TRange,TData,TDomain}"/>

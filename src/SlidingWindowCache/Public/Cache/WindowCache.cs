@@ -12,7 +12,7 @@ using SlidingWindowCache.Public.Configuration;
 using SlidingWindowCache.Public.Dto;
 using SlidingWindowCache.Public.Instrumentation;
 
-namespace SlidingWindowCache.Public;
+namespace SlidingWindowCache.Public.Cache;
 
 /// <inheritdoc cref="IWindowCache{TRange,TData,TDomain}"/>
 /// <remarks>

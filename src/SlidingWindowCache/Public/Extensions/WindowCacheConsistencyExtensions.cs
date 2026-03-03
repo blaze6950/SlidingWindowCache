@@ -2,7 +2,7 @@ using Intervals.NET;
 using Intervals.NET.Domain.Abstractions;
 using SlidingWindowCache.Public.Dto;
 
-namespace SlidingWindowCache.Public;
+namespace SlidingWindowCache.Public.Extensions;
 
 /// <summary>
 /// Extension methods for <see cref="IWindowCache{TRange, TData, TDomain}"/> providing

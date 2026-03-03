@@ -3,6 +3,7 @@ using Intervals.NET;
 using Intervals.NET.Domain.Default.Numeric;
 using SlidingWindowCache.Benchmarks.Infrastructure;
 using SlidingWindowCache.Public;
+using SlidingWindowCache.Public.Cache;
 using SlidingWindowCache.Public.Configuration;
 
 namespace SlidingWindowCache.Benchmarks.Benchmarks;

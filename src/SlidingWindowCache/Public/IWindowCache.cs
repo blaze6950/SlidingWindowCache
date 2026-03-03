@@ -1,5 +1,6 @@
 using Intervals.NET;
 using Intervals.NET.Domain.Abstractions;
+using SlidingWindowCache.Public.Cache;
 using SlidingWindowCache.Public.Configuration;
 using SlidingWindowCache.Public.Dto;
 

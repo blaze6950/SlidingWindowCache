@@ -2,7 +2,7 @@ using Intervals.NET.Domain.Abstractions;
 using SlidingWindowCache.Public.Configuration;
 using SlidingWindowCache.Public.Instrumentation;
 
-namespace SlidingWindowCache.Public;
+namespace SlidingWindowCache.Public.Cache;
 
 /// <summary>
 /// Fluent builder for constructing a multi-layer (L1/L2/L3/...) cache stack, where each
