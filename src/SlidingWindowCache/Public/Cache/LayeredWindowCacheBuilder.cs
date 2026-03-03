@@ -19,11 +19,17 @@ namespace SlidingWindowCache.Public.Cache;
 /// The type representing the domain of the ranges. Must implement <see cref="IRangeDomain{TRange}"/>.
 /// </typeparam>
 /// <remarks>
+/// <para><strong>Construction:</strong></para>
+/// <para>
+/// Obtain an instance via <see cref="WindowCacheBuilder.Layered{TRange,TData,TDomain}"/>, which
+/// enables full generic type inference — no explicit type parameters required at the call site.
+/// </para>
 /// <para><strong>Layer Ordering:</strong></para>
 /// <para>
-/// Layers are added from deepest (first call to <see cref="AddLayer"/>) to outermost (last call).
-/// The first layer reads from the real <see cref="IDataSource{TRange,TData}"/> passed to
-/// <see cref="Create"/>. Each subsequent layer reads from the previous layer via an adapter.
+/// Layers are added from deepest (first call to <see cref="AddLayer(WindowCacheOptions, ICacheDiagnostics)"/>)
+/// to outermost (last call). The first layer reads from the real <see cref="IDataSource{TRange,TData}"/>
+/// passed to <see cref="WindowCacheBuilder.Layered{TRange,TData,TDomain}"/>. Each subsequent layer
+/// reads from the previous layer via an adapter.
 /// </para>
 /// <para><strong>Recommended Configuration Patterns:</strong></para>
 /// <list type="bullet">
@@ -49,36 +55,43 @@ namespace SlidingWindowCache.Public.Cache;
 ///   </description>
 /// </item>
 /// </list>
-/// <para><strong>Example — Two-Layer Cache:</strong></para>
+/// <para><strong>Example — Two-Layer Cache (inline options):</strong></para>
 /// <code>
-/// await using var cache = LayeredWindowCacheBuilder&lt;int, byte[], IntegerFixedStepDomain&gt;
-///     .Create(realDataSource, domain)
-///     .AddLayer(new WindowCacheOptions(         // L2: deep background cache
+/// await using var cache = WindowCacheBuilder.Layered(realDataSource, domain)
+///     .AddLayer(o =&gt; o                             // L2: deep background cache
+///         .WithCacheSize(10.0)
+///         .WithReadMode(UserCacheReadMode.CopyOnRead)
+///         .WithThresholds(0.3))
+///     .AddLayer(o =&gt; o                             // L1: user-facing cache
+///         .WithCacheSize(0.5))
+///     .Build();
+/// </code>
+/// <para><strong>Example — Two-Layer Cache (pre-built options):</strong></para>
+/// <code>
+/// await using var cache = WindowCacheBuilder.Layered(realDataSource, domain)
+///     .AddLayer(new WindowCacheOptions(             // L2: deep background cache
 ///         leftCacheSize: 10.0,
 ///         rightCacheSize: 10.0,
 ///         readMode: UserCacheReadMode.CopyOnRead,
 ///         leftThreshold: 0.3,
 ///         rightThreshold: 0.3))
-///     .AddLayer(new WindowCacheOptions(         // L1: user-facing cache
+///     .AddLayer(new WindowCacheOptions(             // L1: user-facing cache
 ///         leftCacheSize: 0.5,
 ///         rightCacheSize: 0.5,
 ///         readMode: UserCacheReadMode.Snapshot))
 ///     .Build();
-///
-/// var result = await cache.GetDataAsync(range, ct);
 /// </code>
 /// <para><strong>Example — Three-Layer Cache:</strong></para>
 /// <code>
-/// await using var cache = LayeredWindowCacheBuilder&lt;int, byte[], IntegerFixedStepDomain&gt;
-///     .Create(realDataSource, domain)
-///     .AddLayer(backgroundOptions)     // L3: large distant cache (CopyOnRead, 10x)
-///     .AddLayer(midOptions)            // L2: medium intermediate cache (CopyOnRead, 2x)
-///     .AddLayer(userOptions)           // L1: small user-facing cache (Snapshot, 0.5x)
+/// await using var cache = WindowCacheBuilder.Layered(realDataSource, domain)
+///     .AddLayer(o =&gt; o.WithCacheSize(20.0).WithReadMode(UserCacheReadMode.CopyOnRead))  // L3
+///     .AddLayer(o =&gt; o.WithCacheSize(5.0).WithReadMode(UserCacheReadMode.CopyOnRead))   // L2
+///     .AddLayer(o =&gt; o.WithCacheSize(0.5))                                              // L1
 ///     .Build();
 /// </code>
 /// <para><strong>Disposal:</strong></para>
 /// <para>
-/// The <see cref="LayeredWindowCache{TRange,TData,TDomain}"/> returned by <see cref="Build"/>
+/// The <see cref="IWindowCache{TRange,TData,TDomain}"/> returned by <see cref="Build"/>
 /// owns all created cache layers and disposes them in reverse order (outermost first) when
 /// <see cref="IAsyncDisposable.DisposeAsync"/> is called.
 /// </para>
@@ -92,51 +105,18 @@ public sealed class LayeredWindowCacheBuilder<TRange, TData, TDomain>
     private readonly List<LayerDefinition> _layers = new();
 
     /// <summary>
-    /// Private constructor — use <see cref="Create"/> to instantiate.
+    /// Internal constructor — use <see cref="WindowCacheBuilder.Layered{TRange,TData,TDomain}"/>
+    /// to obtain an instance.
     /// </summary>
-    private LayeredWindowCacheBuilder(IDataSource<TRange, TData> rootDataSource, TDomain domain)
+    internal LayeredWindowCacheBuilder(IDataSource<TRange, TData> rootDataSource, TDomain domain)
     {
         _rootDataSource = rootDataSource;
         _domain = domain;
     }
 
     /// <summary>
-    /// Creates a new <see cref="LayeredWindowCacheBuilder{TRange,TData,TDomain}"/> rooted at
-    /// the specified real data source.
-    /// </summary>
-    /// <param name="dataSource">
-    /// The real (bottom-most) data source from which raw data is fetched.
-    /// All cache layers sit above this source.
-    /// </param>
-    /// <param name="domain">
-    /// The range domain shared by all layers.
-    /// </param>
-    /// <returns>A new builder instance.</returns>
-    /// <exception cref="ArgumentNullException">
-    /// Thrown when <paramref name="dataSource"/> is null.
-    /// </exception>
-    /// <exception cref="ArgumentNullException">
-    /// Thrown when <paramref name="domain"/> is null.
-    /// </exception>
-    public static LayeredWindowCacheBuilder<TRange, TData, TDomain> Create(
-        IDataSource<TRange, TData> dataSource,
-        TDomain domain)
-    {
-        if (dataSource == null)
-        {
-            throw new ArgumentNullException(nameof(dataSource));
-        }
-
-        if (domain is null)
-        {
-            throw new ArgumentNullException(nameof(domain));
-        }
-
-        return new LayeredWindowCacheBuilder<TRange, TData, TDomain>(dataSource, domain);
-    }
-
-    /// <summary>
-    /// Adds a cache layer on top of all previously added layers.
+    /// Adds a cache layer on top of all previously added layers, using a pre-built
+    /// <see cref="WindowCacheOptions"/> instance.
     /// </summary>
     /// <param name="options">
     /// Configuration options for this layer.
@@ -150,34 +130,65 @@ public sealed class LayeredWindowCacheBuilder<TRange, TData, TDomain>
     /// </param>
     /// <returns>This builder instance, for fluent chaining.</returns>
     /// <exception cref="ArgumentNullException">
-    /// Thrown when <paramref name="options"/> is null.
+    /// Thrown when <paramref name="options"/> is <c>null</c>.
     /// </exception>
     public LayeredWindowCacheBuilder<TRange, TData, TDomain> AddLayer(
         WindowCacheOptions options,
         ICacheDiagnostics? diagnostics = null)
     {
-        if (options == null)
+        if (options is null)
         {
             throw new ArgumentNullException(nameof(options));
         }
 
-        _layers.Add(new LayerDefinition(options, diagnostics));
+        _layers.Add(new LayerDefinition(options, null, diagnostics));
         return this;
     }
 
     /// <summary>
-    /// Builds the layered cache stack and returns a <see cref="LayeredWindowCache{TRange,TData,TDomain}"/>
+    /// Adds a cache layer on top of all previously added layers, configuring options inline
+    /// via a fluent <see cref="WindowCacheOptionsBuilder"/>.
+    /// </summary>
+    /// <param name="configure">
+    /// A delegate that receives a <see cref="WindowCacheOptionsBuilder"/> and applies the desired settings.
+    /// The first call adds the deepest layer (closest to the real data source);
+    /// each subsequent call adds a layer closer to the user.
+    /// </param>
+    /// <param name="diagnostics">
+    /// Optional per-layer diagnostics. When <see langword="null"/>, diagnostics are disabled for this layer.
+    /// </param>
+    /// <returns>This builder instance, for fluent chaining.</returns>
+    /// <exception cref="ArgumentNullException">
+    /// Thrown when <paramref name="configure"/> is <c>null</c>.
+    /// </exception>
+    public LayeredWindowCacheBuilder<TRange, TData, TDomain> AddLayer(
+        Action<WindowCacheOptionsBuilder> configure,
+        ICacheDiagnostics? diagnostics = null)
+    {
+        if (configure is null)
+        {
+            throw new ArgumentNullException(nameof(configure));
+        }
+
+        _layers.Add(new LayerDefinition(null, configure, diagnostics));
+        return this;
+    }
+
+    /// <summary>
+    /// Builds the layered cache stack and returns an <see cref="IWindowCache{TRange,TData,TDomain}"/>
     /// that owns all created layers.
     /// </summary>
     /// <returns>
-    /// A <see cref="LayeredWindowCache{TRange,TData,TDomain}"/> whose
+    /// An <see cref="IWindowCache{TRange,TData,TDomain}"/> whose
     /// <see cref="IWindowCache{TRange,TData,TDomain}.GetDataAsync"/> delegates to the outermost layer.
+    /// The concrete type is <see cref="LayeredWindowCache{TRange,TData,TDomain}"/>, which exposes
+    /// per-layer access via its <see cref="LayeredWindowCache{TRange,TData,TDomain}.Layers"/> property.
     /// Dispose the returned instance to release all layer resources.
     /// </returns>
     /// <exception cref="InvalidOperationException">
-    /// Thrown when no layers have been added via <see cref="AddLayer"/>.
+    /// Thrown when no layers have been added via <see cref="AddLayer(WindowCacheOptions, ICacheDiagnostics)"/>.
     /// </exception>
-    public LayeredWindowCache<TRange, TData, TDomain> Build()
+    public IWindowCache<TRange, TData, TDomain> Build()
     {
         if (_layers.Count == 0)
         {
@@ -187,14 +198,26 @@ public sealed class LayeredWindowCacheBuilder<TRange, TData, TDomain>
         }
 
         var caches = new List<IWindowCache<TRange, TData, TDomain>>(_layers.Count);
-        IDataSource<TRange, TData> currentSource = _rootDataSource;
+        var currentSource = _rootDataSource;
 
         foreach (var layer in _layers)
         {
+            WindowCacheOptions options;
+            if (layer.Options is not null)
+            {
+                options = layer.Options;
+            }
+            else
+            {
+                var optionsBuilder = new WindowCacheOptionsBuilder();
+                layer.Configure!(optionsBuilder);
+                options = optionsBuilder.Build();
+            }
+
             var cache = new WindowCache<TRange, TData, TDomain>(
                 currentSource,
                 _domain,
-                layer.Options,
+                options,
                 layer.Diagnostics);
 
             caches.Add(cache);
@@ -209,5 +232,8 @@ public sealed class LayeredWindowCacheBuilder<TRange, TData, TDomain>
     /// <summary>
     /// Captures the configuration for a single cache layer.
     /// </summary>
-    private sealed record LayerDefinition(WindowCacheOptions Options, ICacheDiagnostics? Diagnostics);
+    private sealed record LayerDefinition(
+        WindowCacheOptions? Options,
+        Action<WindowCacheOptionsBuilder>? Configure,
+        ICacheDiagnostics? Diagnostics);
 }

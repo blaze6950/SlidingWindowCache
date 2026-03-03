@@ -205,8 +205,7 @@ The library provides built-in support for layered cache composition via `Layered
 
 ```csharp
 // Two-layer cache: L2 (CopyOnRead, large) → L1 (Snapshot, small)
-await using var cache = LayeredWindowCacheBuilder<int, byte[], IntegerFixedStepDomain>
-    .Create(slowDataSource, domain)      // real (bottom-most) data source
+await using var cache = WindowCacheBuilder.Layered(slowDataSource, domain)
     .AddLayer(new WindowCacheOptions(    // L2: deep background cache
         leftCacheSize: 10.0,
         rightCacheSize: 10.0,

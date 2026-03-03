@@ -88,7 +88,7 @@ internal sealed class CacheDataExtensionService<TRange, TData, TDomain>
         _cacheDiagnostics.DataSourceFetchMissingSegments();
 
         // Step 1: Calculate which ranges are missing (and record the expansion/replacement diagnostic)
-        var missingRanges = CalculateMissingRanges(currentCache.Range, requested, out bool isCacheExpanded);
+        var missingRanges = CalculateMissingRanges(currentCache.Range, requested, out var isCacheExpanded);
 
         // Step 2: Record the diagnostic event here (caller context), not inside the pure helper
         if (isCacheExpanded)

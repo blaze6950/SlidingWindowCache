@@ -482,8 +482,7 @@ public class RuntimeOptionsUpdateTests
     public async Task LayeredCache_LayersProperty_AllowsPerLayerOptionsUpdate()
     {
         // ARRANGE — build a 2-layer cache
-        await using var layeredCache = LayeredWindowCacheBuilder<int, string, IntegerFixedStepDomain>
-            .Create(CreateDataSource(), new IntegerFixedStepDomain())
+        await using var layeredCache = (LayeredWindowCache<int, string, IntegerFixedStepDomain>)WindowCacheBuilder.Layered(CreateDataSource(), new IntegerFixedStepDomain())
             .AddLayer(new WindowCacheOptions(1.0, 1.0, UserCacheReadMode.Snapshot))
             .AddLayer(new WindowCacheOptions(1.0, 1.0, UserCacheReadMode.Snapshot))
             .Build();
@@ -500,8 +499,7 @@ public class RuntimeOptionsUpdateTests
     public async Task LayeredCache_LayersProperty_InnerLayerCurrentRuntimeOptions_ReflectsUpdate()
     {
         // ARRANGE
-        await using var layeredCache = LayeredWindowCacheBuilder<int, string, IntegerFixedStepDomain>
-            .Create(CreateDataSource(), new IntegerFixedStepDomain())
+        await using var layeredCache = (LayeredWindowCache<int, string, IntegerFixedStepDomain>)WindowCacheBuilder.Layered(CreateDataSource(), new IntegerFixedStepDomain())
             .AddLayer(new WindowCacheOptions(1.0, 1.0, UserCacheReadMode.Snapshot))
             .AddLayer(new WindowCacheOptions(1.0, 1.0, UserCacheReadMode.Snapshot))
             .Build();
@@ -518,8 +516,7 @@ public class RuntimeOptionsUpdateTests
     public async Task LayeredCache_LayersProperty_OuterLayerUpdateDoesNotAffectInnerLayer()
     {
         // ARRANGE
-        await using var layeredCache = LayeredWindowCacheBuilder<int, string, IntegerFixedStepDomain>
-            .Create(CreateDataSource(), new IntegerFixedStepDomain())
+        await using var layeredCache = (LayeredWindowCache<int, string, IntegerFixedStepDomain>)WindowCacheBuilder.Layered(CreateDataSource(), new IntegerFixedStepDomain())
             .AddLayer(new WindowCacheOptions(1.0, 1.0, UserCacheReadMode.Snapshot))
             .AddLayer(new WindowCacheOptions(1.0, 1.0, UserCacheReadMode.Snapshot))
             .Build();

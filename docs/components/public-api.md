@@ -227,22 +227,21 @@ Typically created via `LayeredWindowCacheBuilder.Build()` rather than directly.
 
 ### LayeredWindowCacheBuilder\<TRange, TData, TDomain\>
 
-**File**: `src/SlidingWindowCache/Public/LayeredWindowCacheBuilder.cs`
+**File**: `src/SlidingWindowCache/Public/Cache/LayeredWindowCacheBuilder.cs`
 
 **Type**: `sealed class` — fluent builder
 
 ```csharp
-await using var cache = LayeredWindowCacheBuilder<int, byte[], IntegerFixedStepDomain>
-    .Create(realDataSource, domain)
+await using var cache = WindowCacheBuilder.Layered(realDataSource, domain)
     .AddLayer(deepOptions)   // L2: inner layer (CopyOnRead, large buffers)
     .AddLayer(userOptions)   // L1: outer layer (Snapshot, small buffers)
     .Build();
 ```
 
-- `Create(dataSource, domain)` — factory entry point; validates both `dataSource` and `domain` are not null.
-- `AddLayer(options, diagnostics?)` — adds a layer on top; first call = innermost layer, last call = outermost (user-facing).
-- `Build()` — constructs all `WindowCache` instances, wires them via `WindowCacheDataSourceAdapter`, and wraps them in `LayeredWindowCache`.
-- Throws `InvalidOperationException` from `Build()` if no layers were added.
+- Obtain an instance via `WindowCacheBuilder.Layered(dataSource, domain)` — enables full generic type inference.
+- `AddLayer(options, diagnostics?)` — adds a layer on top; first call = innermost layer, last call = outermost (user-facing). Also accepts `Action<WindowCacheOptionsBuilder>` for inline configuration.
+- `Build()` — constructs all `WindowCache` instances, wires them via `WindowCacheDataSourceAdapter`, and wraps them in `LayeredWindowCache`. Returns `IWindowCache<TRange, TData, TDomain>`; concrete type is `LayeredWindowCache<>`.
+- Throws `InvalidOperationException` from `Build()` if no layers were added, or if an inline delegate fails validation.
 
 **See**: `README.md` (Multi-Layer Cache section) and `docs/storage-strategies.md` for recommended layer configuration patterns.
 

@@ -782,8 +782,7 @@ Pass a diagnostics instance as the second argument to `AddLayer`:
 var l2Diagnostics = new EventCounterCacheDiagnostics();
 var l1Diagnostics = new EventCounterCacheDiagnostics();
 
-await using var cache = LayeredWindowCacheBuilder<int, byte[], IntegerFixedStepDomain>
-    .Create(realDataSource, domain)
+await using var cache = WindowCacheBuilder.Layered(realDataSource, domain)
     .AddLayer(deepOptions, l2Diagnostics)   // L2: inner / deep layer
     .AddLayer(userOptions, l1Diagnostics)   // L1: outermost / user-facing layer
     .Build();

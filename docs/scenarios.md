@@ -438,8 +438,7 @@ from Lₙ's new window, and finally L1 expands from L2.
 var l2Diagnostics = new EventCounterCacheDiagnostics();
 var l1Diagnostics = new EventCounterCacheDiagnostics();
 
-await using var cache = LayeredWindowCacheBuilder<int, byte[], IntegerFixedStepDomain>
-    .Create(dataSource, domain)
+await using var cache = WindowCacheBuilder.Layered(dataSource, domain)
     .AddLayer(deepOptions,  l2Diagnostics)   // L2
     .AddLayer(userOptions,  l1Diagnostics)   // L1
     .Build();

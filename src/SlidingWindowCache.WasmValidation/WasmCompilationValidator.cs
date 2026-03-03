@@ -250,8 +250,8 @@ public static class WasmCompilationValidator
     /// <para><strong>Types Validated:</strong></para>
     /// <list type="bullet">
     /// <item><description>
-/// <see cref="WindowCacheConsistencyExtensions.GetDataAndWaitForIdleAsync{TRange,TData,TDomain}"/> —
-/// strong consistency extension method; composes GetDataAsync + unconditional WaitForIdleAsync
+    /// <see cref="WindowCacheConsistencyExtensions.GetDataAndWaitForIdleAsync{TRange,TData,TDomain}"/> —
+    /// strong consistency extension method; composes GetDataAsync + unconditional WaitForIdleAsync
     /// </description></item>
     /// <item><description>
     /// The <c>try { await WaitForIdleAsync } catch (OperationCanceledException) { }</c> pattern
@@ -309,8 +309,8 @@ public static class WasmCompilationValidator
     /// <para><strong>Types Validated:</strong></para>
     /// <list type="bullet">
     /// <item><description>
-/// <see cref="WindowCacheConsistencyExtensions.GetDataAndWaitOnMissAsync{TRange,TData,TDomain}"/> —
-/// hybrid consistency extension method; composes GetDataAsync + conditional WaitForIdleAsync
+    /// <see cref="WindowCacheConsistencyExtensions.GetDataAndWaitOnMissAsync{TRange,TData,TDomain}"/> —
+    /// hybrid consistency extension method; composes GetDataAsync + conditional WaitForIdleAsync
     /// gated on <see cref="CacheInteraction"/>
     /// </description></item>
     /// <item><description>
@@ -424,19 +424,18 @@ public static class WasmCompilationValidator
 
         // Build the layered cache — exercises LayeredWindowCacheBuilder,
         // WindowCacheDataSourceAdapter, and LayeredWindowCache
-        await using var cache = LayeredWindowCacheBuilder<int, int, IntegerFixedStepDomain>
-            .Create(new SimpleDataSource(), domain)
+        await using var layered = (LayeredWindowCache<int, int, IntegerFixedStepDomain>)WindowCacheBuilder.Layered(new SimpleDataSource(), domain)
             .AddLayer(innerOptions)
             .AddLayer(outerOptions)
             .Build();
 
         var range = Intervals.NET.Factories.Range.Closed<int>(0, 10);
-        var result = await cache.GetDataAsync(range, CancellationToken.None);
+        var result = await layered.GetDataAsync(range, CancellationToken.None);
 
         // WaitForIdleAsync on LayeredWindowCache awaits all layers (outermost to innermost)
-        await cache.WaitForIdleAsync();
+        await layered.WaitForIdleAsync();
 
         _ = result.Data.Length;
-        _ = cache.LayerCount;
+        _ = layered.LayerCount;
     }
 }

@@ -279,7 +279,7 @@ public sealed class WindowCacheDataSourceAdapterTests
         var range = MakeRange(10, 20);
         var result = MakeResult(10, 20);
         var cts = new CancellationTokenSource();
-        CancellationToken capturedToken = CancellationToken.None;
+        var capturedToken = CancellationToken.None;
         var adapter = CreateAdapter(mock.Object);
 
         mock.Setup(c => c.GetDataAsync(range, It.IsAny<CancellationToken>()))
