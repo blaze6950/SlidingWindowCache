@@ -80,6 +80,8 @@ While the single-writer architecture eliminates write-write races between User P
 | **Task-based** (default) | `rebalanceQueueCapacity: null` | Lock-free task chaining             | None (returns immediately)              | Recommended for most scenarios         |
 | **Channel-based**        | `rebalanceQueueCapacity: >= 1` | `System.Threading.Channels` bounded | Async await on `WriteAsync()` when full | High-frequency or resource-constrained |
 
+Both strategies extend `RebalanceExecutionControllerBase`, which implements the shared execution pipeline (`ExecuteRequestCoreAsync`: debounce + execute), last-execution-request tracking, and idempotent `DisposeAsync`. Concrete subclasses implement only the publication mechanism (`PublishExecutionRequest`) and their own disposal cleanup (`DisposeAsyncCore`).
+
 **Task-Based Strategy (default):**
 - Lock-free using volatile write (single-writer pattern — only intent processing loop writes)
 - Fire-and-forget: returns `ValueTask.CompletedTask` immediately, executes on ThreadPool
@@ -115,6 +117,7 @@ A subset of cache configuration — `LeftCacheSize`, `RightCacheSize`, `LeftThre
 - The holder is shared (by reference) with all components that need configuration: `ProportionalRangePlanner`, `NoRebalanceRangePlanner`, `TaskBasedRebalanceExecutionController`, and `ChannelBasedRebalanceExecutionController`.
 - `UpdateRuntimeOptions` applies the builder's deltas to the current `RuntimeCacheOptions` snapshot, validates the result, then publishes the new snapshot via `Volatile.Write`.
 - All readers call `holder.Current` at the start of their operation — they always see the latest published snapshot.
+- `CurrentRuntimeOptions` returns `holder.Current.ToSnapshot()`, projecting the internal `RuntimeCacheOptions` to the public `RuntimeOptionsSnapshot` DTO. The snapshot is immutable; callers must re-read the property to observe later updates.
 
 **"Next cycle" semantics:** Changes take effect on the next rebalance decision/execution cycle. Ongoing cycles use the snapshot they already read.
 

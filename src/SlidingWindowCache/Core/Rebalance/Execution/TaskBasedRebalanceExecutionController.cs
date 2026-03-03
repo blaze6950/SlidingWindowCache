@@ -87,29 +87,12 @@ namespace SlidingWindowCache.Core.Rebalance.Execution;
 /// <para>See also: <see cref="ChannelBasedRebalanceExecutionController{TRange,TData,TDomain}"/> for bounded alternative with backpressure</para>
 /// </remarks>
 internal sealed class TaskBasedRebalanceExecutionController<TRange, TData, TDomain>
-    : IRebalanceExecutionController<TRange, TData, TDomain>
+    : RebalanceExecutionControllerBase<TRange, TData, TDomain>
     where TRange : IComparable<TRange>
     where TDomain : IRangeDomain<TRange>
 {
-    private readonly RebalanceExecutor<TRange, TData, TDomain> _executor;
-    private readonly RuntimeCacheOptionsHolder _optionsHolder;
-    private readonly ICacheDiagnostics _cacheDiagnostics;
-
-    // Activity counter for tracking active operations
-    private readonly AsyncActivityCounter _activityCounter;
-
     // Task chaining state (volatile write for single-writer pattern)
     private Task _currentExecutionTask = Task.CompletedTask;
-
-    // Disposal state tracking (lock-free using Interlocked)
-    // 0 = not disposed, 1 = disposed
-    private int _disposeState;
-
-    /// <summary>
-    /// Stores the most recent execution request submitted to the execution controller.
-    /// Used for tracking the current execution state, cancellation coordination, and testing/diagnostic purposes.
-    /// </summary>
-    private ExecutionRequest<TRange, TData, TDomain>? _lastExecutionRequest;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="TaskBasedRebalanceExecutionController{TRange,TData,TDomain}"/> class.
@@ -139,20 +122,9 @@ internal sealed class TaskBasedRebalanceExecutionController<TRange, TData, TDoma
         RuntimeCacheOptionsHolder optionsHolder,
         ICacheDiagnostics cacheDiagnostics,
         AsyncActivityCounter activityCounter
-    )
+    ) : base(executor, optionsHolder, cacheDiagnostics, activityCounter)
     {
-        _executor = executor;
-        _optionsHolder = optionsHolder;
-        _cacheDiagnostics = cacheDiagnostics;
-        _activityCounter = activityCounter;
     }
-
-    /// <summary>
-    /// Gets the most recent execution request submitted to the execution controller.
-    /// Returns null if no execution request has been submitted yet.
-    /// </summary>
-    public ExecutionRequest<TRange, TData, TDomain>? LastExecutionRequest =>
-        Volatile.Read(ref _lastExecutionRequest);
 
     /// <summary>
     /// Publishes a rebalance execution request by chaining it to the previous execution task.
@@ -192,14 +164,14 @@ internal sealed class TaskBasedRebalanceExecutionController<TRange, TData, TDoma
     /// after multi-stage validation confirms rebalance necessity. Never blocks - returns immediately.
     /// </para>
     /// </remarks>
-    public ValueTask PublishExecutionRequest(
+    public override ValueTask PublishExecutionRequest(
         Intent<TRange, TData, TDomain> intent,
         Range<TRange> desiredRange,
         Range<TRange>? desiredNoRebalanceRange,
         CancellationToken loopCancellationToken)
     {
-        // Check disposal state using Volatile.Read (lock-free)
-        if (Volatile.Read(ref _disposeState) != 0)
+        // Check disposal state
+        if (IsDisposed)
         {
             throw new ObjectDisposedException(
                 nameof(TaskBasedRebalanceExecutionController<TRange, TData, TDomain>),
@@ -207,11 +179,10 @@ internal sealed class TaskBasedRebalanceExecutionController<TRange, TData, TDoma
         }
 
         // Increment activity counter for new execution request
-        _activityCounter.IncrementActivity();
+        ActivityCounter.IncrementActivity();
 
         // Cancel previous execution request (if exists)
-        var previousRequest = Volatile.Read(ref _lastExecutionRequest);
-        previousRequest?.Cancel();
+        LastExecutionRequest?.Cancel();
 
         // Create CancellationTokenSource for this execution request
         var cancellationTokenSource = new CancellationTokenSource();
@@ -225,7 +196,7 @@ internal sealed class TaskBasedRebalanceExecutionController<TRange, TData, TDoma
         );
 
         // Store as last request (for cancellation coordination and diagnostics)
-        Volatile.Write(ref _lastExecutionRequest, request);
+        StoreLastExecutionRequest(request);
 
         // Chain execution to previous task (lock-free using volatile write - single-writer context)
         // Read current task, create new chained task, and update atomically
@@ -269,171 +240,29 @@ internal sealed class TaskBasedRebalanceExecutionController<TRange, TData, TDoma
         {
             // Previous task failed - log but continue with current execution
             // (Decision: each execution is independent; previous failure shouldn't block current)
-            _cacheDiagnostics.RebalanceExecutionFailed(ex);
+            CacheDiagnostics.RebalanceExecutionFailed(ex);
         }
 
         try
         {
-            // Execute current request
-            await ExecuteRequestAsync(request).ConfigureAwait(false);
+            // Execute current request via the shared pipeline
+            await ExecuteRequestCoreAsync(request).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
-            // Current execution failed - log it
-            // ExecuteRequestAsync already handles exceptions internally, but catch here for safety
-            _cacheDiagnostics.RebalanceExecutionFailed(ex);
+            // ExecuteRequestCoreAsync already handles exceptions internally, but catch here for safety
+            CacheDiagnostics.RebalanceExecutionFailed(ex);
         }
     }
 
-    /// <summary>
-    /// Executes a rebalance request with debounce delay and cancellation support.
-    /// This is where the actual cache mutation occurs (via RebalanceExecutor).
-    /// </summary>
-    /// <param name="request">The execution request containing intent, desired range, and cancellation token.</param>
-    /// <remarks>
-    /// <para><strong>Execution Steps:</strong></para>
-    /// <list type="number">
-    /// <item><description>Apply debounce delay (with cancellation check)</description></item>
-    /// <item><description>Check cancellation after debounce (before I/O)</description></item>
-    /// <item><description>Execute rebalance via RebalanceExecutor (CacheState mutation occurs here)</description></item>
-    /// <item><description>Handle exceptions and diagnostics</description></item>
-    /// <item><description>Cleanup: dispose request and decrement activity counter</description></item>
-    /// </list>
-    /// <para><strong>Thread Safety:</strong></para>
-    /// <para>
-    /// This method runs sequentially due to task chaining (one execution at a time).
-    /// The single-writer architecture guarantee is maintained through serialization via the task chain.
-    /// </para>
-    /// <para><strong>Exception Handling:</strong></para>
-    /// <para>
-    /// All exceptions are captured and reported via diagnostics. This follows the "Background Path Exceptions"
-    /// pattern from AGENTS.md: background exceptions must not crash the application.
-    /// </para>
-    /// </remarks>
-    private async Task ExecuteRequestAsync(ExecutionRequest<TRange, TData, TDomain> request)
+    /// <inheritdoc/>
+    private protected override async ValueTask DisposeAsyncCore()
     {
-        _cacheDiagnostics.RebalanceExecutionStarted();
-
-        var intent = request.Intent;
-        var desiredRange = request.DesiredRange;
-        var desiredNoRebalanceRange = request.DesiredNoRebalanceRange;
-        var cancellationToken = request.CancellationToken;
-
-        // Snapshot DebounceDelay from the options holder at execution time.
-        // This picks up any runtime update published via IWindowCache.UpdateRuntimeOptions
-        // since this execution request was enqueued ("next cycle" semantics).
-        var debounceDelay = _optionsHolder.Current.DebounceDelay;
-
-        try
-        {
-            // Step 1: Apply debounce delay - allows superseded operations to be cancelled
-            // ConfigureAwait(false) ensures continuation on thread pool
-            await Task.Delay(debounceDelay, cancellationToken)
-                .ConfigureAwait(false);
-
-            // Step 2: Check cancellation after debounce - avoid wasted I/O work
-            // NOTE: We check IsCancellationRequested explicitly here rather than relying solely on the
-            // OperationCanceledException catch below. Task.Delay can complete normally just as cancellation
-            // is signalled (a race), so we may reach here with cancellation requested but no exception thrown.
-            // This explicit check provides a clean diagnostic event path (RebalanceExecutionCancelled) for
-            // that case, separate from the exception-based cancellation path in the catch block below.
-            if (cancellationToken.IsCancellationRequested)
-            {
-                _cacheDiagnostics.RebalanceExecutionCancelled();
-                return;
-            }
-
-            // Step 3: Execute the rebalance - this is where CacheState mutation occurs
-            // This is the ONLY place in the entire system where cache state is written
-            // (when this strategy is active)
-            await _executor.ExecuteAsync(
-                    intent,
-                    desiredRange,
-                    desiredNoRebalanceRange,
-                    cancellationToken)
-                .ConfigureAwait(false);
-        }
-        catch (OperationCanceledException)
-        {
-            // Expected when execution is cancelled or superseded
-            _cacheDiagnostics.RebalanceExecutionCancelled();
-        }
-        catch (Exception ex)
-        {
-            // Execution failed - record diagnostic
-            // Applications MUST monitor RebalanceExecutionFailed events and implement
-            // appropriate error handling (logging, alerting, monitoring)
-            _cacheDiagnostics.RebalanceExecutionFailed(ex);
-        }
-        finally
-        {
-            // Dispose CancellationTokenSource
-            request.Dispose();
-
-            // Decrement activity counter for execution
-            // This ALWAYS happens after execution completes/cancels/fails
-            _activityCounter.DecrementActivity();
-        }
-    }
-
-    /// <summary>
-    /// Disposes the execution controller and releases all managed resources.
-    /// Waits for the current execution task chain to complete gracefully.
-    /// </summary>
-    /// <returns>A ValueTask representing the asynchronous disposal operation.</returns>
-    /// <remarks>
-    /// <para><strong>Disposal Sequence:</strong></para>
-    /// <list type="number">
-    /// <item><description>Mark as disposed (prevents new execution requests)</description></item>
-    /// <item><description>Cancel last execution request (if present)</description></item>
-    /// <item><description>Capture current task chain reference (volatile read)</description></item>
-    /// <item><description>Wait for task chain to complete gracefully</description></item>
-    /// <item><description>Dispose last execution request resources</description></item>
-    /// </list>
-    /// <para><strong>Thread Safety:</strong></para>
-    /// <para>
-    /// This method is thread-safe and idempotent using lock-free Interlocked operations.
-    /// Multiple concurrent calls will execute disposal only once.
-    /// </para>
-    /// <para><strong>Graceful Shutdown:</strong></para>
-    /// <para>
-    /// No timeout is enforced per architectural decision. Disposal waits for the current execution
-    /// to complete naturally (typically milliseconds). Cancellation signals early exit.
-    /// </para>
-    /// <para><strong>Exception Handling:</strong></para>
-    /// <para>
-    /// Uses best-effort cleanup. Exceptions during task completion are logged via diagnostics
-    /// but do not prevent subsequent cleanup steps.
-    /// </para>
-    /// </remarks>
-    public async ValueTask DisposeAsync()
-    {
-        // Idempotent check using lock-free Interlocked.CompareExchange
-        if (Interlocked.CompareExchange(ref _disposeState, 1, 0) != 0)
-        {
-            return; // Already disposed
-        }
-
-        // Cancel last execution request (signals early exit)
-        Volatile.Read(ref _lastExecutionRequest)?.Cancel();
-
         // Capture current task chain reference (volatile read - no lock needed)
         var currentTask = Volatile.Read(ref _currentExecutionTask);
 
-        // Wait for current task chain to complete gracefully
+        // Wait for task chain to complete gracefully
         // No timeout needed per architectural decision: graceful shutdown with cancellation
-        try
-        {
-            await currentTask.ConfigureAwait(false);
-        }
-        catch (Exception ex)
-        {
-            // Log via diagnostics but don't throw - best-effort disposal
-            // Follows "Background Path Exceptions" pattern from AGENTS.md
-            _cacheDiagnostics.RebalanceExecutionFailed(ex);
-        }
-
-        // Dispose last execution request if present
-        Volatile.Read(ref _lastExecutionRequest)?.Dispose();
+        await currentTask.ConfigureAwait(false);
     }
 }

@@ -37,7 +37,7 @@ namespace SlidingWindowCache.Core.Rebalance.Execution;
 /// // Sequential processing loop:
 /// await foreach (var request in _executionChannel.Reader.ReadAllAsync())
 /// {
-///     await ExecuteRebalanceAsync(request);  // One at a time
+///     await ExecuteRequestCoreAsync(request);  // One at a time
 /// }
 /// </code>
 /// <para><strong>Backpressure Behavior:</strong></para>
@@ -93,28 +93,12 @@ namespace SlidingWindowCache.Core.Rebalance.Execution;
 /// <para>See also: <see cref="TaskBasedRebalanceExecutionController{TRange,TData,TDomain}"/> for unbounded alternative</para>
 /// </remarks>
 internal sealed class ChannelBasedRebalanceExecutionController<TRange, TData, TDomain>
-    : IRebalanceExecutionController<TRange, TData, TDomain>
+    : RebalanceExecutionControllerBase<TRange, TData, TDomain>
     where TRange : IComparable<TRange>
     where TDomain : IRangeDomain<TRange>
 {
-    private readonly RebalanceExecutor<TRange, TData, TDomain> _executor;
-    private readonly RuntimeCacheOptionsHolder _optionsHolder;
-    private readonly ICacheDiagnostics _cacheDiagnostics;
     private readonly Channel<ExecutionRequest<TRange, TData, TDomain>> _executionChannel;
     private readonly Task _executionLoopTask;
-
-    // Activity counter for tracking active operations
-    private readonly AsyncActivityCounter _activityCounter;
-
-    // Disposal state tracking (lock-free using Interlocked)
-    // 0 = not disposed, 1 = disposed
-    private int _disposeState;
-
-    /// <summary>
-    /// Stores the most recent execution request submitted to the execution controller.
-    /// Used for tracking the current execution state and for testing/diagnostic purposes.
-    /// </summary>
-    private ExecutionRequest<TRange, TData, TDomain>? _lastExecutionRequest;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="ChannelBasedRebalanceExecutionController{TRange,TData,TDomain}"/> class.
@@ -142,25 +126,19 @@ internal sealed class ChannelBasedRebalanceExecutionController<TRange, TData, TD
     /// This actor guarantees single-threaded execution of all cache mutations via sequential channel processing.
     /// </para>
     /// </remarks>
-    // todo think about exposing a base class with common logic
     public ChannelBasedRebalanceExecutionController(
         RebalanceExecutor<TRange, TData, TDomain> executor,
         RuntimeCacheOptionsHolder optionsHolder,
         ICacheDiagnostics cacheDiagnostics,
         AsyncActivityCounter activityCounter,
         int capacity
-    )
+    ) : base(executor, optionsHolder, cacheDiagnostics, activityCounter)
     {
         if (capacity < 1)
         {
             throw new ArgumentOutOfRangeException(nameof(capacity),
                 "Capacity must be greater than or equal to 1.");
         }
-
-        _executor = executor;
-        _optionsHolder = optionsHolder;
-        _cacheDiagnostics = cacheDiagnostics;
-        _activityCounter = activityCounter;
 
         // Initialize bounded channel with single reader/writer semantics
         // Bounded capacity enables backpressure on IntentController actor
@@ -177,20 +155,6 @@ internal sealed class ChannelBasedRebalanceExecutionController<TRange, TData, TD
         // Start execution loop immediately - runs for cache lifetime
         _executionLoopTask = ProcessExecutionRequestsAsync();
     }
-
-    /// <summary>
-    /// Gets the most recent execution request submitted to the execution controller.
-    /// Returns null if no execution request has been submitted yet.
-    /// </summary>
-    /// <remarks>
-    /// <para><strong>Thread Safety:</strong></para>
-    /// <para>
-    /// Uses <see cref="Volatile.Read"/> to ensure proper memory visibility across threads.
-    /// This property can be safely accessed from multiple threads (intent loop, decision engine).
-    /// </para>
-    /// </remarks>
-    public ExecutionRequest<TRange, TData, TDomain>? LastExecutionRequest
-        => Volatile.Read(ref _lastExecutionRequest);
 
     /// <summary>
     /// Publishes a rebalance execution request to the bounded channel for sequential processing.
@@ -224,14 +188,14 @@ internal sealed class ChannelBasedRebalanceExecutionController<TRange, TData, TD
     /// in a fire-and-forget manner. Only the background intent processing loop experiences backpressure.
     /// </para>
     /// </remarks>
-    public async ValueTask PublishExecutionRequest(
+    public override async ValueTask PublishExecutionRequest(
         Intent<TRange, TData, TDomain> intent,
         Range<TRange> desiredRange,
         Range<TRange>? desiredNoRebalanceRange,
         CancellationToken loopCancellationToken)
     {
-        // Check disposal state using Volatile.Read (lock-free)
-        if (Volatile.Read(ref _disposeState) != 0)
+        // Check disposal state
+        if (IsDisposed)
         {
             throw new ObjectDisposedException(
                 nameof(ChannelBasedRebalanceExecutionController<TRange, TData, TDomain>),
@@ -239,7 +203,7 @@ internal sealed class ChannelBasedRebalanceExecutionController<TRange, TData, TD
         }
 
         // Increment activity counter for new execution request
-        _activityCounter.IncrementActivity();
+        ActivityCounter.IncrementActivity();
 
         // Create CancellationTokenSource for this execution request
         var cancellationTokenSource = new CancellationTokenSource();
@@ -251,7 +215,7 @@ internal sealed class ChannelBasedRebalanceExecutionController<TRange, TData, TD
             desiredNoRebalanceRange,
             cancellationTokenSource
         );
-        Volatile.Write(ref _lastExecutionRequest, request);
+        StoreLastExecutionRequest(request);
 
         // Enqueue execution request to bounded channel
         // BACKPRESSURE: This will await if channel is at capacity, creating backpressure on intent processing loop
@@ -265,14 +229,14 @@ internal sealed class ChannelBasedRebalanceExecutionController<TRange, TData, TD
             // Write cancelled during disposal - clean up and exit gracefully
             // Don't throw - disposal is shutting down the loop
             request.Dispose();
-            _activityCounter.DecrementActivity();
+            ActivityCounter.DecrementActivity();
         }
         catch (Exception ex)
         {
             // If write fails (e.g., channel completed during disposal), clean up and report
             request.Dispose();
-            _activityCounter.DecrementActivity();
-            _cacheDiagnostics.RebalanceExecutionFailed(ex);
+            ActivityCounter.DecrementActivity();
+            CacheDiagnostics.RebalanceExecutionFailed(ex);
             throw; // Re-throw to signal failure to caller
         }
     }
@@ -287,15 +251,6 @@ internal sealed class ChannelBasedRebalanceExecutionController<TRange, TData, TD
     /// This loop runs on a single background thread and processes requests one at a time via Channel.
     /// NO TWO REBALANCE EXECUTIONS can ever run in parallel. The Channel ensures serial processing.
     /// </para>
-    /// <para><strong>Processing Steps for Each Request:</strong></para>
-    /// <list type="number">
-    /// <item><description>Read ExecutionRequest from bounded channel (blocks if empty)</description></item>
-    /// <item><description>Apply debounce delay (with cancellation check)</description></item>
-    /// <item><description>Check cancellation before execution</description></item>
-    /// <item><description>Execute rebalance via RebalanceExecutor (CacheState mutation occurs here)</description></item>
-    /// <item><description>Handle exceptions and diagnostics</description></item>
-    /// <item><description>Dispose request resources and decrement activity counter</description></item>
-    /// </list>
     /// <para><strong>Backpressure Effect:</strong></para>
     /// <para>
     /// When this loop processes a request, it frees space in the bounded channel, allowing
@@ -306,122 +261,18 @@ internal sealed class ChannelBasedRebalanceExecutionController<TRange, TData, TD
     {
         await foreach (var request in _executionChannel.Reader.ReadAllAsync())
         {
-            _cacheDiagnostics.RebalanceExecutionStarted();
-
-            var intent = request.Intent;
-            var desiredRange = request.DesiredRange;
-            var desiredNoRebalanceRange = request.DesiredNoRebalanceRange;
-            var cancellationToken = request.CancellationToken;
-
-            // Snapshot DebounceDelay from the options holder at execution time.
-            // This picks up any runtime update published via IWindowCache.UpdateRuntimeOptions
-            // since this execution request was enqueued ("next cycle" semantics).
-            var debounceDelay = _optionsHolder.Current.DebounceDelay;
-
-            try
-            {
-                // Step 1: Apply debounce delay - allows superseded operations to be cancelled
-                // ConfigureAwait(false) ensures continuation on thread pool
-                await Task.Delay(debounceDelay, cancellationToken)
-                    .ConfigureAwait(false);
-
-                // Step 2: Check cancellation after debounce - avoid wasted I/O work
-                // NOTE: We check IsCancellationRequested explicitly here rather than relying solely on the
-                // OperationCanceledException catch below. Task.Delay can complete normally just as cancellation
-                // is signalled (a race), so we may reach here with cancellation requested but no exception thrown.
-                // This explicit check provides a clean diagnostic event path (RebalanceExecutionCancelled) for
-                // that case, separate from the exception-based cancellation path in the catch block below.
-                if (cancellationToken.IsCancellationRequested)
-                {
-                    _cacheDiagnostics.RebalanceExecutionCancelled();
-                    continue;
-                }
-
-                // Step 3: Execute the rebalance - this is where CacheState mutation occurs
-                // This is the ONLY place in the entire system where cache state is written
-                await _executor.ExecuteAsync(
-                        intent,
-                        desiredRange,
-                        desiredNoRebalanceRange,
-                        cancellationToken)
-                    .ConfigureAwait(false);
-            }
-            catch (OperationCanceledException)
-            {
-                // Expected when execution is cancelled or superseded
-                _cacheDiagnostics.RebalanceExecutionCancelled();
-            }
-            catch (Exception ex)
-            {
-                // Execution failed - record diagnostic
-                // Applications MUST monitor RebalanceExecutionFailed events and implement
-                // appropriate error handling (logging, alerting, monitoring)
-                _cacheDiagnostics.RebalanceExecutionFailed(ex);
-            }
-            finally
-            {
-                // Dispose CancellationTokenSource
-                request.Dispose();
-
-                // Decrement activity counter for execution
-                // This ALWAYS happens after execution completes/cancels/fails
-                _activityCounter.DecrementActivity();
-            }
+            await ExecuteRequestCoreAsync(request).ConfigureAwait(false);
         }
     }
 
-    /// <summary>
-    /// Disposes the execution controller and releases all managed resources.
-    /// Gracefully shuts down the execution loop and waits for completion.
-    /// </summary>
-    /// <returns>A ValueTask representing the asynchronous disposal operation.</returns>
-    /// <remarks>
-    /// <para><strong>Disposal Sequence:</strong></para>
-    /// <list type="number">
-    /// <item><description>Mark as disposed (prevents new execution requests)</description></item>
-    /// <item><description>Cancel last execution request (if present)</description></item>
-    /// <item><description>Complete the channel writer (signals loop to exit after current operation)</description></item>
-    /// <item><description>Wait for execution loop to complete gracefully</description></item>
-    /// <item><description>Dispose last execution request resources</description></item>
-    /// </list>
-    /// <para><strong>Thread Safety:</strong></para>
-    /// <para>
-    /// This method is thread-safe and idempotent using lock-free Interlocked operations.
-    /// Multiple concurrent calls will execute disposal only once.
-    /// </para>
-    /// <para><strong>Exception Handling:</strong></para>
-    /// <para>
-    /// Uses best-effort cleanup. Exceptions during loop completion are logged via diagnostics
-    /// but do not prevent subsequent cleanup steps.
-    /// </para>
-    /// </remarks>
-    public async ValueTask DisposeAsync()
+    /// <inheritdoc/>
+    private protected override async ValueTask DisposeAsyncCore()
     {
-        // Idempotent check using lock-free Interlocked.CompareExchange
-        if (Interlocked.CompareExchange(ref _disposeState, 1, 0) != 0)
-        {
-            return; // Already disposed
-        }
-
-        Volatile.Read(ref _lastExecutionRequest)?.Cancel();
-
         // Complete the channel - signals execution loop to exit after current operation
         _executionChannel.Writer.Complete();
 
         // Wait for execution loop to complete gracefully
         // No timeout needed per architectural decision: graceful shutdown with cancellation
-        try
-        {
-            await _executionLoopTask.ConfigureAwait(false);
-        }
-        catch (Exception ex)
-        {
-            // Log via diagnostics but don't throw - best-effort disposal
-            // Follows "Background Path Exceptions" pattern from AGENTS.md
-            _cacheDiagnostics.RebalanceExecutionFailed(ex);
-        }
-
-        // Dispose last execution request if present
-        Volatile.Read(ref _lastExecutionRequest)?.Dispose();
+        await _executionLoopTask.ConfigureAwait(false);
     }
 }

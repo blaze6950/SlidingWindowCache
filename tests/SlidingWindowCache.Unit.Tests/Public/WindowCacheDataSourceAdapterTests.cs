@@ -17,8 +17,7 @@ public sealed class WindowCacheDataSourceAdapterTests
 {
     #region Test Infrastructure
 
-    private static Mock<IWindowCache<int, int, IntegerFixedStepDomain>> CreateCacheMock()
-        => new Mock<IWindowCache<int, int, IntegerFixedStepDomain>>(MockBehavior.Strict);
+    private static Mock<IWindowCache<int, int, IntegerFixedStepDomain>> CreateCacheMock() => new(MockBehavior.Strict);
 
     private static WindowCacheDataSourceAdapter<int, int, IntegerFixedStepDomain> CreateAdapter(
         IWindowCache<int, int, IntegerFixedStepDomain> cache)

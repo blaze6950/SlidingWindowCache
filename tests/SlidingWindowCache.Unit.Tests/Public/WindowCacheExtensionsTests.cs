@@ -17,8 +17,7 @@ public sealed class WindowCacheExtensionsTests
 {
     #region Test Infrastructure
 
-    private static Mock<IWindowCache<int, int, IntegerFixedStepDomain>> CreateMock()
-        => new Mock<IWindowCache<int, int, IntegerFixedStepDomain>>(MockBehavior.Strict);
+    private static Mock<IWindowCache<int, int, IntegerFixedStepDomain>> CreateMock() => new(MockBehavior.Strict);
 
     private static Intervals.NET.Range<int> CreateRange(int start, int end)
         => Intervals.NET.Factories.Range.Closed<int>(start, end);
@@ -31,8 +30,8 @@ public sealed class WindowCacheExtensionsTests
         return new RangeResult<int, int>(range, data, interaction);
     }
 
-    private static RangeResult<int, int> CreateNullRangeResult(CacheInteraction interaction)
-        => new RangeResult<int, int>(null, ReadOnlyMemory<int>.Empty, interaction);
+    private static RangeResult<int, int> CreateNullRangeResult(CacheInteraction interaction) =>
+        new(null, ReadOnlyMemory<int>.Empty, interaction);
 
     #endregion
 

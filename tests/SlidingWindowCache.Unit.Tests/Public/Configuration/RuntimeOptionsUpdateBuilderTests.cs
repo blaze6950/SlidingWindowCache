@@ -9,8 +9,7 @@ namespace SlidingWindowCache.Unit.Tests.Public.Configuration;
 /// </summary>
 public class RuntimeOptionsUpdateBuilderTests
 {
-    private static RuntimeCacheOptions BaseOptions() =>
-        new RuntimeCacheOptions(1.0, 2.0, 0.1, 0.2, TimeSpan.FromMilliseconds(50));
+    private static RuntimeCacheOptions BaseOptions() => new(1.0, 2.0, 0.1, 0.2, TimeSpan.FromMilliseconds(50));
 
     // Helper to create an internal builder via WindowCache (public API) isn't needed here
     // because we can test ApplyTo directly via internal access.

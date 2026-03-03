@@ -14,7 +14,7 @@ public class RuntimeOptionsUpdateTests
     private static IDataSource<int, string> CreateDataSource() =>
         new SimpleTestDataSource<string>(i => $"Item_{i}");
 
-    private static WindowCacheOptions DefaultOptions() => new WindowCacheOptions(
+    private static WindowCacheOptions DefaultOptions() => new(
         leftCacheSize: 1.0,
         rightCacheSize: 1.0,
         readMode: UserCacheReadMode.Snapshot
@@ -337,6 +337,201 @@ public class RuntimeOptionsUpdateTests
 
         // ASSERT
         Assert.Null(exception);
+    }
+
+    #endregion
+
+    #region CurrentRuntimeOptions Tests
+
+    [Fact]
+    public async Task CurrentRuntimeOptions_ReflectsInitialOptions()
+    {
+        // ARRANGE
+        await using var cache = new WindowCache<int, string, IntegerFixedStepDomain>(
+            CreateDataSource(), new IntegerFixedStepDomain(),
+            new WindowCacheOptions(
+                leftCacheSize: 1.5,
+                rightCacheSize: 2.5,
+                readMode: UserCacheReadMode.Snapshot,
+                leftThreshold: 0.1,
+                rightThreshold: 0.2,
+                debounceDelay: TimeSpan.FromMilliseconds(50)
+            )
+        );
+
+        // ACT
+        var snapshot = cache.CurrentRuntimeOptions;
+
+        // ASSERT
+        Assert.Equal(1.5, snapshot.LeftCacheSize);
+        Assert.Equal(2.5, snapshot.RightCacheSize);
+        Assert.Equal(0.1, snapshot.LeftThreshold);
+        Assert.Equal(0.2, snapshot.RightThreshold);
+        Assert.Equal(TimeSpan.FromMilliseconds(50), snapshot.DebounceDelay);
+    }
+
+    [Fact]
+    public async Task CurrentRuntimeOptions_AfterUpdate_ReflectsNewValues()
+    {
+        // ARRANGE
+        await using var cache = new WindowCache<int, string, IntegerFixedStepDomain>(
+            CreateDataSource(), new IntegerFixedStepDomain(),
+            new WindowCacheOptions(1.0, 1.0, UserCacheReadMode.Snapshot)
+        );
+
+        // ACT
+        cache.UpdateRuntimeOptions(update =>
+            update.WithLeftCacheSize(3.0).WithRightCacheSize(4.0));
+
+        var snapshot = cache.CurrentRuntimeOptions;
+
+        // ASSERT
+        Assert.Equal(3.0, snapshot.LeftCacheSize);
+        Assert.Equal(4.0, snapshot.RightCacheSize);
+    }
+
+    [Fact]
+    public async Task CurrentRuntimeOptions_AfterPartialUpdate_UnchangedFieldsRetainOldValues()
+    {
+        // ARRANGE
+        await using var cache = new WindowCache<int, string, IntegerFixedStepDomain>(
+            CreateDataSource(), new IntegerFixedStepDomain(),
+            new WindowCacheOptions(
+                leftCacheSize: 1.0,
+                rightCacheSize: 2.0,
+                readMode: UserCacheReadMode.Snapshot,
+                debounceDelay: TimeSpan.FromMilliseconds(75)
+            )
+        );
+
+        // ACT — only change left cache size
+        cache.UpdateRuntimeOptions(update => update.WithLeftCacheSize(5.0));
+
+        var snapshot = cache.CurrentRuntimeOptions;
+
+        // ASSERT — left changed, right and debounce unchanged
+        Assert.Equal(5.0, snapshot.LeftCacheSize);
+        Assert.Equal(2.0, snapshot.RightCacheSize);
+        Assert.Equal(TimeSpan.FromMilliseconds(75), snapshot.DebounceDelay);
+    }
+
+    [Fact]
+    public async Task CurrentRuntimeOptions_AfterThresholdCleared_ThresholdIsNull()
+    {
+        // ARRANGE
+        await using var cache = new WindowCache<int, string, IntegerFixedStepDomain>(
+            CreateDataSource(), new IntegerFixedStepDomain(),
+            new WindowCacheOptions(1.0, 1.0, UserCacheReadMode.Snapshot,
+                leftThreshold: 0.3, rightThreshold: 0.3)
+        );
+
+        // ACT
+        cache.UpdateRuntimeOptions(update => update.ClearLeftThreshold());
+
+        var snapshot = cache.CurrentRuntimeOptions;
+
+        // ASSERT
+        Assert.Null(snapshot.LeftThreshold);
+        Assert.Equal(0.3, snapshot.RightThreshold);
+    }
+
+    [Fact]
+    public async Task CurrentRuntimeOptions_OnDisposedCache_ThrowsObjectDisposedException()
+    {
+        // ARRANGE
+        var cache = new WindowCache<int, string, IntegerFixedStepDomain>(
+            CreateDataSource(), new IntegerFixedStepDomain(), DefaultOptions()
+        );
+        await cache.DisposeAsync();
+
+        // ACT
+        var exception = Record.Exception(() => _ = cache.CurrentRuntimeOptions);
+
+        // ASSERT
+        Assert.NotNull(exception);
+        Assert.IsType<ObjectDisposedException>(exception);
+    }
+
+    [Fact]
+    public async Task CurrentRuntimeOptions_ReturnedSnapshot_IsImmutable()
+    {
+        // ARRANGE
+        await using var cache = new WindowCache<int, string, IntegerFixedStepDomain>(
+            CreateDataSource(), new IntegerFixedStepDomain(),
+            new WindowCacheOptions(1.0, 2.0, UserCacheReadMode.Snapshot)
+        );
+        var snapshot1 = cache.CurrentRuntimeOptions;
+
+        // ACT — update the cache
+        cache.UpdateRuntimeOptions(update => update.WithLeftCacheSize(9.9));
+
+        var snapshot2 = cache.CurrentRuntimeOptions;
+
+        // ASSERT — snapshot1 still reflects old values (it is a snapshot, not a live view)
+        Assert.Equal(1.0, snapshot1.LeftCacheSize);
+        Assert.Equal(9.9, snapshot2.LeftCacheSize);
+        Assert.NotSame(snapshot1, snapshot2);
+    }
+
+    #endregion
+
+    #region Layered Cache - Per-Layer Layers[] Update Tests
+
+    [Fact]
+    public async Task LayeredCache_LayersProperty_AllowsPerLayerOptionsUpdate()
+    {
+        // ARRANGE — build a 2-layer cache
+        await using var layeredCache = LayeredWindowCacheBuilder<int, string, IntegerFixedStepDomain>
+            .Create(CreateDataSource(), new IntegerFixedStepDomain())
+            .AddLayer(new WindowCacheOptions(1.0, 1.0, UserCacheReadMode.Snapshot))
+            .AddLayer(new WindowCacheOptions(1.0, 1.0, UserCacheReadMode.Snapshot))
+            .Build();
+
+        // ACT — update the innermost layer's options via Layers[0]
+        var exception = Record.Exception(() =>
+            layeredCache.Layers[0].UpdateRuntimeOptions(u => u.WithLeftCacheSize(3.0)));
+
+        // ASSERT
+        Assert.Null(exception);
+    }
+
+    [Fact]
+    public async Task LayeredCache_LayersProperty_InnerLayerCurrentRuntimeOptions_ReflectsUpdate()
+    {
+        // ARRANGE
+        await using var layeredCache = LayeredWindowCacheBuilder<int, string, IntegerFixedStepDomain>
+            .Create(CreateDataSource(), new IntegerFixedStepDomain())
+            .AddLayer(new WindowCacheOptions(1.0, 1.0, UserCacheReadMode.Snapshot))
+            .AddLayer(new WindowCacheOptions(1.0, 1.0, UserCacheReadMode.Snapshot))
+            .Build();
+
+        // ACT
+        layeredCache.Layers[0].UpdateRuntimeOptions(u => u.WithRightCacheSize(5.0));
+        var innerSnapshot = layeredCache.Layers[0].CurrentRuntimeOptions;
+
+        // ASSERT — inner layer reflects its own update
+        Assert.Equal(5.0, innerSnapshot.RightCacheSize);
+    }
+
+    [Fact]
+    public async Task LayeredCache_LayersProperty_OuterLayerUpdateDoesNotAffectInnerLayer()
+    {
+        // ARRANGE
+        await using var layeredCache = LayeredWindowCacheBuilder<int, string, IntegerFixedStepDomain>
+            .Create(CreateDataSource(), new IntegerFixedStepDomain())
+            .AddLayer(new WindowCacheOptions(1.0, 1.0, UserCacheReadMode.Snapshot))
+            .AddLayer(new WindowCacheOptions(1.0, 1.0, UserCacheReadMode.Snapshot))
+            .Build();
+
+        // ACT — update outer layer only
+        layeredCache.UpdateRuntimeOptions(u => u.WithLeftCacheSize(7.0));
+
+        var outerSnapshot = layeredCache.CurrentRuntimeOptions;
+        var innerSnapshot = layeredCache.Layers[0].CurrentRuntimeOptions;
+
+        // ASSERT — outer changed, inner unchanged
+        Assert.Equal(7.0, outerSnapshot.LeftCacheSize);
+        Assert.Equal(1.0, innerSnapshot.LeftCacheSize);
     }
 
     #endregion

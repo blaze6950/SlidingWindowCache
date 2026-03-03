@@ -171,4 +171,36 @@ public interface IWindowCache<TRange, TData, TDomain> : IAsyncDisposable
     /// <exception cref="ArgumentOutOfRangeException">Thrown when any updated value fails validation.</exception>
     /// <exception cref="ArgumentException">Thrown when the merged threshold sum exceeds 1.0.</exception>
     void UpdateRuntimeOptions(Action<RuntimeOptionsUpdateBuilder> configure);
+
+    /// <summary>
+    /// Gets a snapshot of the current runtime-updatable option values on this cache instance.
+    /// </summary>
+    /// <remarks>
+    /// <para><strong>Snapshot Semantics:</strong></para>
+    /// <para>
+    /// The returned <see cref="RuntimeOptionsSnapshot"/> captures the option values at the moment
+    /// this property is read. It is not updated if
+    /// <see cref="UpdateRuntimeOptions"/> is called afterward — obtain a new snapshot to see
+    /// updated values.
+    /// </para>
+    /// <para><strong>Usage:</strong></para>
+    /// <code>
+    /// // Inspect current options
+    /// var current = cache.CurrentRuntimeOptions;
+    /// Console.WriteLine($"LeftCacheSize={current.LeftCacheSize}");
+    ///
+    /// // Perform a relative update (e.g. double the left cache size)
+    /// var current = cache.CurrentRuntimeOptions;
+    /// cache.UpdateRuntimeOptions(u => u.WithLeftCacheSize(current.LeftCacheSize * 2));
+    /// </code>
+    /// <para><strong>Layered Caches:</strong></para>
+    /// <para>
+    /// On a <see cref="LayeredWindowCache{TRange,TData,TDomain}"/>, this property returns the
+    /// options of the outermost (user-facing) layer. To inspect the options of a specific inner
+    /// layer, access that layer directly via
+    /// <see cref="LayeredWindowCache{TRange,TData,TDomain}.Layers"/>.
+    /// </para>
+    /// </remarks>
+    /// <exception cref="ObjectDisposedException">Thrown when called on a disposed cache instance.</exception>
+    RuntimeOptionsSnapshot CurrentRuntimeOptions { get; }
 }

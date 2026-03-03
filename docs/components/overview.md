@@ -19,10 +19,13 @@ The system is easier to reason about when components are grouped by:
 - Public facade: `WindowCache<TRange, TData, TDomain>`
 - Public extensions: `WindowCacheExtensions` — opt-in hybrid and strong consistency modes (`GetDataAndWaitOnMissAsync`, `GetDataAndWaitForIdleAsync`)
 - Runtime configuration: `RuntimeOptionsUpdateBuilder` — fluent builder for `UpdateRuntimeOptions`; only fields explicitly set are changed
+- Runtime options snapshot: `RuntimeOptionsSnapshot` — public read-only DTO returned by `IWindowCache.CurrentRuntimeOptions`
+- Shared validation: `RuntimeOptionsValidator` — internal static helper; centralizes cache-size and threshold validation for both `WindowCacheOptions` and `RuntimeCacheOptions`
 - Multi-layer support: `WindowCacheDataSourceAdapter`, `LayeredWindowCacheBuilder`, `LayeredWindowCache`
 - User Path: assembles requested data and publishes intent
 - Intent loop: observes latest intent and runs analytical validation
 - Execution: performs debounced, cancellable rebalance work and mutates cache state
+- Execution controller base: `RebalanceExecutionControllerBase` — abstract base class for both `TaskBasedRebalanceExecutionController` and `ChannelBasedRebalanceExecutionController`; holds shared dependencies, implements `LastExecutionRequest`, `ExecuteRequestCoreAsync`, and `DisposeAsync`
 
 ### Component Index
 
@@ -48,14 +51,33 @@ The system is easier to reason about when components are grouped by:
     ├── 🟦 CacheState<TRange, TData, TDomain>              ⚠️ Shared Mutable
     ├── 🟦 IntentController<TRange, TData, TDomain>
     │   └── uses → 🟧 IRebalanceExecutionController<TRange, TData, TDomain>
-    │       ├── implements → 🟦 TaskBasedRebalanceExecutionController (default)
-    │       └── implements → 🟦 ChannelBasedRebalanceExecutionController (optional)
+    │       ├── implements → 🟦 TaskBasedRebalanceExecutionController (default, extends RebalanceExecutionControllerBase)
+    │       └── implements → 🟦 ChannelBasedRebalanceExecutionController (optional, extends RebalanceExecutionControllerBase)
     ├── 🟦 RebalanceDecisionEngine<TRange, TDomain>
     │   ├── owns → 🟩 NoRebalanceSatisfactionPolicy<TRange>
     │   └── owns → 🟩 ProportionalRangePlanner<TRange, TDomain>
     ├── 🟦 RebalanceExecutor<TRange, TData, TDomain>
     └── 🟦 CacheDataExtensionService<TRange, TData, TDomain>
         └── uses → 🟧 IDataSource<TRange, TData> (user-provided)
+
+──────────────────────────── Execution Controllers ────────────────────────────
+
+🟦 RebalanceExecutionControllerBase<TRange, TData, TDomain>   [Abstract base]
+│  Holds: Executor, OptionsHolder, CacheDiagnostics, ActivityCounter
+│  Implements: LastExecutionRequest, StoreLastExecutionRequest()
+│              ExecuteRequestCoreAsync() (shared debounce + execute pipeline)
+│              DisposeAsync() (idempotent guard + cancel + DisposeAsyncCore)
+│  Abstract: PublishExecutionRequest(...), DisposeAsyncCore()
+│
+├── implements → 🟦 TaskBasedRebalanceExecutionController (default)
+│                  Adds: lock-free task chain (_lastTask)
+│                  Overrides: PublishExecutionRequest → chains new task
+│                             DisposeAsyncCore → awaits task chain
+│
+└── implements → 🟦 ChannelBasedRebalanceExecutionController (optional)
+                   Adds: BoundedChannel<ExecutionRequest>, background loop task
+                   Overrides: PublishExecutionRequest → writes to channel
+                              DisposeAsyncCore → completes channel + awaits loop
 
 ──────────────────────────── Multi-Layer Support ────────────────────────────
 
@@ -76,9 +98,12 @@ The system is easier to reason about when components are grouped by:
 
 🟦 LayeredWindowCache<TRange, TData, TDomain>              [IWindowCache wrapper]
 │  LayerCount: int
-│  GetDataAsync()      → delegates to outermost WindowCache
-│  WaitForIdleAsync()  → awaits all layers sequentially, outermost to innermost
-│  DisposeAsync()      → disposes all layers outermost-first
+│  Layers: IReadOnlyList<IWindowCache<TRange, TData, TDomain>>
+│  GetDataAsync()              → delegates to outermost WindowCache
+│  WaitForIdleAsync()          → awaits all layers sequentially, outermost to innermost
+│  UpdateRuntimeOptions()      → delegates to outermost WindowCache
+│  CurrentRuntimeOptions       → delegates to outermost WindowCache
+│  DisposeAsync()              → disposes all layers outermost-first
 
 🟦 WindowCacheDataSourceAdapter<TRange, TData, TDomain>    [IDataSource adapter]
 │  Wraps IWindowCache as IDataSource
@@ -120,7 +145,8 @@ The system is easier to reason about when components are grouped by:
 │  • RebalanceExecutor                                                       │
 │                                                                            │
 │ GetDataAsync()           → delegates to UserRequestHandler                 │
-│ UpdateRuntimeOptions()   → updates RuntimeCacheOptionsHolder atomically    │
+│ UpdateRuntimeOptions()   → updates OptionsHolder atomically                │
+│ CurrentRuntimeOptions    → returns OptionsHolder.Current.ToSnapshot()      │
 └────────────────────────────────────────────────────────────────────────────┘
 
 

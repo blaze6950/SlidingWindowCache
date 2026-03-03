@@ -193,6 +193,78 @@ public class RuntimeCacheOptionsTests
 
     #endregion
 
+    #region ToSnapshot Tests
+
+    [Fact]
+    public void ToSnapshot_ReturnsSnapshotWithMatchingValues()
+    {
+        // ARRANGE
+        var options = new RuntimeCacheOptions(
+            leftCacheSize: 1.5,
+            rightCacheSize: 2.0,
+            leftThreshold: 0.3,
+            rightThreshold: 0.4,
+            debounceDelay: TimeSpan.FromMilliseconds(200)
+        );
+
+        // ACT
+        var snapshot = options.ToSnapshot();
+
+        // ASSERT
+        Assert.Equal(1.5, snapshot.LeftCacheSize);
+        Assert.Equal(2.0, snapshot.RightCacheSize);
+        Assert.Equal(0.3, snapshot.LeftThreshold);
+        Assert.Equal(0.4, snapshot.RightThreshold);
+        Assert.Equal(TimeSpan.FromMilliseconds(200), snapshot.DebounceDelay);
+    }
+
+    [Fact]
+    public void ToSnapshot_WithNullThresholds_ReturnsSnapshotWithNullThresholds()
+    {
+        // ARRANGE
+        var options = new RuntimeCacheOptions(1.0, 1.0, null, null, TimeSpan.Zero);
+
+        // ACT
+        var snapshot = options.ToSnapshot();
+
+        // ASSERT
+        Assert.Null(snapshot.LeftThreshold);
+        Assert.Null(snapshot.RightThreshold);
+    }
+
+    [Fact]
+    public void ToSnapshot_CalledTwice_ReturnsTwoIndependentInstances()
+    {
+        // ARRANGE
+        var options = new RuntimeCacheOptions(1.0, 1.0, null, null, TimeSpan.Zero);
+
+        // ACT
+        var snapshot1 = options.ToSnapshot();
+        var snapshot2 = options.ToSnapshot();
+
+        // ASSERT — each call returns a new object
+        Assert.NotSame(snapshot1, snapshot2);
+    }
+
+    [Fact]
+    public void ToSnapshot_WithZeroValues_ReturnsSnapshotWithZeroValues()
+    {
+        // ARRANGE
+        var options = new RuntimeCacheOptions(0.0, 0.0, 0.0, 0.0, TimeSpan.Zero);
+
+        // ACT
+        var snapshot = options.ToSnapshot();
+
+        // ASSERT
+        Assert.Equal(0.0, snapshot.LeftCacheSize);
+        Assert.Equal(0.0, snapshot.RightCacheSize);
+        Assert.Equal(0.0, snapshot.LeftThreshold);
+        Assert.Equal(0.0, snapshot.RightThreshold);
+        Assert.Equal(TimeSpan.Zero, snapshot.DebounceDelay);
+    }
+
+    #endregion
+
     #region Constructor - Invalid Threshold Sum Tests
 
     [Theory]

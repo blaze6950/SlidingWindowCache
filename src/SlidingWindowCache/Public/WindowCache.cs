@@ -277,16 +277,31 @@ public sealed class WindowCache<TRange, TData, TDomain>
                 "Cannot update runtime options on a disposed cache.");
         }
 
-        // todo I do not like the fact that there is no way to access current values - If there is a need I have to store them separately...
-        var builder = new RuntimeOptionsUpdateBuilder();
-        configure(builder);
-
         // ApplyTo reads the current snapshot, merges deltas, and validates —
         // throws if validation fails (holder not updated in that case).
+        var builder = new RuntimeOptionsUpdateBuilder();
+        configure(builder);
         var newOptions = builder.ApplyTo(_runtimeOptionsHolder.Current);
 
         // Publish atomically; background threads see the new snapshot on next read.
         _runtimeOptionsHolder.Update(newOptions);
+    }
+
+    /// <inheritdoc cref="IWindowCache{TRange,TData,TDomain}.CurrentRuntimeOptions"/>
+    public RuntimeOptionsSnapshot CurrentRuntimeOptions
+    {
+        get
+        {
+            // Check disposal state using Volatile.Read (lock-free)
+            if (Volatile.Read(ref _disposeState) != 0)
+            {
+                throw new ObjectDisposedException(
+                    nameof(WindowCache<TRange, TData, TDomain>),
+                    "Cannot access runtime options on a disposed cache.");
+            }
+
+            return _runtimeOptionsHolder.Current.ToSnapshot();
+        }
     }
 
     /// <summary>

@@ -1,6 +1,7 @@
 using Intervals.NET.Domain.Default.Numeric;
 using Moq;
 using SlidingWindowCache.Public;
+using SlidingWindowCache.Public.Configuration;
 using SlidingWindowCache.Public.Dto;
 
 namespace SlidingWindowCache.Unit.Tests.Public;
@@ -15,8 +16,7 @@ public sealed class LayeredWindowCacheTests
 {
     #region Test Infrastructure
 
-    private static Mock<IWindowCache<int, int, IntegerFixedStepDomain>> CreateLayerMock()
-        => new Mock<IWindowCache<int, int, IntegerFixedStepDomain>>(MockBehavior.Strict);
+    private static Mock<IWindowCache<int, int, IntegerFixedStepDomain>> CreateLayerMock() => new(MockBehavior.Strict);
 
     private static LayeredWindowCache<int, int, IntegerFixedStepDomain> CreateLayeredCache(
         params IWindowCache<int, int, IntegerFixedStepDomain>[] layers)
@@ -466,6 +466,163 @@ public sealed class LayeredWindowCacheTests
 
         // ASSERT — outermost first, innermost last
         Assert.Equal(new[] { "L3", "L2", "L1" }, disposalOrder);
+    }
+
+    #endregion
+
+    #region Layers Property Tests
+
+    [Fact]
+    public void Layers_SingleLayer_ReturnsSingleElementList()
+    {
+        // ARRANGE
+        var layer = CreateLayerMock();
+        var cache = CreateLayeredCache(layer.Object);
+
+        // ACT
+        var layers = cache.Layers;
+
+        // ASSERT
+        Assert.NotNull(layers);
+        Assert.Single(layers);
+        Assert.Same(layer.Object, layers[0]);
+    }
+
+    [Fact]
+    public void Layers_TwoLayers_ReturnsBothLayersInOrder()
+    {
+        // ARRANGE
+        var layer0 = CreateLayerMock(); // deepest (index 0)
+        var layer1 = CreateLayerMock(); // outermost (index 1)
+        var cache = CreateLayeredCache(layer0.Object, layer1.Object);
+
+        // ACT
+        var layers = cache.Layers;
+
+        // ASSERT
+        Assert.Equal(2, layers.Count);
+        Assert.Same(layer0.Object, layers[0]);
+        Assert.Same(layer1.Object, layers[1]);
+    }
+
+    [Fact]
+    public void Layers_ThreeLayers_ReturnsAllThreeInOrder()
+    {
+        // ARRANGE
+        var layer0 = CreateLayerMock(); // deepest
+        var layer1 = CreateLayerMock(); // middle
+        var layer2 = CreateLayerMock(); // outermost
+        var cache = CreateLayeredCache(layer0.Object, layer1.Object, layer2.Object);
+
+        // ACT
+        var layers = cache.Layers;
+
+        // ASSERT
+        Assert.Equal(3, layers.Count);
+        Assert.Same(layer0.Object, layers[0]);
+        Assert.Same(layer1.Object, layers[1]);
+        Assert.Same(layer2.Object, layers[2]);
+    }
+
+    [Fact]
+    public void Layers_CountMatchesLayerCount()
+    {
+        // ARRANGE
+        var layer0 = CreateLayerMock();
+        var layer1 = CreateLayerMock();
+        var cache = CreateLayeredCache(layer0.Object, layer1.Object);
+
+        // ASSERT
+        Assert.Equal(cache.LayerCount, cache.Layers.Count);
+    }
+
+    [Fact]
+    public async Task Layers_OutermostLayerIsUserFacing()
+    {
+        // ARRANGE — the outermost layer (last index) should be the one that GetDataAsync delegates to
+        var innerLayer = CreateLayerMock();
+        var outerLayer = CreateLayerMock();
+        var range = MakeRange(1, 10);
+        var expectedResult = MakeResult(1, 10);
+
+        outerLayer.Setup(c => c.GetDataAsync(range, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(expectedResult);
+
+        var cache = CreateLayeredCache(innerLayer.Object, outerLayer.Object);
+
+        // ACT
+        var result = await cache.GetDataAsync(range, CancellationToken.None);
+
+        // ASSERT — Layers[^1] is the outermost (user-facing) layer that received the call
+        Assert.Same(outerLayer.Object, cache.Layers[^1]);
+        outerLayer.Verify(c => c.GetDataAsync(range, It.IsAny<CancellationToken>()), Times.Once);
+        innerLayer.VerifyNoOtherCalls();
+    }
+
+    #endregion
+
+    #region CurrentRuntimeOptions Delegation Tests
+
+    [Fact]
+    public void CurrentRuntimeOptions_DelegatesToOutermostLayer()
+    {
+        // ARRANGE
+        var innerLayer = CreateLayerMock();
+        var outerLayer = CreateLayerMock();
+        var expectedSnapshot = new RuntimeOptionsSnapshot(1.5, 2.0, 0.3, 0.4,
+            TimeSpan.FromMilliseconds(100));
+
+        outerLayer.Setup(c => c.CurrentRuntimeOptions).Returns(expectedSnapshot);
+
+        var cache = CreateLayeredCache(innerLayer.Object, outerLayer.Object);
+
+        // ACT
+        var result = cache.CurrentRuntimeOptions;
+
+        // ASSERT
+        Assert.Same(expectedSnapshot, result);
+        outerLayer.Verify(c => c.CurrentRuntimeOptions, Times.Once);
+        innerLayer.VerifyNoOtherCalls();
+    }
+
+    [Fact]
+    public void CurrentRuntimeOptions_SingleLayer_DelegatesToThatLayer()
+    {
+        // ARRANGE
+        var onlyLayer = CreateLayerMock();
+        var expectedSnapshot = new RuntimeOptionsSnapshot(1.0, 1.0, null, null, TimeSpan.Zero);
+
+        onlyLayer.Setup(c => c.CurrentRuntimeOptions).Returns(expectedSnapshot);
+
+        var cache = CreateLayeredCache(onlyLayer.Object);
+
+        // ACT
+        var result = cache.CurrentRuntimeOptions;
+
+        // ASSERT
+        Assert.Same(expectedSnapshot, result);
+        onlyLayer.Verify(c => c.CurrentRuntimeOptions, Times.Once);
+    }
+
+    [Fact]
+    public void CurrentRuntimeOptions_DoesNotReadInnerLayers()
+    {
+        // ARRANGE — only the outermost layer should be queried
+        var innerLayer = CreateLayerMock();
+        var middleLayer = CreateLayerMock();
+        var outerLayer = CreateLayerMock();
+        var expectedSnapshot = new RuntimeOptionsSnapshot(2.0, 3.0, null, null, TimeSpan.Zero);
+
+        outerLayer.Setup(c => c.CurrentRuntimeOptions).Returns(expectedSnapshot);
+
+        var cache = CreateLayeredCache(innerLayer.Object, middleLayer.Object, outerLayer.Object);
+
+        // ACT
+        _ = cache.CurrentRuntimeOptions;
+
+        // ASSERT — inner and middle layers must not be touched
+        innerLayer.VerifyNoOtherCalls();
+        middleLayer.VerifyNoOtherCalls();
     }
 
     #endregion

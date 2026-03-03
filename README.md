@@ -295,8 +295,24 @@ cache.UpdateRuntimeOptions(update =>
 - All validation rules from construction still apply (`ArgumentOutOfRangeException` for negative sizes, `ArgumentException` for threshold sum > 1.0, etc.). A failed update leaves the current options unchanged — no partial application.
 - Calling `UpdateRuntimeOptions` on a disposed cache throws `ObjectDisposedException`.
 
-**`LayeredWindowCache`** delegates `UpdateRuntimeOptions` to the outermost (user-facing) layer.
-TODO mentioned that this perfectly matches with diagnostics, so you are able to build an intelligent options configuration that is adopted to use case and circumstances
+**`LayeredWindowCache`** delegates `UpdateRuntimeOptions` to the outermost (user-facing) layer. To update a specific inner layer, use the `Layers` property (see Multi-Layer Cache below).
+
+## Reading Current Runtime Options
+
+Use `CurrentRuntimeOptions` to inspect the live option values on any cache instance. It returns a `RuntimeOptionsSnapshot` — a read-only point-in-time copy of the five runtime-updatable values.
+
+```csharp
+var snapshot = cache.CurrentRuntimeOptions;
+Console.WriteLine($"Left: {snapshot.LeftCacheSize}, Right: {snapshot.RightCacheSize}");
+
+// Useful for relative updates — double the current left size:
+var current = cache.CurrentRuntimeOptions;
+cache.UpdateRuntimeOptions(u => u.WithLeftCacheSize(current.LeftCacheSize * 2));
+```
+
+The snapshot is immutable. Subsequent calls to `UpdateRuntimeOptions` do not affect previously obtained snapshots — obtain a new snapshot to see updated values.
+
+- Calling `CurrentRuntimeOptions` on a disposed cache throws `ObjectDisposedException`.
 ## Diagnostics
 
 ⚠️ **CRITICAL: You MUST handle `RebalanceExecutionFailed` in production.** Rebalance operations run in background tasks. Without handling this event, failures are silently swallowed and the cache stops rebalancing with no indication.
@@ -393,8 +409,6 @@ if (result.Range.HasValue)
 
 > **Cancellation:** If the cancellation token fires during the idle wait (after `GetDataAsync` has already returned data), the method catches `OperationCanceledException` and returns the already-obtained result gracefully — degrading to eventual consistency for that call. The background rebalance is not affected.
 
-> **Note:** A TODO exists in the implementation about bypassing/reducing debounce delay in hybrid mode. Currently the full debounce delay applies on wait paths, same as strong consistency.
-
 ### Strong Consistency — `GetDataAndWaitForIdleAsync`
 
 ```csharp
@@ -461,6 +475,21 @@ var result = await cache.GetDataAsync(range, ct);
 ```
 
 `LayeredWindowCache` implements `IWindowCache` and is `IAsyncDisposable` — it owns and disposes all layers when you dispose it.
+
+**Accessing and updating individual layers:**
+
+Use the `Layers` property to access any specific layer by index (0 = innermost, last = outermost). Each layer exposes the full `IWindowCache` interface:
+
+```csharp
+// Update options on the innermost (deep background) layer
+layeredCache.Layers[0].UpdateRuntimeOptions(u => u.WithLeftCacheSize(8.0));
+
+// Inspect the outermost (user-facing) layer's current options
+var outerOptions = layeredCache.Layers[^1].CurrentRuntimeOptions;
+
+// cache.UpdateRuntimeOptions() is shorthand for Layers[^1].UpdateRuntimeOptions()
+layeredCache.UpdateRuntimeOptions(u => u.WithRightCacheSize(1.0));
+```
 
 **Recommended layer configuration pattern:**
 - **Inner layers** (closest to the data source): `CopyOnRead`, large buffer sizes (5–10×), handles the heavy prefetching

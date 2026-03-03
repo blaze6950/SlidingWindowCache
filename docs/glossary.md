@@ -166,7 +166,7 @@ LayeredWindowCacheBuilder
 - Fluent builder that wires `WindowCache` layers into a `LayeredWindowCache`. Layers are added bottom-up (deepest/innermost first, user-facing last). Each `AddLayer` call adds one `WindowCache` on top of the current stack. `Build()` returns a `LayeredWindowCache` that owns all layers. See `src/SlidingWindowCache/Public/LayeredWindowCacheBuilder.cs`.
 
 LayeredWindowCache
-- A thin `IWindowCache` wrapper that owns a stack of `WindowCache` layers. Delegates `GetDataAsync` to the outermost layer. `WaitForIdleAsync` awaits all layers sequentially, outermost to innermost, ensuring full-stack convergence (required for correct behavior of `GetDataAndWaitForIdleAsync`). Disposes all layers outermost-first on `DisposeAsync`. Exposes `LayerCount`. See `src/SlidingWindowCache/Public/LayeredWindowCache.cs`.
+- A thin `IWindowCache` wrapper that owns a stack of `WindowCache` layers. Delegates `GetDataAsync` to the outermost layer. `WaitForIdleAsync` awaits all layers sequentially, outermost to innermost, ensuring full-stack convergence (required for correct behavior of `GetDataAndWaitForIdleAsync`). Disposes all layers outermost-first on `DisposeAsync`. Exposes `LayerCount` and `Layers`. See `src/SlidingWindowCache/Public/LayeredWindowCache.cs`.
 
 ## Storage And Materialization
 
@@ -206,10 +206,24 @@ RuntimeOptionsUpdateBuilder
 - `ClearLeftThreshold` / `ClearRightThreshold` explicitly set the threshold to `null`, distinguishing "don't change" from "set to null".
 - Constructed internally; constructor is `internal`.
 
+RuntimeOptionsValidator
+- Internal static helper class that contains the shared validation logic for cache sizes and thresholds.
+- Used by both `WindowCacheOptions` and `RuntimeCacheOptions` to avoid duplicated validation rules.
+- Validates: cache sizes ≥ 0, individual thresholds in [0, 1], threshold sum ≤ 1.0 when both thresholds are provided.
+- See `src/SlidingWindowCache/Core/State/RuntimeOptionsValidator.cs`.
+
 RuntimeCacheOptions
 - Internal immutable snapshot of the runtime-updatable subset of cache configuration: `LeftCacheSize`, `RightCacheSize`, `LeftThreshold`, `RightThreshold`, `DebounceDelay`.
 - Created from `WindowCacheOptions` at construction time and republished on each `UpdateRuntimeOptions` call.
 - All validation rules match `WindowCacheOptions` (negative sizes rejected, threshold sum ≤ 1.0 when both specified).
+- Exposes `ToSnapshot()` which projects the internal values to a public `RuntimeOptionsSnapshot`.
+
+RuntimeOptionsSnapshot
+- Public read-only DTO that captures the current values of the five runtime-updatable options.
+- Obtained via `IWindowCache.CurrentRuntimeOptions`.
+- Immutable — a snapshot of values at the moment the property was read. Subsequent `UpdateRuntimeOptions` calls do not affect previously obtained snapshots.
+- Constructor is `internal`; created only via `RuntimeCacheOptions.ToSnapshot()`.
+- See `src/SlidingWindowCache/Public/Configuration/RuntimeOptionsSnapshot.cs`.
 
 RuntimeCacheOptionsHolder
 - Internal volatile wrapper that holds the current `RuntimeCacheOptions` snapshot.

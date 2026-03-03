@@ -1,4 +1,6 @@
-﻿namespace SlidingWindowCache.Public.Configuration;
+﻿using SlidingWindowCache.Core.State;
+
+namespace SlidingWindowCache.Public.Configuration;
 
 /// <summary>
 /// Options for configuring the behavior of the sliding window cache.
@@ -54,52 +56,8 @@ public sealed class WindowCacheOptions : IEquatable<WindowCacheOptions>
         int? rebalanceQueueCapacity = null
     )
     {
-        if (leftCacheSize < 0)
-        {
-            throw new ArgumentOutOfRangeException(nameof(leftCacheSize),
-                "LeftCacheSize must be greater than or equal to 0.");
-        }
-
-        if (rightCacheSize < 0)
-        {
-            throw new ArgumentOutOfRangeException(nameof(rightCacheSize),
-                "RightCacheSize must be greater than or equal to 0.");
-        }
-
-        if (leftThreshold is < 0)
-        {
-            throw new ArgumentOutOfRangeException(nameof(leftThreshold),
-                "LeftThreshold must be greater than or equal to 0.");
-        }
-
-        if (rightThreshold is < 0)
-        {
-            throw new ArgumentOutOfRangeException(nameof(rightThreshold),
-                "RightThreshold must be greater than or equal to 0.");
-        }
-
-        if (leftThreshold is > 1.0)
-        {
-            throw new ArgumentOutOfRangeException(nameof(leftThreshold),
-                "LeftThreshold must not exceed 1.0.");
-        }
-
-        if (rightThreshold is > 1.0)
-        {
-            throw new ArgumentOutOfRangeException(nameof(rightThreshold),
-                "RightThreshold must not exceed 1.0.");
-        }
-
-        // Validate that thresholds don't overlap (sum must not exceed 1.0)
-        if (leftThreshold.HasValue && rightThreshold.HasValue &&
-            (leftThreshold.Value + rightThreshold.Value) > 1.0)
-        {
-            throw new ArgumentException(
-                $"The sum of LeftThreshold ({leftThreshold.Value:F6}) and RightThreshold ({rightThreshold.Value:F6}) " +
-                $"must not exceed 1.0 (actual sum: {leftThreshold.Value + rightThreshold.Value:F6}). " +
-                "Thresholds represent percentages of the total cache window that are shrunk from each side. " +
-                "When their sum exceeds 1.0, the shrinkage zones would overlap, creating an invalid configuration.");
-        }
+        RuntimeOptionsValidator.ValidateCacheSizesAndThresholds(
+            leftCacheSize, rightCacheSize, leftThreshold, rightThreshold);
 
         if (rebalanceQueueCapacity is <= 0)
         {

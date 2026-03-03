@@ -1,3 +1,5 @@
+using SlidingWindowCache.Public.Configuration;
+
 namespace SlidingWindowCache.Core.State;
 
 /// <summary>
@@ -53,52 +55,8 @@ internal sealed class RuntimeCacheOptions
         double? rightThreshold,
         TimeSpan debounceDelay)
     {
-        // TODO I do not like that the validation of these values is duplicated in WidnowCacheOptions also.
-        if (leftCacheSize < 0)
-        {
-            throw new ArgumentOutOfRangeException(nameof(leftCacheSize),
-                "LeftCacheSize must be greater than or equal to 0.");
-        }
-
-        if (rightCacheSize < 0)
-        {
-            throw new ArgumentOutOfRangeException(nameof(rightCacheSize),
-                "RightCacheSize must be greater than or equal to 0.");
-        }
-
-        if (leftThreshold is < 0)
-        {
-            throw new ArgumentOutOfRangeException(nameof(leftThreshold),
-                "LeftThreshold must be greater than or equal to 0.");
-        }
-
-        if (rightThreshold is < 0)
-        {
-            throw new ArgumentOutOfRangeException(nameof(rightThreshold),
-                "RightThreshold must be greater than or equal to 0.");
-        }
-
-        if (leftThreshold is > 1.0)
-        {
-            throw new ArgumentOutOfRangeException(nameof(leftThreshold),
-                "LeftThreshold must not exceed 1.0.");
-        }
-
-        if (rightThreshold is > 1.0)
-        {
-            throw new ArgumentOutOfRangeException(nameof(rightThreshold),
-                "RightThreshold must not exceed 1.0.");
-        }
-
-        if (leftThreshold.HasValue && rightThreshold.HasValue &&
-            (leftThreshold.Value + rightThreshold.Value) > 1.0)
-        {
-            throw new ArgumentException(
-                $"The sum of LeftThreshold ({leftThreshold.Value:F6}) and RightThreshold ({rightThreshold.Value:F6}) " +
-                $"must not exceed 1.0 (actual sum: {leftThreshold.Value + rightThreshold.Value:F6}). " +
-                "Thresholds represent percentages of the total cache window that are shrunk from each side. " +
-                "When their sum exceeds 1.0, the shrinkage zones would overlap, creating an invalid configuration.");
-        }
+        RuntimeOptionsValidator.ValidateCacheSizesAndThresholds(
+            leftCacheSize, rightCacheSize, leftThreshold, rightThreshold);
 
         LeftCacheSize = leftCacheSize;
         RightCacheSize = rightCacheSize;
@@ -131,4 +89,10 @@ internal sealed class RuntimeCacheOptions
     /// The debounce delay applied before executing a rebalance.
     /// </summary>
     public TimeSpan DebounceDelay { get; }
+
+    /// <summary>
+    /// Projects this internal snapshot to a public <see cref="RuntimeOptionsSnapshot"/> DTO.
+    /// </summary>
+    internal RuntimeOptionsSnapshot ToSnapshot() =>
+        new(LeftCacheSize, RightCacheSize, LeftThreshold, RightThreshold, DebounceDelay);
 }
