@@ -137,9 +137,9 @@ Optional observability interface with 18 event recording methods covering:
 
 ## Extensions
 
-### WindowCacheExtensions
+### WindowCacheConsistencyExtensions
 
-**File**: `src/SlidingWindowCache/Public/WindowCacheExtensions.cs`
+**File**: `src/SlidingWindowCache/Public/WindowCacheConsistencyExtensions.cs`
 
 **Type**: `static class` (extension methods on `IWindowCache<TRange, TData, TDomain>`)
 

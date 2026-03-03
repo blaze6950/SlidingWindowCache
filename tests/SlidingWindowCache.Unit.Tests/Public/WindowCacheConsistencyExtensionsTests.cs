@@ -6,14 +6,14 @@ using SlidingWindowCache.Public.Dto;
 namespace SlidingWindowCache.Unit.Tests.Public;
 
 /// <summary>
-/// Unit tests for <see cref="WindowCacheExtensions.GetDataAndWaitForIdleAsync{TRange,TData,TDomain}"/>
-/// and <see cref="WindowCacheExtensions.GetDataAndWaitOnMissAsync{TRange,TData,TDomain}"/>.
+/// Unit tests for <see cref="WindowCacheConsistencyExtensions.GetDataAndWaitForIdleAsync{TRange,TData,TDomain}"/>
+/// and <see cref="WindowCacheConsistencyExtensions.GetDataAndWaitOnMissAsync{TRange,TData,TDomain}"/>.
 /// Validates the composition contracts, conditional idle-wait behaviour, result passthrough,
 /// cancellation propagation, and exception semantics.
 /// Uses mocked <see cref="IWindowCache{TRange, TData, TDomain}"/> to isolate the extension methods
 /// from any real cache implementation.
 /// </summary>
-public sealed class WindowCacheExtensionsTests
+public sealed class WindowCacheConsistencyExtensionsTests
 {
     #region Test Infrastructure
 

@@ -68,7 +68,7 @@ namespace SlidingWindowCache.Public;
 /// per cache instance with coherent, non-concurrent access patterns.
 /// </para>
 /// </remarks>
-public static class WindowCacheExtensions
+public static class WindowCacheConsistencyExtensions
 {
     /// <summary>
     /// Retrieves data for the specified range and — if the request resulted in a cache miss or
@@ -156,7 +156,7 @@ public static class WindowCacheExtensions
     /// <para><strong>Serialized Access Requirement:</strong></para>
     /// <para>
     /// This method provides its "cache will be warm for the next call" guarantee only under
-    /// serialized (one-at-a-time) access. See <see cref="WindowCacheExtensions"/> class remarks
+    /// serialized (one-at-a-time) access. See <see cref="WindowCacheConsistencyExtensions"/> class remarks
     /// for a detailed explanation of parallel access behaviour.
     /// </para>
     /// <para><strong>When to Use:</strong></para>
@@ -357,7 +357,7 @@ public static class WindowCacheExtensions
     /// <para><strong>Serialized Access Requirement:</strong></para>
     /// <para>
     /// This method provides its consistency guarantee only under serialized (one-at-a-time) access.
-    /// See <see cref="WindowCacheExtensions"/> class remarks for a detailed explanation of
+    /// See <see cref="WindowCacheConsistencyExtensions"/> class remarks for a detailed explanation of
     /// parallel access behaviour.
     /// </para>
     /// <para><strong>Exception Propagation:</strong></para>

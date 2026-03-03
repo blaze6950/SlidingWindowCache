@@ -61,17 +61,17 @@ internal sealed class SimpleDataSource : IDataSource<int, int>
 /// </para>
 /// <para><strong>Opt-In Consistency Modes:</strong></para>
 /// <para>
-/// The validator also covers the <see cref="WindowCacheExtensions"/> extension methods
+/// The validator also covers the <see cref="WindowCacheConsistencyExtensions"/> extension methods
 /// for hybrid and strong consistency modes, including the cancellation graceful degradation
 /// path (<c>OperationCanceledException</c> from <c>WaitForIdleAsync</c> caught, result returned):
 /// </para>
 /// <list type="bullet">
 /// <item><description>
-/// <see cref="WindowCacheExtensions.GetDataAndWaitForIdleAsync{TRange,TData,TDomain}"/> —
+/// <see cref="WindowCacheConsistencyExtensions.GetDataAndWaitForIdleAsync{TRange,TData,TDomain}"/> —
 /// strong consistency (always waits for idle)
 /// </description></item>
 /// <item><description>
-/// <see cref="WindowCacheExtensions.GetDataAndWaitOnMissAsync{TRange,TData,TDomain}"/> —
+/// <see cref="WindowCacheConsistencyExtensions.GetDataAndWaitOnMissAsync{TRange,TData,TDomain}"/> —
 /// hybrid consistency (waits on miss/partial hit, returns immediately on full hit)
 /// </description></item>
 /// </list>
@@ -239,7 +239,7 @@ public static class WasmCompilationValidator
     }
 
     /// <summary>
-    /// Validates strong consistency mode: <see cref="WindowCacheExtensions.GetDataAndWaitForIdleAsync{TRange,TData,TDomain}"/>
+    /// Validates strong consistency mode: <see cref="WindowCacheConsistencyExtensions.GetDataAndWaitForIdleAsync{TRange,TData,TDomain}"/>
     /// compiles for net8.0-browser. Exercises both the normal path (idle wait completes) and the
     /// cancellation graceful degradation path (OperationCanceledException from WaitForIdleAsync is
     /// caught and the already-obtained result is returned).
@@ -248,8 +248,8 @@ public static class WasmCompilationValidator
     /// <para><strong>Types Validated:</strong></para>
     /// <list type="bullet">
     /// <item><description>
-    /// <see cref="WindowCacheExtensions.GetDataAndWaitForIdleAsync{TRange,TData,TDomain}"/> —
-    /// strong consistency extension method; composes GetDataAsync + unconditional WaitForIdleAsync
+/// <see cref="WindowCacheConsistencyExtensions.GetDataAndWaitForIdleAsync{TRange,TData,TDomain}"/> —
+/// strong consistency extension method; composes GetDataAsync + unconditional WaitForIdleAsync
     /// </description></item>
     /// <item><description>
     /// The <c>try { await WaitForIdleAsync } catch (OperationCanceledException) { }</c> pattern
@@ -299,7 +299,7 @@ public static class WasmCompilationValidator
     }
 
     /// <summary>
-    /// Validates hybrid consistency mode: <see cref="WindowCacheExtensions.GetDataAndWaitOnMissAsync{TRange,TData,TDomain}"/>
+    /// Validates hybrid consistency mode: <see cref="WindowCacheConsistencyExtensions.GetDataAndWaitOnMissAsync{TRange,TData,TDomain}"/>
     /// compiles for net8.0-browser. Exercises the FullHit path (no idle wait), the FullMiss path
     /// (conditional idle wait), and the cancellation graceful degradation path.
     /// </summary>
@@ -307,8 +307,8 @@ public static class WasmCompilationValidator
     /// <para><strong>Types Validated:</strong></para>
     /// <list type="bullet">
     /// <item><description>
-    /// <see cref="WindowCacheExtensions.GetDataAndWaitOnMissAsync{TRange,TData,TDomain}"/> —
-    /// hybrid consistency extension method; composes GetDataAsync + conditional WaitForIdleAsync
+/// <see cref="WindowCacheConsistencyExtensions.GetDataAndWaitOnMissAsync{TRange,TData,TDomain}"/> —
+/// hybrid consistency extension method; composes GetDataAsync + conditional WaitForIdleAsync
     /// gated on <see cref="CacheInteraction"/>
     /// </description></item>
     /// <item><description>

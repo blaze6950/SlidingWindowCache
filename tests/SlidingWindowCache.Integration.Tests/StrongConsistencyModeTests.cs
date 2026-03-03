@@ -8,7 +8,7 @@ namespace SlidingWindowCache.Integration.Tests;
 
 /// <summary>
 /// Integration tests for the strong consistency mode exposed by
-/// <see cref="WindowCacheExtensions.GetDataAndWaitForIdleAsync{TRange,TData,TDomain}"/>.
+/// <see cref="WindowCacheConsistencyExtensions.GetDataAndWaitForIdleAsync{TRange,TData,TDomain}"/>.
 /// 
 /// Goal: Verify that the extension method behaves correctly end-to-end with a real
 /// <see cref="WindowCache{TRange, TData, TDomain}"/> instance:

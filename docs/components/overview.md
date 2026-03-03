@@ -17,7 +17,7 @@ The system is easier to reason about when components are grouped by:
 ### Top-Level Component Roles
 
 - Public facade: `WindowCache<TRange, TData, TDomain>`
-- Public extensions: `WindowCacheExtensions` — opt-in hybrid and strong consistency modes (`GetDataAndWaitOnMissAsync`, `GetDataAndWaitForIdleAsync`)
+- Public extensions: `WindowCacheConsistencyExtensions` — opt-in hybrid and strong consistency modes (`GetDataAndWaitOnMissAsync`, `GetDataAndWaitForIdleAsync`)
 - Runtime configuration: `RuntimeOptionsUpdateBuilder` — fluent builder for `UpdateRuntimeOptions`; only fields explicitly set are changed
 - Runtime options snapshot: `RuntimeOptionsSnapshot` — public read-only DTO returned by `IWindowCache.CurrentRuntimeOptions`
 - Shared validation: `RuntimeOptionsValidator` — internal static helper; centralizes cache-size and threshold validation for both `WindowCacheOptions` and `RuntimeCacheOptions`
