@@ -24,7 +24,9 @@ namespace SlidingWindowCache.Core.State;
 /// Creation-time-only options (<c>rebalanceQueueCapacity</c>) are validated directly
 /// in <see cref="SlidingWindowCache.Public.Configuration.WindowCacheOptions"/>
 /// because they do not exist on <see cref="RuntimeCacheOptions"/>.
-/// <c>DebounceDelay</c> has no range constraint and is not validated.
+/// <c>DebounceDelay</c> is validated on <see cref="RuntimeCacheOptions"/> and
+/// <see cref="SlidingWindowCache.Public.Configuration.WindowCacheOptions"/> (must be ≥ 0);
+/// this helper centralizes only cache size and threshold validation.
 /// </para>
 /// </remarks>
 internal static class RuntimeOptionsValidator

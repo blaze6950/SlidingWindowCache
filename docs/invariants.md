@@ -4,7 +4,7 @@
 
 ## Understanding This Document
 
-This document lists **50 system invariants** that define the behavior, architecture, and design intent of the Sliding Window Cache.
+This document lists **54 system invariants** that define the behavior, architecture, and design intent of the Sliding Window Cache.
 
 ### Invariant Categories
 
@@ -972,11 +972,11 @@ Complete trace demonstrating both invariants in current architecture:
 
 #### Test Coverage Analysis:
 - **29 automated tests** in `WindowCacheInvariantTests`
-- **19 behavioral invariants** directly covered
-- **23 architectural invariants** enforced by code structure (not tested)
-- **8 conceptual invariants** documented as design guidance (not tested)
+- **20 behavioral invariants** directly covered
+- **25 architectural invariants** enforced by code structure (not tested)
+- **9 conceptual invariants** documented as design guidance (not tested)
 
-**This is by design.** The gap between 53 invariants and 29 tests is intentional:
+**This is by design.** The gap between 54 invariants and 29 tests is intentional:
 - Architecture enforces structural constraints automatically
 - Conceptual invariants guide development, not runtime behavior
 - Tests focus on externally observable behavior

@@ -191,8 +191,8 @@ public interface IWindowCache<TRange, TData, TDomain> : IAsyncDisposable
     /// Console.WriteLine($"LeftCacheSize={current.LeftCacheSize}");
     ///
     /// // Perform a relative update (e.g. double the left cache size)
-    /// var current = cache.CurrentRuntimeOptions;
-    /// cache.UpdateRuntimeOptions(u => u.WithLeftCacheSize(current.LeftCacheSize * 2));
+    /// var snapshot = cache.CurrentRuntimeOptions;
+    /// cache.UpdateRuntimeOptions(u => u.WithLeftCacheSize(snapshot.LeftCacheSize * 2));
     /// </code>
     /// <para><strong>Layered Caches:</strong></para>
     /// <para>
