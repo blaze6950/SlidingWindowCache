@@ -15,16 +15,30 @@ namespace SlidingWindowCache.Public;
 /// The type of data being fetched.
 /// </typeparam>
 /// <remarks>
-/// <para><strong>Basic Implementation:</strong></para>
+/// <para><strong>Quick Setup — FuncDataSource:</strong></para>
+/// <para>
+/// Use <see cref="FuncDataSource{TRange,TData}"/> to create a data source from a delegate
+/// without defining a class:
+/// </para>
+/// <code>
+/// IDataSource&lt;int, MyData&gt; source = new FuncDataSource&lt;int, MyData&gt;(
+///     async (range, ct) =>
+///     {
+///         var data = await Database.QueryAsync(range, ct);
+///         return new RangeChunk&lt;int, MyData&gt;(range, data);
+///     });
+/// </code>
+/// <para><strong>Full Class Implementation:</strong></para>
 /// <code>
 /// public class MyDataSource : IDataSource&lt;int, MyData&gt;
 /// {
-///     public async Task&lt;IEnumerable&lt;MyData&gt;&gt; FetchAsync(
+///     public async Task&lt;RangeChunk&lt;int, MyData&gt;&gt; FetchAsync(
 ///         Range&lt;int&gt; range, 
 ///         CancellationToken ct)
 ///     {
 ///         // Fetch data for single range
-///         return await Database.QueryAsync(range, ct);
+///         var data = await Database.QueryAsync(range, ct);
+///         return new RangeChunk&lt;int, MyData&gt;(range, data);
 ///     }
 ///     
 ///     // Batch method uses default parallel implementation automatically

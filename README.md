@@ -168,6 +168,44 @@ foreach (var item in result.Data.Span)
     Console.WriteLine(item);
 ```
 
+## Implementing a Data Source
+
+Implement `IDataSource<TRange, TData>` to connect the cache to your backing store. The `FetchAsync` single-range overload is the only method you must provide; the batch overload has a default implementation that parallelizes single-range calls.
+
+### FuncDataSource — inline without a class
+
+`FuncDataSource<TRange, TData>` wraps an async delegate so you can create a data source in one expression:
+
+```csharp
+using SlidingWindowCache.Public;
+using SlidingWindowCache.Public.Dto;
+
+// Unbounded source — always returns data for any range
+IDataSource<int, string> source = new FuncDataSource<int, string>(
+    async (range, ct) =>
+    {
+        var data = await myService.QueryAsync(range, ct);
+        return new RangeChunk<int, string>(range, data);
+    });
+```
+
+For **bounded** sources (database with min/max IDs, time-series with temporal limits), return a `RangeChunk` with `Range = null` when no data is available — never throw:
+
+```csharp
+IDataSource<int, Record> bounded = new FuncDataSource<int, Record>(
+    async (range, ct) =>
+    {
+        var available = range.Intersect(Range.Closed(minId, maxId));
+        if (available is null)
+            return new RangeChunk<int, Record>(null, []);
+
+        var records = await db.FetchAsync(available, ct);
+        return new RangeChunk<int, Record>(available, records);
+    });
+```
+
+For sources where a dedicated class is warranted (custom batch optimization, retry logic, dependency injection), implement `IDataSource<TRange, TData>` directly. See `docs/boundary-handling.md` for the full boundary contract.
+
 ## Boundary Handling
 
 `GetDataAsync` returns `RangeResult<TRange, TData>` where `Range` may be `null` when the data source has no data for the requested range, and `CacheInteraction` indicates whether the request was a `FullHit`, `PartialHit`, or `FullMiss`. Always check `Range` before accessing data:
