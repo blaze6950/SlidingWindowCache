@@ -163,7 +163,7 @@ WindowCacheDataSourceAdapter
 - Adapts an `IWindowCache` to the `IDataSource` interface, enabling it to act as the backing store for an outer `WindowCache`. This is the composition point for building layered caches. The adapter does not own the inner cache; ownership is managed by `LayeredWindowCache`. See `src/SlidingWindowCache/Public/WindowCacheDataSourceAdapter.cs`.
 
 LayeredWindowCacheBuilder
-- Fluent builder that wires `WindowCache` layers into a `LayeredWindowCache`. Layers are added bottom-up (deepest/innermost first, user-facing last). Each `AddLayer` call adds one `WindowCache` on top of the current stack. `Build()` returns a `LayeredWindowCache` that owns all layers. See `src/SlidingWindowCache/Public/LayeredWindowCacheBuilder.cs`.
+- Fluent builder that wires `WindowCache` layers into a `LayeredWindowCache`. Obtain an instance via `WindowCacheBuilder.Layered(dataSource, domain)`. Layers are added bottom-up (deepest/innermost first, user-facing last). Each `AddLayer` call accepts either a pre-built `WindowCacheOptions` or an `Action<WindowCacheOptionsBuilder>` for inline configuration. `Build()` returns `IWindowCache<>` (concrete type: `LayeredWindowCache<>`). See `src/SlidingWindowCache/Public/Cache/LayeredWindowCacheBuilder.cs`.
 
 LayeredWindowCache
 - A thin `IWindowCache` wrapper that owns a stack of `WindowCache` layers. Delegates `GetDataAsync` to the outermost layer. `WaitForIdleAsync` awaits all layers sequentially, outermost to innermost, ensuring full-stack convergence (required for correct behavior of `GetDataAndWaitForIdleAsync`). Disposes all layers outermost-first on `DisposeAsync`. Exposes `LayerCount` and `Layers`. See `src/SlidingWindowCache/Public/LayeredWindowCache.cs`.

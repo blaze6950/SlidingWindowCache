@@ -158,16 +158,23 @@ public sealed class WindowCacheOptions : IEquatable<WindowCacheOptions>
     /// <inheritdoc/>
     public bool Equals(WindowCacheOptions? other)
     {
-        if (other is null) return false;
-        if (ReferenceEquals(this, other)) return true;
+        if (other is null)
+        {
+            return false;
+        }
+
+        if (ReferenceEquals(this, other))
+        {
+            return true;
+        }
 
         return LeftCacheSize.Equals(other.LeftCacheSize)
-            && RightCacheSize.Equals(other.RightCacheSize)
-            && ReadMode == other.ReadMode
-            && Nullable.Equals(LeftThreshold, other.LeftThreshold)
-            && Nullable.Equals(RightThreshold, other.RightThreshold)
-            && DebounceDelay == other.DebounceDelay
-            && RebalanceQueueCapacity == other.RebalanceQueueCapacity;
+               && RightCacheSize.Equals(other.RightCacheSize)
+               && ReadMode == other.ReadMode
+               && Nullable.Equals(LeftThreshold, other.LeftThreshold)
+               && Nullable.Equals(RightThreshold, other.RightThreshold)
+               && DebounceDelay == other.DebounceDelay
+               && RebalanceQueueCapacity == other.RebalanceQueueCapacity;
     }
 
     /// <inheritdoc/>

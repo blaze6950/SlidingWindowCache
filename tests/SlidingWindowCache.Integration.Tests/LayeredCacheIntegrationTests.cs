@@ -59,8 +59,7 @@ public sealed class LayeredCacheIntegrationTests
     public async Task TwoLayerCache_GetData_ReturnsCorrectValues()
     {
         // ARRANGE
-        await using var cache = LayeredWindowCacheBuilder<int, int, IntegerFixedStepDomain>
-            .Create(CreateRealDataSource(), Domain)
+        await using var cache = WindowCacheBuilder.Layered(CreateRealDataSource(), Domain)
             .AddLayer(DeepLayerOptions())
             .AddLayer(UserLayerOptions())
             .Build();
@@ -81,8 +80,7 @@ public sealed class LayeredCacheIntegrationTests
     public async Task ThreeLayerCache_GetData_ReturnsCorrectValues()
     {
         // ARRANGE
-        await using var cache = LayeredWindowCacheBuilder<int, int, IntegerFixedStepDomain>
-            .Create(CreateRealDataSource(), Domain)
+        await using var cache = WindowCacheBuilder.Layered(CreateRealDataSource(), Domain)
             .AddLayer(DeepLayerOptions())
             .AddLayer(MidLayerOptions())
             .AddLayer(UserLayerOptions())
@@ -104,8 +102,7 @@ public sealed class LayeredCacheIntegrationTests
     public async Task TwoLayerCache_SubsequentRequests_ReturnCorrectValues()
     {
         // ARRANGE
-        await using var cache = LayeredWindowCacheBuilder<int, int, IntegerFixedStepDomain>
-            .Create(CreateRealDataSource(), Domain)
+        await using var cache = WindowCacheBuilder.Layered(CreateRealDataSource(), Domain)
             .AddLayer(DeepLayerOptions())
             .AddLayer(UserLayerOptions())
             .Build();
@@ -133,8 +130,7 @@ public sealed class LayeredCacheIntegrationTests
     public async Task TwoLayerCache_SingleElementRange_ReturnsCorrectValue()
     {
         // ARRANGE
-        await using var cache = LayeredWindowCacheBuilder<int, int, IntegerFixedStepDomain>
-            .Create(CreateRealDataSource(), Domain)
+        await using var cache = WindowCacheBuilder.Layered(CreateRealDataSource(), Domain)
             .AddLayer(DeepLayerOptions())
             .AddLayer(UserLayerOptions())
             .Build();
@@ -157,29 +153,27 @@ public sealed class LayeredCacheIntegrationTests
     public async Task TwoLayerCache_LayerCount_IsTwo()
     {
         // ARRANGE
-        await using var cache = LayeredWindowCacheBuilder<int, int, IntegerFixedStepDomain>
-            .Create(CreateRealDataSource(), Domain)
+        await using var layered = (LayeredWindowCache<int, int, IntegerFixedStepDomain>)WindowCacheBuilder.Layered(CreateRealDataSource(), Domain)
             .AddLayer(DeepLayerOptions())
             .AddLayer(UserLayerOptions())
             .Build();
 
         // ASSERT
-        Assert.Equal(2, cache.LayerCount);
+        Assert.Equal(2, layered.LayerCount);
     }
 
     [Fact]
     public async Task ThreeLayerCache_LayerCount_IsThree()
     {
         // ARRANGE
-        await using var cache = LayeredWindowCacheBuilder<int, int, IntegerFixedStepDomain>
-            .Create(CreateRealDataSource(), Domain)
+        await using var layered = (LayeredWindowCache<int, int, IntegerFixedStepDomain>)WindowCacheBuilder.Layered(CreateRealDataSource(), Domain)
             .AddLayer(DeepLayerOptions())
             .AddLayer(MidLayerOptions())
             .AddLayer(UserLayerOptions())
             .Build();
 
         // ASSERT
-        Assert.Equal(3, cache.LayerCount);
+        Assert.Equal(3, layered.LayerCount);
     }
 
     #endregion
@@ -190,8 +184,7 @@ public sealed class LayeredCacheIntegrationTests
     public async Task TwoLayerCache_WaitForIdleAsync_ConvergesWithoutException()
     {
         // ARRANGE
-        await using var cache = LayeredWindowCacheBuilder<int, int, IntegerFixedStepDomain>
-            .Create(CreateRealDataSource(), Domain)
+        await using var cache = WindowCacheBuilder.Layered(CreateRealDataSource(), Domain)
             .AddLayer(DeepLayerOptions())
             .AddLayer(UserLayerOptions())
             .Build();
@@ -210,8 +203,7 @@ public sealed class LayeredCacheIntegrationTests
     public async Task TwoLayerCache_AfterConvergence_DataStillCorrect()
     {
         // ARRANGE
-        await using var cache = LayeredWindowCacheBuilder<int, int, IntegerFixedStepDomain>
-            .Create(CreateRealDataSource(), Domain)
+        await using var cache = WindowCacheBuilder.Layered(CreateRealDataSource(), Domain)
             .AddLayer(DeepLayerOptions())
             .AddLayer(UserLayerOptions())
             .Build();
@@ -239,8 +231,7 @@ public sealed class LayeredCacheIntegrationTests
         var deepDiagnostics = new EventCounterCacheDiagnostics();
         var userDiagnostics = new EventCounterCacheDiagnostics();
 
-        await using var cache = LayeredWindowCacheBuilder<int, int, IntegerFixedStepDomain>
-            .Create(CreateRealDataSource(), Domain)
+        await using var cache = WindowCacheBuilder.Layered(CreateRealDataSource(), Domain)
             .AddLayer(DeepLayerOptions(), deepDiagnostics)
             .AddLayer(UserLayerOptions(), userDiagnostics)
             .Build();
@@ -266,8 +257,7 @@ public sealed class LayeredCacheIntegrationTests
     public async Task TwoLayerCache_GetDataAndWaitForIdleAsync_ReturnsCorrectData()
     {
         // ARRANGE — verify that the strong consistency extension method works on a LayeredWindowCache
-        await using var cache = LayeredWindowCacheBuilder<int, int, IntegerFixedStepDomain>
-            .Create(CreateRealDataSource(), Domain)
+        await using var cache = WindowCacheBuilder.Layered(CreateRealDataSource(), Domain)
             .AddLayer(DeepLayerOptions())
             .AddLayer(UserLayerOptions())
             .Build();
@@ -288,8 +278,7 @@ public sealed class LayeredCacheIntegrationTests
     public async Task TwoLayerCache_GetDataAndWaitForIdleAsync_SubsequentRequestIsFullHit()
     {
         // ARRANGE
-        await using var cache = LayeredWindowCacheBuilder<int, int, IntegerFixedStepDomain>
-            .Create(CreateRealDataSource(), Domain)
+        await using var cache = WindowCacheBuilder.Layered(CreateRealDataSource(), Domain)
             .AddLayer(DeepLayerOptions())
             .AddLayer(UserLayerOptions())
             .Build();
@@ -318,8 +307,7 @@ public sealed class LayeredCacheIntegrationTests
     public async Task TwoLayerCache_DisposeAsync_CompletesWithoutException()
     {
         // ARRANGE
-        var cache = LayeredWindowCacheBuilder<int, int, IntegerFixedStepDomain>
-            .Create(CreateRealDataSource(), Domain)
+        var cache = WindowCacheBuilder.Layered(CreateRealDataSource(), Domain)
             .AddLayer(DeepLayerOptions())
             .AddLayer(UserLayerOptions())
             .Build();
@@ -337,8 +325,7 @@ public sealed class LayeredCacheIntegrationTests
     public async Task TwoLayerCache_DisposeWithoutAnyRequests_CompletesWithoutException()
     {
         // ARRANGE — build but never use
-        var cache = LayeredWindowCacheBuilder<int, int, IntegerFixedStepDomain>
-            .Create(CreateRealDataSource(), Domain)
+        var cache = WindowCacheBuilder.Layered(CreateRealDataSource(), Domain)
             .AddLayer(DeepLayerOptions())
             .AddLayer(UserLayerOptions())
             .Build();
@@ -354,8 +341,7 @@ public sealed class LayeredCacheIntegrationTests
     public async Task ThreeLayerCache_DisposeAsync_CompletesWithoutException()
     {
         // ARRANGE
-        var cache = LayeredWindowCacheBuilder<int, int, IntegerFixedStepDomain>
-            .Create(CreateRealDataSource(), Domain)
+        var cache = WindowCacheBuilder.Layered(CreateRealDataSource(), Domain)
             .AddLayer(DeepLayerOptions())
             .AddLayer(MidLayerOptions())
             .AddLayer(UserLayerOptions())
@@ -413,8 +399,7 @@ public sealed class LayeredCacheIntegrationTests
         var deepDiagnostics = new EventCounterCacheDiagnostics();
         var userDiagnostics = new EventCounterCacheDiagnostics();
 
-        await using var cache = LayeredWindowCacheBuilder<int, int, IntegerFixedStepDomain>
-            .Create(CreateRealDataSource(), Domain)
+        await using var cache = WindowCacheBuilder.Layered(CreateRealDataSource(), Domain)
             .AddLayer(DeepLayerOptions(), deepDiagnostics)
             .AddLayer(UserLayerOptions(), userDiagnostics)
             .Build();
@@ -445,8 +430,7 @@ public sealed class LayeredCacheIntegrationTests
     public async Task TwoLayerCache_LargeRange_ReturnsCorrectData()
     {
         // ARRANGE
-        await using var cache = LayeredWindowCacheBuilder<int, int, IntegerFixedStepDomain>
-            .Create(CreateRealDataSource(), Domain)
+        await using var cache = WindowCacheBuilder.Layered(CreateRealDataSource(), Domain)
             .AddLayer(DeepLayerOptions())
             .AddLayer(UserLayerOptions())
             .Build();

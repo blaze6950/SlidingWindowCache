@@ -11,8 +11,9 @@ namespace SlidingWindowCache.Unit.Tests.Public.Cache;
 
 /// <summary>
 /// Unit tests for <see cref="LayeredWindowCacheBuilder{TRange,TData,TDomain}"/>.
-/// Validates the builder API: construction, layer addition, build validation,
-/// layer ordering, and the resulting <see cref="LayeredWindowCache{TRange,TData,TDomain}"/>.
+/// Validates the builder API: construction via <see cref="WindowCacheBuilder.Layered{TRange,TData,TDomain}"/>,
+/// layer addition (pre-built options and inline lambda), build validation, layer ordering,
+/// and the resulting <see cref="LayeredWindowCache{TRange,TData,TDomain}"/>.
 /// Uses <see cref="SimpleTestDataSource{TData}"/> as a lightweight real data source to avoid
 /// mocking the complex <see cref="IDataSource{TRange,TData}"/> interface for these tests.
 /// </summary>
@@ -31,15 +32,14 @@ public sealed class LayeredWindowCacheBuilderTests
 
     #endregion
 
-    #region Create() Tests
+    #region WindowCacheBuilder.Layered() — Null Guard Tests
 
     [Fact]
-    public void Create_WithNullDataSource_ThrowsArgumentNullException()
+    public void Layered_WithNullDataSource_ThrowsArgumentNullException()
     {
         // ACT
         var exception = Record.Exception(() =>
-            LayeredWindowCacheBuilder<int, int, IntegerFixedStepDomain>
-                .Create(null!, Domain));
+            WindowCacheBuilder.Layered<int, int, IntegerFixedStepDomain>(null!, Domain));
 
         // ASSERT
         Assert.NotNull(exception);
@@ -48,7 +48,7 @@ public sealed class LayeredWindowCacheBuilderTests
     }
 
     [Fact]
-    public void Create_WithNullDomain_ThrowsArgumentNullException()
+    public void Layered_WithNullDomain_ThrowsArgumentNullException()
     {
         // ARRANGE — TDomain must be a reference type to accept null;
         // use IRangeDomain<int> as the type parameter (interface = reference type)
@@ -56,8 +56,7 @@ public sealed class LayeredWindowCacheBuilderTests
 
         // ACT
         var exception = Record.Exception(() =>
-            LayeredWindowCacheBuilder<int, int, IRangeDomain<int>>
-                .Create(dataSource, null!));
+            WindowCacheBuilder.Layered<int, int, IRangeDomain<int>>(dataSource, null!));
 
         // ASSERT
         Assert.NotNull(exception);
@@ -66,11 +65,10 @@ public sealed class LayeredWindowCacheBuilderTests
     }
 
     [Fact]
-    public void Create_WithValidArguments_ReturnsBuilder()
+    public void Layered_WithValidArguments_ReturnsBuilder()
     {
         // ACT
-        var builder = LayeredWindowCacheBuilder<int, int, IntegerFixedStepDomain>
-            .Create(CreateDataSource(), Domain);
+        var builder = WindowCacheBuilder.Layered(CreateDataSource(), Domain);
 
         // ASSERT
         Assert.NotNull(builder);
@@ -78,17 +76,16 @@ public sealed class LayeredWindowCacheBuilderTests
 
     #endregion
 
-    #region AddLayer() Tests
+    #region AddLayer(WindowCacheOptions) Tests
 
     [Fact]
     public void AddLayer_WithNullOptions_ThrowsArgumentNullException()
     {
         // ARRANGE
-        var builder = LayeredWindowCacheBuilder<int, int, IntegerFixedStepDomain>
-            .Create(CreateDataSource(), Domain);
+        var builder = WindowCacheBuilder.Layered(CreateDataSource(), Domain);
 
         // ACT
-        var exception = Record.Exception(() => builder.AddLayer(null!));
+        var exception = Record.Exception(() => builder.AddLayer((WindowCacheOptions)null!));
 
         // ASSERT
         Assert.NotNull(exception);
@@ -100,8 +97,7 @@ public sealed class LayeredWindowCacheBuilderTests
     public void AddLayer_ReturnsBuilderForFluentChaining()
     {
         // ARRANGE
-        var builder = LayeredWindowCacheBuilder<int, int, IntegerFixedStepDomain>
-            .Create(CreateDataSource(), Domain);
+        var builder = WindowCacheBuilder.Layered(CreateDataSource(), Domain);
 
         // ACT
         var returned = builder.AddLayer(DefaultOptions());
@@ -114,8 +110,7 @@ public sealed class LayeredWindowCacheBuilderTests
     public void AddLayer_MultipleCallsReturnSameBuilder()
     {
         // ARRANGE
-        var builder = LayeredWindowCacheBuilder<int, int, IntegerFixedStepDomain>
-            .Create(CreateDataSource(), Domain);
+        var builder = WindowCacheBuilder.Layered(CreateDataSource(), Domain);
 
         // ACT
         var b1 = builder.AddLayer(DefaultOptions());
@@ -132,8 +127,7 @@ public sealed class LayeredWindowCacheBuilderTests
     public void AddLayer_AcceptsDiagnosticsParameter()
     {
         // ARRANGE
-        var builder = LayeredWindowCacheBuilder<int, int, IntegerFixedStepDomain>
-            .Create(CreateDataSource(), Domain);
+        var builder = WindowCacheBuilder.Layered(CreateDataSource(), Domain);
         var diagnostics = new EventCounterCacheDiagnostics();
 
         // ACT
@@ -148,8 +142,7 @@ public sealed class LayeredWindowCacheBuilderTests
     public void AddLayer_WithNullDiagnostics_DoesNotThrow()
     {
         // ARRANGE
-        var builder = LayeredWindowCacheBuilder<int, int, IntegerFixedStepDomain>
-            .Create(CreateDataSource(), Domain);
+        var builder = WindowCacheBuilder.Layered(CreateDataSource(), Domain);
 
         // ACT
         var exception = Record.Exception(() =>
@@ -161,14 +154,101 @@ public sealed class LayeredWindowCacheBuilderTests
 
     #endregion
 
+    #region AddLayer(Action<WindowCacheOptionsBuilder>) Tests
+
+    [Fact]
+    public void AddLayer_WithNullDelegate_ThrowsArgumentNullException()
+    {
+        // ARRANGE
+        var builder = WindowCacheBuilder.Layered(CreateDataSource(), Domain);
+
+        // ACT
+        var exception = Record.Exception(() =>
+            builder.AddLayer((Action<WindowCacheOptionsBuilder>)null!));
+
+        // ASSERT
+        Assert.NotNull(exception);
+        Assert.IsType<ArgumentNullException>(exception);
+        Assert.Contains("configure", ((ArgumentNullException)exception).ParamName);
+    }
+
+    [Fact]
+    public void AddLayer_WithInlineDelegate_ReturnsBuilderForFluentChaining()
+    {
+        // ARRANGE
+        var builder = WindowCacheBuilder.Layered(CreateDataSource(), Domain);
+
+        // ACT
+        var returned = builder.AddLayer(o => o.WithCacheSize(1.0));
+
+        // ASSERT
+        Assert.Same(builder, returned);
+    }
+
+    [Fact]
+    public void AddLayer_WithInlineDelegateAndDiagnostics_DoesNotThrow()
+    {
+        // ARRANGE
+        var builder = WindowCacheBuilder.Layered(CreateDataSource(), Domain);
+        var diagnostics = new EventCounterCacheDiagnostics();
+
+        // ACT
+        var exception = Record.Exception(() =>
+            builder.AddLayer(o => o.WithCacheSize(1.0), diagnostics));
+
+        // ASSERT
+        Assert.Null(exception);
+    }
+
+    [Fact]
+    public void AddLayer_WithInlineDelegateMissingCacheSize_ThrowsInvalidOperationException()
+    {
+        // ARRANGE — delegate does not call WithCacheSize; Build() on the inner builder throws
+        var builder = WindowCacheBuilder.Layered(CreateDataSource(), Domain)
+            .AddLayer(o => o.WithReadMode(UserCacheReadMode.Snapshot));
+
+        // ACT — Build() on the LayeredWindowCacheBuilder triggers the options Build(), which throws
+        var exception = Record.Exception(() => builder.Build());
+
+        // ASSERT
+        Assert.NotNull(exception);
+        Assert.IsType<InvalidOperationException>(exception);
+    }
+
+    [Fact]
+    public async Task AddLayer_InlineTwoLayers_CanFetchData()
+    {
+        // ARRANGE
+        await using var cache = WindowCacheBuilder.Layered(CreateDataSource(), Domain)
+            .AddLayer(o => o
+                .WithCacheSize(2.0)
+                .WithReadMode(UserCacheReadMode.CopyOnRead)
+                .WithDebounceDelay(TimeSpan.FromMilliseconds(50)))
+            .AddLayer(o => o
+                .WithCacheSize(0.5)
+                .WithDebounceDelay(TimeSpan.FromMilliseconds(50)))
+            .Build();
+
+        var range = Intervals.NET.Factories.Range.Closed<int>(1, 10);
+
+        // ACT
+        var result = await cache.GetDataAsync(range, CancellationToken.None);
+
+        // ASSERT
+        Assert.NotNull(result);
+        Assert.True(result.Range.HasValue);
+        Assert.Equal(10, result.Data.Length);
+    }
+
+    #endregion
+
     #region Build() Tests
 
     [Fact]
     public void Build_WithNoLayers_ThrowsInvalidOperationException()
     {
         // ARRANGE
-        var builder = LayeredWindowCacheBuilder<int, int, IntegerFixedStepDomain>
-            .Create(CreateDataSource(), Domain);
+        var builder = WindowCacheBuilder.Layered(CreateDataSource(), Domain);
 
         // ACT
         var exception = Record.Exception(() => builder.Build());
@@ -182,63 +262,60 @@ public sealed class LayeredWindowCacheBuilderTests
     public async Task Build_WithSingleLayer_ReturnsLayeredCacheWithOneLayer()
     {
         // ARRANGE
-        var builder = LayeredWindowCacheBuilder<int, int, IntegerFixedStepDomain>
-            .Create(CreateDataSource(), Domain);
+        var builder = WindowCacheBuilder.Layered(CreateDataSource(), Domain);
 
         // ACT
-        await using var cache = builder
+        await using var layered = (LayeredWindowCache<int, int, IntegerFixedStepDomain>)builder
             .AddLayer(DefaultOptions())
             .Build();
 
         // ASSERT
-        Assert.Equal(1, cache.LayerCount);
+        Assert.Equal(1, layered.LayerCount);
     }
 
     [Fact]
     public async Task Build_WithTwoLayers_ReturnsLayeredCacheWithTwoLayers()
     {
         // ARRANGE
-        var builder = LayeredWindowCacheBuilder<int, int, IntegerFixedStepDomain>
-            .Create(CreateDataSource(), Domain);
+        var builder = WindowCacheBuilder.Layered(CreateDataSource(), Domain);
 
         // ACT
-        await using var cache = builder
+        await using var layered = (LayeredWindowCache<int, int, IntegerFixedStepDomain>)builder
             .AddLayer(new WindowCacheOptions(2.0, 2.0, UserCacheReadMode.CopyOnRead))
             .AddLayer(new WindowCacheOptions(0.5, 0.5, UserCacheReadMode.Snapshot))
             .Build();
 
         // ASSERT
-        Assert.Equal(2, cache.LayerCount);
+        Assert.Equal(2, layered.LayerCount);
     }
 
     [Fact]
     public async Task Build_WithThreeLayers_ReturnsLayeredCacheWithThreeLayers()
     {
         // ARRANGE
-        var builder = LayeredWindowCacheBuilder<int, int, IntegerFixedStepDomain>
-            .Create(CreateDataSource(), Domain);
+        var builder = WindowCacheBuilder.Layered(CreateDataSource(), Domain);
 
         // ACT
-        await using var cache = builder
+        await using var layered = (LayeredWindowCache<int, int, IntegerFixedStepDomain>)builder
             .AddLayer(new WindowCacheOptions(5.0, 5.0, UserCacheReadMode.CopyOnRead))
             .AddLayer(new WindowCacheOptions(2.0, 2.0, UserCacheReadMode.CopyOnRead))
             .AddLayer(new WindowCacheOptions(0.5, 0.5, UserCacheReadMode.Snapshot))
             .Build();
 
         // ASSERT
-        Assert.Equal(3, cache.LayerCount);
+        Assert.Equal(3, layered.LayerCount);
     }
 
     [Fact]
-    public async Task Build_ReturnsLayeredWindowCacheType()
+    public async Task Build_ReturnsIWindowCacheImplementedByLayeredWindowCacheType()
     {
         // ARRANGE & ACT
-        await using var cache = LayeredWindowCacheBuilder<int, int, IntegerFixedStepDomain>
-            .Create(CreateDataSource(), Domain)
+        await using var cache = WindowCacheBuilder.Layered(CreateDataSource(), Domain)
             .AddLayer(DefaultOptions())
             .Build();
 
-        // ASSERT
+        // ASSERT — Build() returns IWindowCache<>; concrete type is LayeredWindowCache<>
+        Assert.IsAssignableFrom<IWindowCache<int, int, IntegerFixedStepDomain>>(cache);
         Assert.IsType<LayeredWindowCache<int, int, IntegerFixedStepDomain>>(cache);
     }
 
@@ -246,8 +323,7 @@ public sealed class LayeredWindowCacheBuilderTests
     public async Task Build_ReturnedCacheImplementsIWindowCache()
     {
         // ARRANGE & ACT
-        await using var cache = LayeredWindowCacheBuilder<int, int, IntegerFixedStepDomain>
-            .Create(CreateDataSource(), Domain)
+        await using var cache = WindowCacheBuilder.Layered(CreateDataSource(), Domain)
             .AddLayer(DefaultOptions())
             .Build();
 
@@ -259,8 +335,7 @@ public sealed class LayeredWindowCacheBuilderTests
     public async Task Build_CanBeCalledMultipleTimes_ReturnsDifferentInstances()
     {
         // ARRANGE
-        var builder = LayeredWindowCacheBuilder<int, int, IntegerFixedStepDomain>
-            .Create(CreateDataSource(), Domain)
+        var builder = WindowCacheBuilder.Layered(CreateDataSource(), Domain)
             .AddLayer(DefaultOptions());
 
         // ACT
@@ -285,8 +360,7 @@ public sealed class LayeredWindowCacheBuilderTests
             readMode: UserCacheReadMode.Snapshot,
             debounceDelay: TimeSpan.FromMilliseconds(50));
 
-        await using var cache = LayeredWindowCacheBuilder<int, int, IntegerFixedStepDomain>
-            .Create(CreateDataSource(), Domain)
+        await using var cache = WindowCacheBuilder.Layered(CreateDataSource(), Domain)
             .AddLayer(options)
             .Build();
 
@@ -317,8 +391,7 @@ public sealed class LayeredWindowCacheBuilderTests
             readMode: UserCacheReadMode.Snapshot,
             debounceDelay: TimeSpan.FromMilliseconds(50));
 
-        await using var cache = LayeredWindowCacheBuilder<int, int, IntegerFixedStepDomain>
-            .Create(CreateDataSource(), Domain)
+        await using var cache = WindowCacheBuilder.Layered(CreateDataSource(), Domain)
             .AddLayer(deepOptions)
             .AddLayer(userOptions)
             .Build();
@@ -341,8 +414,7 @@ public sealed class LayeredWindowCacheBuilderTests
         var deepDiagnostics = new EventCounterCacheDiagnostics();
         var userDiagnostics = new EventCounterCacheDiagnostics();
 
-        await using var cache = LayeredWindowCacheBuilder<int, int, IntegerFixedStepDomain>
-            .Create(CreateDataSource(), Domain)
+        await using var cache = WindowCacheBuilder.Layered(CreateDataSource(), Domain)
             .AddLayer(new WindowCacheOptions(2.0, 2.0, UserCacheReadMode.CopyOnRead,
                 debounceDelay: TimeSpan.FromMilliseconds(50)), deepDiagnostics)
             .AddLayer(new WindowCacheOptions(0.5, 0.5, UserCacheReadMode.Snapshot,

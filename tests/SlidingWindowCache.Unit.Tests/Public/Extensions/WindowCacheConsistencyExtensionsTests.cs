@@ -459,7 +459,7 @@ public sealed class WindowCacheConsistencyExtensionsTests
     {
         // ARRANGE
         var mock = CreateMock();
-        IWindowCache<int, int, IntegerFixedStepDomain> cacheInterface = mock.Object;
+        var cacheInterface = mock.Object;
         var range = CreateRange(100, 110);
         var expectedResult = CreateRangeResult(100, 110);
 

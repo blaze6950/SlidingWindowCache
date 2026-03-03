@@ -62,8 +62,7 @@ namespace SlidingWindowCache.Public.Cache;
 /// </para>
 /// <para><strong>Typical Usage (via Builder):</strong></para>
 /// <code>
-/// await using var cache = LayeredWindowCacheBuilder&lt;int, byte[], IntegerFixedStepDomain&gt;
-///     .Create(realDataSource, domain)
+/// await using var cache = WindowCacheBuilder.Layered(realDataSource, domain)
 ///     .AddLayer(new WindowCacheOptions(10.0, 10.0, UserCacheReadMode.CopyOnRead, 0.3, 0.3))
 ///     .AddLayer(new WindowCacheOptions(0.5, 0.5, UserCacheReadMode.Snapshot))
 ///     .Build();

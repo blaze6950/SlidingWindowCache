@@ -144,23 +144,17 @@ For detailed comparison and guidance, see `docs/storage-strategies.md`.
 
 ```csharp
 using SlidingWindowCache;
-using SlidingWindowCache.Configuration;
+using SlidingWindowCache.Public.Cache;
+using SlidingWindowCache.Public.Configuration;
 using Intervals.NET;
 using Intervals.NET.Domain.Default.Numeric;
 
-var options = new WindowCacheOptions(
-    leftCacheSize: 1.0,    // Cache 100% of requested range size to the left
-    rightCacheSize: 2.0,   // Cache 200% of requested range size to the right
-    leftThreshold: 0.2,    // Rebalance if <20% left buffer remains
-    rightThreshold: 0.2    // Rebalance if <20% right buffer remains
-);
-
-var cache = WindowCache<int, string, IntegerFixedStepDomain>.Create(
-    dataSource: myDataSource,
-    domain: new IntegerFixedStepDomain(),
-    options: options,
-    readMode: UserCacheReadMode.Snapshot
-);
+await using var cache = WindowCacheBuilder.For(myDataSource, new IntegerFixedStepDomain())
+    .WithOptions(o => o
+        .WithCacheSize(left: 1.0, right: 2.0)   // 100% left / 200% right of requested range
+        .WithReadMode(UserCacheReadMode.Snapshot)
+        .WithThresholds(0.2))                    // rebalance if <20% buffer remains
+    .Build();
 
 var result = await cache.GetDataAsync(Range.Closed(100, 200), cancellationToken);
 
@@ -495,8 +489,7 @@ This is the per-request programmatic alternative to the `UserRequestFullCacheHit
 For workloads with high-latency data sources, you can compose multiple `WindowCache` instances into a layered stack. Each layer uses the layer below it as its data source, allowing you to trade memory for reduced data-source I/O.
 
 ```csharp
-await using var cache = LayeredWindowCacheBuilder<int, byte[], IntegerFixedStepDomain>
-    .Create(realDataSource, domain)
+await using var cache = WindowCacheBuilder.Layered(realDataSource, domain)
     .AddLayer(new WindowCacheOptions(        // L2: deep background cache
         leftCacheSize: 10.0,
         rightCacheSize: 10.0,
@@ -547,8 +540,7 @@ layeredCache.UpdateRuntimeOptions(u => u.WithRightCacheSize(1.0));
 
 **Three-layer example:**
 ```csharp
-await using var cache = LayeredWindowCacheBuilder<int, byte[], IntegerFixedStepDomain>
-    .Create(realDataSource, domain)
+await using var cache = WindowCacheBuilder.Layered(realDataSource, domain)
     .AddLayer(l3Options)   // L3: 10× CopyOnRead — network/disk absorber
     .AddLayer(l2Options)   // L2: 2× CopyOnRead  — mid-level buffer
     .AddLayer(l1Options)   // L1: 0.5× Snapshot  — user-facing

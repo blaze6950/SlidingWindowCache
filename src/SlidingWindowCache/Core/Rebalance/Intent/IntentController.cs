@@ -185,7 +185,7 @@ internal sealed class IntentController<TRange, TData, TDomain>
             {
                 // Track whether we successfully consumed a semaphore signal
                 // This prevents activity counter imbalance when disposal cancels WaitAsync
-                bool consumedSignal = false;
+                var consumedSignal = false;
 
                 try
                 {

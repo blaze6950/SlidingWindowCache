@@ -140,7 +140,7 @@ public sealed class LayeredWindowCacheTests
         var outerLayer = CreateLayerMock();
         var range = MakeRange(10, 20);
         var cts = new CancellationTokenSource();
-        CancellationToken capturedToken = CancellationToken.None;
+        var capturedToken = CancellationToken.None;
         var expectedResult = MakeResult(10, 20);
 
         outerLayer.Setup(c => c.GetDataAsync(range, It.IsAny<CancellationToken>()))
