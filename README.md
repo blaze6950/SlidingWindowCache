@@ -3,7 +3,7 @@
 
 A read-only, range-based, sequential-optimized cache with decision-driven background rebalancing, three consistency modes (eventual/hybrid/strong), and intelligent work avoidance.
 
-[![CI/CD](https://github.com/blaze6950/Intervals.NET.Caching/actions/workflows/Intervals.NET.Caching.yml/badge.svg)](https://github.com/blaze6950/Intervals.NET.Caching/actions/workflows/Intervals.NET.Caching.yml)
+[![CI/CD](https://github.com/blaze6950/Intervals.NET.Caching/actions/workflows/intervals-net-caching.yml/badge.svg)](https://github.com/blaze6950/Intervals.NET.Caching/actions/workflows/intervals-net-caching.yml)
 [![NuGet](https://img.shields.io/nuget/v/Intervals.NET.Caching.svg)](https://www.nuget.org/packages/Intervals.NET.Caching/)
 [![NuGet Downloads](https://img.shields.io/nuget/dt/Intervals.NET.Caching.svg)](https://www.nuget.org/packages/Intervals.NET.Caching/)
 [![codecov](https://codecov.io/gh/blaze6950/Intervals.NET.Caching/graph/badge.svg?token=RFQBNX7MMD)](https://codecov.io/gh/blaze6950/Intervals.NET.Caching)
