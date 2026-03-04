@@ -440,7 +440,7 @@ Assert.Equal(1, diagnostics.RebalanceExecutionStarted);
 **Tracks:** Successful rebalance completion  
 **Location:** `RebalanceExecutor.ExecuteAsync` (after UpdateCacheState)  
 **Scenarios:** Rebalance Scenarios R1, R2 (build from scratch, expand cache)  
-**Invariants:** F.2 (Only Rebalance writes to cache), F.6 (Atomic state update)
+**Invariants:** F.2 (Only Rebalance writes to cache), B.2 (Cache updates are atomic)
 
 **Example Usage:**
 ```csharp

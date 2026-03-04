@@ -648,8 +648,8 @@ public sealed class WindowCacheInvariantTests : IAsyncDisposable
 
     /// <summary>
     /// Tests Invariant C.8 (🟡 Conceptual): Intent does not guarantee execution. Execution is opportunistic
-    /// and may be skipped due to: C.8a (request within NoRebalanceRange), C.8b (debounce), 
-    /// C.8c (DesiredCacheRange equals CurrentCacheRange), C.8d (cancellation).
+    /// and may be skipped due to: C.8b (request within NoRebalanceRange), C.8c (DesiredCacheRange equals CurrentCacheRange),
+    /// C.8d (cancellation/debounce).
     /// Demonstrates cache's opportunistic, efficiency-focused design.
     /// </summary>
     [Fact]
@@ -716,7 +716,7 @@ public sealed class WindowCacheInvariantTests : IAsyncDisposable
     /// Tests Invariant D.3 (🟢 Behavioral): If RequestedRange is fully contained within NoRebalanceRange,
     /// rebalance execution is prohibited. Verifies ThresholdRebalancePolicy prevents unnecessary rebalance
     /// when requests fall within "dead zone" around current cache, reducing I/O and CPU usage.
-    /// Corresponds to sub-invariant C.8a (execution skipped due to policy).
+    /// Corresponds to sub-invariant C.8b (execution skipped due to NoRebalanceRange policy).
     /// </summary>
     [Fact]
     public async Task Invariant_D_3_NoRebalanceIfRequestInNoRebalanceRange()
@@ -743,7 +743,7 @@ public sealed class WindowCacheInvariantTests : IAsyncDisposable
     /// Stage 1 (current cache stability check) is the fast-path optimization that prevents unnecessary
     /// rebalance when the requested range is fully covered by the existing cache's no-rebalance threshold zone.
     /// This validates the first stage of the multi-stage decision pipeline.
-    /// Related: D.3 (NoRebalanceRange policy), C.8a (execution skipped due to policy).
+    /// Related: D.3 (NoRebalanceRange policy), C.8b (execution skipped due to NoRebalanceRange policy).
     /// </summary>
     [Fact]
     public async Task Invariant_D_3_Stage1_SkipsWhenWithinCurrentNoRebalanceRange()
@@ -829,7 +829,7 @@ public sealed class WindowCacheInvariantTests : IAsyncDisposable
 
     /// <summary>
     /// Tests Invariant D.4 (🟢 Behavioral): If DesiredCacheRange == CurrentCacheRange, rebalance execution
-    /// is not required (Stage 3 validation / same-range optimization). This is the final decision stage that
+    /// is not required (Stage 4 validation / same-range optimization). This is the final decision stage that
     /// prevents no-op rebalance operations when the cache is already in optimal configuration for the request.
     /// Verifies the RebalanceSkippedSameRange counter tracks this optimization.
     /// Related: C.8c (execution skipped due to same range), D.5 (multi-stage decision pipeline).
@@ -841,7 +841,7 @@ public sealed class WindowCacheInvariantTests : IAsyncDisposable
         var options = TestHelpers.CreateDefaultOptions(
             leftCacheSize: 1.0,
             rightCacheSize: 1.0,
-            leftThreshold: 1, // Very small NoRebalanceRange - forces decision to Stage 3
+            leftThreshold: 1, // Very small NoRebalanceRange - forces decision to Stage 4
             rightThreshold: 0.0,
             debounceDelay: TimeSpan.FromMilliseconds(50));
         var (cache, _) = TrackCache(TestHelpers.CreateCacheWithDefaults(_domain, _cacheDiagnostics, options));
@@ -857,7 +857,7 @@ public sealed class WindowCacheInvariantTests : IAsyncDisposable
         var result = await cache.GetDataAsync(initialRange, CancellationToken.None);
         await cache.WaitForIdleAsync();
 
-        // ASSERT: Verify same-range skip occurred (Stage 3 validation)
+        // ASSERT: Verify same-range skip occurred (Stage 4 validation)
         TestHelpers.AssertUserDataCorrect(result.Data, initialRange);
         TestHelpers.AssertIntentPublished(_cacheDiagnostics, 1);
         TestHelpers.AssertRebalanceSkippedSameRange(_cacheDiagnostics, 1);

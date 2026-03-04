@@ -437,7 +437,7 @@ public static class TestHelpers
     }
 
     /// <summary>
-    /// Asserts that rebalance was skipped because DesiredCacheRange equals CurrentCacheRange (Stage 3 / D.4).
+    /// Asserts that rebalance was skipped because DesiredCacheRange equals CurrentCacheRange (Stage 4 / D.4).
     /// </summary>
     /// <param name="cacheDiagnostics">The diagnostics instance to check.</param>
     /// <param name="minExpected">Minimum number of same-range skips expected (default: 1).</param>
@@ -459,7 +459,7 @@ public static class TestHelpers
     /// Decision Pipeline Stages:
     /// - Stage 1: Current NoRebalanceRange check → SkippedCurrentNoRebalanceRange
     /// - Stage 2: Pending NoRebalanceRange check → SkippedPendingNoRebalanceRange
-    /// - Stage 3: DesiredCacheRange == CurrentCacheRange → SkippedSameRange
+    /// - Stage 4: DesiredCacheRange == CurrentCacheRange → SkippedSameRange
     /// - All stages pass → RebalanceScheduled
     /// - Intent superseded before decision → IntentCancelled
     ///
@@ -473,14 +473,14 @@ public static class TestHelpers
         var scheduled = cacheDiagnostics.RebalanceScheduled;
         var skippedStage1 = cacheDiagnostics.RebalanceSkippedCurrentNoRebalanceRange;
         var skippedStage2 = cacheDiagnostics.RebalanceSkippedPendingNoRebalanceRange;
-        var skippedStage3 = cacheDiagnostics.RebalanceSkippedSameRange;
+        var skippedStage4 = cacheDiagnostics.RebalanceSkippedSameRange;
 
         // Decision phase: All intents must be accounted for
-        var totalDecisionOutcomes = scheduled + skippedStage1 + skippedStage2 + skippedStage3;
+        var totalDecisionOutcomes = scheduled + skippedStage1 + skippedStage2 + skippedStage4;
         Assert.True(totalDecisionOutcomes <= intentPublished,
             $"Decision outcomes ({totalDecisionOutcomes}) cannot exceed intents published ({intentPublished}). " +
             $"Breakdown: Scheduled={scheduled}, SkippedStage1={skippedStage1}, SkippedStage2={skippedStage2}, " +
-            $"SkippedStage3={skippedStage3}");
+            $"SkippedStage4={skippedStage4}");
 
         // Execution phase: Verify lifecycle integrity
         AssertRebalanceLifecycleIntegrity(cacheDiagnostics);

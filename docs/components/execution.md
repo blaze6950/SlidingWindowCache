@@ -104,7 +104,7 @@ In both cases, `OperationCanceledException` is reported via `ICacheDiagnostics.R
 | A.4       | User path never blocks waiting for rebalance                                                           |
 | B.2       | Cache updates are atomic (all-or-nothing via `Rematerialize`)                                          |
 | B.3       | Consistency under cancellation: mutations discarded if cancelled                                       |
-| B.5       | Cache contiguity maintained after every `Rematerialize`                                                |
+| B.5       | Cancelled rebalance cannot violate `CacheData ↔ CurrentCacheRange` consistency                        |
 | B.6       | Obsolete results never applied (cancellation token identity check)                                     |
 | C.5       | Serial execution: at most one active rebalance at a time                                               |
 | F.1       | Multiple cancellation checkpoints: before I/O, after I/O, before mutation                              |
@@ -112,7 +112,7 @@ In both cases, `OperationCanceledException` is reported via `ICacheDiagnostics.R
 | F.3       | `Rematerialize` accepts arbitrary range and data (full replacement)                                    |
 | F.4       | Incremental fetching: only missing subranges fetched                                                   |
 | F.5       | Data preservation: existing cached data merged during expansion                                        |
-| G.3       | I/O isolation: `IDataSource` called by execution path only (not by user path during normal cache hits) |
+| G.3       | I/O isolation: User Path MAY call `IDataSource` for U1/U5 (cold start / full miss); Rebalance Execution calls it for background normalization only |
 | H.1       | Activity counter incremented before channel write / task chain step                                    |
 | H.2       | Activity counter decremented in `finally` blocks                                                       |
 

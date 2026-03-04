@@ -36,7 +36,7 @@ These are distinct concerns with separate components:
 | **Nature**       | CPU-only, pure, deterministic    | Debounced, cancellable, may do I/O |
 | **State access** | Read-only                        | Write (sole)                       |
 | **I/O**          | Never                            | Yes (`IDataSource.FetchAsync`)     |
-| **Invariants**   | D.1, D.2, D.3, D.4, D.5         | A.11, B.2, B.3, F.1, F.3–F.5      |
+| **Invariants**   | D.1, D.2, D.3, D.4, D.5         | A.12a, F.2, B.2, B.3, F.1, F.3–F.5 |
 
 The formal 5-stage validation pipeline is specified in `docs/invariants.md` (Section D).
 
@@ -77,10 +77,11 @@ The decision about *whether* to cancel is made by `RebalanceDecisionEngine` (via
 
 | Invariant | Description                                                    |
 |-----------|----------------------------------------------------------------|
-| A.11      | Only `RebalanceExecutor` writes `CacheState`                   |
+| A.12a     | Only `RebalanceExecutor` writes `CacheState` (exclusive authority) |
+| F.2       | Rebalance Execution is the sole component permitted to mutate cache state |
 | B.2       | Atomic cache updates via `Rematerialize`                       |
 | B.3       | Consistency under cancellation (discard, never partial-apply)  |
-| B.5       | Cache contiguity maintained after every rematerialization      |
+| B.5       | Cancelled rebalance execution cannot violate cache consistency  |
 | C.3       | Cooperative cancellation via `CancellationToken`               |
 | C.4       | Cancellation checked after debounce, before execution          |
 | C.5       | At most one active rebalance scheduled at a time               |

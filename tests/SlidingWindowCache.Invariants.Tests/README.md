@@ -152,7 +152,7 @@ not actual cache mutations. Actual mutations only occur in Rebalance Execution v
 - A.1: Concurrent write safety stress test (50 concurrent requests) **[NEW]**
 - A.3: User path always serves requests
 - A.4: User path never waits for rebalance
-- A.7: User always receives exact requested range
+- A.10: User always receives exact requested range
 - A.12: User Path never mutates cache [Theory: 3 scenarios × 2 storage strategies = 6 tests]
 - A.12b: Cache contiguity maintained
 

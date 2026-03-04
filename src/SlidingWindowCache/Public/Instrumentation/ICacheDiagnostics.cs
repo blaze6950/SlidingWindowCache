@@ -149,7 +149,7 @@ public interface ICacheDiagnostics
     /// Called after RebalanceExecutor successfully extends cache to DesiredCacheRange, trims excess data, and updates cache state.
     /// Indicates cache normalization completed and state mutations applied (Rebalance Scenarios R1, R2).
     /// Location: RebalanceExecutor.ExecuteAsync (final step after UpdateCacheState)
-    /// Related: Invariant F.2 (Only Rebalance Execution writes to cache), Invariant F.6 (Cache state update is atomic)
+    /// Related: Invariant F.2 (Only Rebalance Execution writes to cache), Invariant B.2 (Changes to CacheData and CurrentCacheRange are performed atomically)
     /// </summary>
     void RebalanceExecutionCompleted();
 
