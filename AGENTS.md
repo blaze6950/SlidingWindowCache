@@ -218,6 +218,14 @@ catch (Exception ex)
 - WindowCache is **NOT designed for multiple users sharing one cache** (violates coherent access pattern)
 - Multiple threads from the SAME logical consumer CAN call WindowCache safely (read-only User Path)
 
+**Consistency Modes (three options):**
+- **Eventual consistency** (default): `GetDataAsync` — returns immediately, cache converges in background
+- **Hybrid consistency**: `GetDataAndWaitOnMissAsync` — waits for idle only on `PartialHit` or `FullMiss`; returns immediately on `FullHit`. Use for warm-cache guarantees without always paying the idle-wait cost.
+- **Strong consistency**: `GetDataAndWaitForIdleAsync` — always waits for idle regardless of `CacheInteraction`
+
+**Serialized Access Requirement for Hybrid/Strong Modes:**
+`GetDataAndWaitOnMissAsync` and `GetDataAndWaitForIdleAsync` provide their warm-cache guarantee only under **serialized (one-at-a-time) access**. Under parallel access, `WaitForIdleAsync`'s "was idle at some point" semantics (Invariant H.49) may return the old completed TCS, missing the rebalance triggered by the concurrent request. These methods remain safe (no crashes/hangs) but the guarantee degrades under parallelism.
+
 **Lock-Free Operations:**
 ```csharp
 // Intent management using Volatile and Interlocked

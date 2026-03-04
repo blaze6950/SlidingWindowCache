@@ -1,6 +1,7 @@
 using Intervals.NET;
 using Intervals.NET.Domain.Abstractions;
 using SlidingWindowCache.Core.Rebalance.Intent;
+using SlidingWindowCache.Public.Cache;
 
 namespace SlidingWindowCache.Core.Rebalance.Execution;
 
@@ -31,7 +32,7 @@ namespace SlidingWindowCache.Core.Rebalance.Execution;
 /// </list>
 /// <para><strong>Strategy Selection:</strong></para>
 /// <para>
-/// The concrete implementation is selected by <see cref="Public.WindowCache{TRange,TData,TDomain}"/>
+/// The concrete implementation is selected by <see cref="WindowCache{TRange,TData,TDomain}"/>
 /// based on <see cref="Public.Configuration.WindowCacheOptions.RebalanceQueueCapacity"/>:
 /// </para>
 /// <list type="bullet">

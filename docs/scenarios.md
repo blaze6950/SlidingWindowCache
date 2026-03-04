@@ -46,10 +46,12 @@ Scenarios are grouped by path:
 2. Cache detects it is not initialized
 3. Cache requests `RequestedRange` from `IDataSource` in the user thread (unavoidable — user request must be served immediately)
 4. A rebalance intent is published (fire-and-forget) with the fetched data
-5. Data is returned to the user immediately
+5. Data is returned to the user immediately — `RangeResult.CacheInteraction == FullMiss`
 6. Rebalance Execution (background) stores the data as `CacheData`, sets `CurrentCacheRange = RequestedRange`, sets `IsInitialized = true`
 
 **Note**: The User Path does not expand the cache beyond `RequestedRange`. Cache expansion to `DesiredCacheRange` is performed exclusively by Rebalance Execution.
+
+**Consistency note**: `GetDataAndWaitOnMissAsync` will call `WaitForIdleAsync` after this scenario (because `CacheInteraction != FullHit`), waiting for the background rebalance to complete.
 
 ---
 
@@ -65,7 +67,7 @@ Scenarios are grouped by path:
 2. Cache detects a full cache hit
 3. Data is read from `CacheData`
 4. Rebalance intent is published; Decision Engine rejects execution at Stage 1 (NoRebalanceRange containment)
-5. Data is returned to the user
+5. Data is returned to the user — `RangeResult.CacheInteraction == FullHit`
 
 ---
 
@@ -81,7 +83,7 @@ Scenarios are grouped by path:
 2. Cache detects all requested data is available
 3. Subrange is read from `CacheData`
 4. Rebalance intent is published; Decision Engine proceeds through validation
-5. Data is returned to the user
+5. Data is returned to the user — `RangeResult.CacheInteraction == FullHit`
 6. Rebalance executes asynchronously to shift the window
 
 ---
@@ -102,9 +104,11 @@ Scenarios are grouped by path:
    - does **not** trim excess data
    - does **not** update `CurrentCacheRange` (User Path is read-only with respect to cache state)
 5. Rebalance intent is published; rebalance executes asynchronously
-6. `RequestedRange` data is returned to the user
+6. `RequestedRange` data is returned to the user — `RangeResult.CacheInteraction == PartialHit`
 
 **Note**: Cache expansion is permitted because `RequestedRange` intersects `CurrentCacheRange`, preserving cache contiguity. Excess data may temporarily remain in `CacheData` for reuse during Rebalance.
+
+**Consistency note**: `GetDataAndWaitOnMissAsync` will call `WaitForIdleAsync` after this scenario (because `CacheInteraction != FullHit`), waiting for the background rebalance to complete.
 
 ---
 
@@ -123,9 +127,11 @@ Scenarios are grouped by path:
    - **fully replaces** `CacheData` with new data
    - **fully replaces** `CurrentCacheRange` with `RequestedRange`
 6. Rebalance intent is published; rebalance executes asynchronously
-7. Data is returned to the user
+7. Data is returned to the user — `RangeResult.CacheInteraction == FullMiss`
 
 **Critical**: Partial cache expansion is FORBIDDEN in this case — it would create logical gaps and violate the Cache Contiguity Rule (Invariant A.9a). The cache MUST remain contiguous at all times.
+
+**Consistency note**: `GetDataAndWaitOnMissAsync` will call `WaitForIdleAsync` after this scenario (because `CacheInteraction != FullHit`), waiting for the background rebalance to complete.
 
 ---
 
@@ -432,8 +438,7 @@ from Lₙ's new window, and finally L1 expands from L2.
 var l2Diagnostics = new EventCounterCacheDiagnostics();
 var l1Diagnostics = new EventCounterCacheDiagnostics();
 
-await using var cache = LayeredWindowCacheBuilder<int, byte[], IntegerFixedStepDomain>
-    .Create(dataSource, domain)
+await using var cache = WindowCacheBuilder.Layered(dataSource, domain)
     .AddLayer(deepOptions,  l2Diagnostics)   // L2
     .AddLayer(userOptions,  l1Diagnostics)   // L1
     .Build();

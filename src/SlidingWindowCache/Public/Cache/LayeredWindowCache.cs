@@ -1,8 +1,9 @@
 using Intervals.NET;
 using Intervals.NET.Domain.Abstractions;
+using SlidingWindowCache.Public.Configuration;
 using SlidingWindowCache.Public.Dto;
 
-namespace SlidingWindowCache.Public;
+namespace SlidingWindowCache.Public.Cache;
 
 /// <summary>
 /// A thin wrapper around a stack of <see cref="WindowCache{TRange,TData,TDomain}"/> instances
@@ -98,6 +99,31 @@ public sealed class LayeredWindowCache<TRange, TData, TDomain>
     /// </remarks>
     public int LayerCount => _layers.Count;
 
+    /// <summary>
+    /// Gets the ordered list of all cache layers, from deepest (index 0) to outermost (last index).
+    /// </summary>
+    /// <remarks>
+    /// <para><strong>Layer Order:</strong></para>
+    /// <para>
+    /// Index 0 is the deepest layer (closest to the real data source). The last index
+    /// (<c>Layers.Count - 1</c>) is the outermost, user-facing layer — the same layer that
+    /// <see cref="IWindowCache{TRange,TData,TDomain}.GetDataAsync"/> delegates to.
+    /// </para>
+    /// <para><strong>Per-Layer Operations:</strong></para>
+    /// <para>
+    /// Each layer exposes the full <see cref="IWindowCache{TRange,TData,TDomain}"/> interface.
+    /// Use this property to update options or inspect the current runtime options of a specific layer:
+    /// </para>
+    /// <code>
+    /// // Update options on the innermost (background) layer
+    /// layeredCache.Layers[0].UpdateRuntimeOptions(u => u.WithLeftCacheSize(8.0));
+    ///
+    /// // Inspect options of the outermost (user-facing) layer
+    /// var outerOptions = layeredCache.Layers[^1].CurrentRuntimeOptions;
+    /// </code>
+    /// </remarks>
+    public IReadOnlyList<IWindowCache<TRange, TData, TDomain>> Layers => _layers;
+
     /// <inheritdoc/>
     /// <remarks>
     /// Delegates to the outermost (user-facing) layer. Data is served from that layer's
@@ -124,6 +150,23 @@ public sealed class LayeredWindowCache<TRange, TData, TDomain>
             await _layers[i].WaitForIdleAsync(cancellationToken).ConfigureAwait(false);
         }
     }
+
+    /// <inheritdoc/>
+    /// <remarks>
+    /// Delegates to the outermost (user-facing) layer. To update a specific inner layer,
+    /// access it via <see cref="Layers"/> and call <see cref="IWindowCache{TRange,TData,TDomain}.UpdateRuntimeOptions"/>
+    /// on that layer directly.
+    /// </remarks>
+    public void UpdateRuntimeOptions(Action<RuntimeOptionsUpdateBuilder> configure)
+        => _userFacingLayer.UpdateRuntimeOptions(configure);
+
+    /// <inheritdoc/>
+    /// <remarks>
+    /// Returns the runtime options of the outermost (user-facing) layer. To inspect a specific
+    /// inner layer's options, access it via <see cref="Layers"/> and read
+    /// <see cref="IWindowCache{TRange,TData,TDomain}.CurrentRuntimeOptions"/> on that layer.
+    /// </remarks>
+    public RuntimeOptionsSnapshot CurrentRuntimeOptions => _userFacingLayer.CurrentRuntimeOptions;
 
     /// <summary>
     /// Disposes all layers from outermost to innermost, releasing all background resources.

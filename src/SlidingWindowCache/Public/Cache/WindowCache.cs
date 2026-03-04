@@ -12,7 +12,7 @@ using SlidingWindowCache.Public.Configuration;
 using SlidingWindowCache.Public.Dto;
 using SlidingWindowCache.Public.Instrumentation;
 
-namespace SlidingWindowCache.Public;
+namespace SlidingWindowCache.Public.Cache;
 
 /// <inheritdoc cref="IWindowCache{TRange,TData,TDomain}"/>
 /// <remarks>
@@ -37,6 +37,9 @@ public sealed class WindowCache<TRange, TData, TDomain>
 {
     // Internal actors
     private readonly UserRequestHandler<TRange, TData, TDomain> _userRequestHandler;
+
+    // Shared runtime options holder — updated via UpdateRuntimeOptions, read by planners and execution controllers
+    private readonly RuntimeCacheOptionsHolder _runtimeOptionsHolder;
 
     // Activity counter for tracking active intents and executions
     private readonly AsyncActivityCounter _activityCounter = new();
@@ -77,13 +80,26 @@ public sealed class WindowCache<TRange, TData, TDomain>
     {
         // Initialize diagnostics (use NoOpDiagnostics if null to avoid null checks in actors)
         cacheDiagnostics ??= NoOpDiagnostics.Instance;
-        var cacheStorage = CreateCacheStorage(domain, options);
+        var cacheStorage = CreateCacheStorage(domain, options.ReadMode);
         var state = new CacheState<TRange, TData, TDomain>(cacheStorage, domain);
+
+        // Create the shared runtime options holder from the initial WindowCacheOptions values.
+        // Planners and execution controllers hold a reference to this holder and read Current
+        // at invocation time, enabling runtime updates via UpdateRuntimeOptions.
+        _runtimeOptionsHolder = new RuntimeCacheOptionsHolder(
+            new RuntimeCacheOptions(
+                options.LeftCacheSize,
+                options.RightCacheSize,
+                options.LeftThreshold,
+                options.RightThreshold,
+                options.DebounceDelay
+            )
+        );
 
         // Initialize all internal actors following corrected execution context model
         var rebalancePolicy = new NoRebalanceSatisfactionPolicy<TRange>();
-        var rangePlanner = new ProportionalRangePlanner<TRange, TDomain>(options, domain);
-        var noRebalancePlanner = new NoRebalanceRangePlanner<TRange, TDomain>(options, domain);
+        var rangePlanner = new ProportionalRangePlanner<TRange, TDomain>(_runtimeOptionsHolder, domain);
+        var noRebalancePlanner = new NoRebalanceRangePlanner<TRange, TDomain>(_runtimeOptionsHolder, domain);
         var cacheFetcher = new CacheDataExtensionService<TRange, TData, TDomain>(dataSource, domain, cacheDiagnostics);
 
         var decisionEngine =
@@ -95,7 +111,8 @@ public sealed class WindowCache<TRange, TData, TDomain>
         // Strategy selected based on RebalanceQueueCapacity configuration
         var executionController = CreateExecutionController(
             executor,
-            options,
+            _runtimeOptionsHolder,
+            options.RebalanceQueueCapacity,
             cacheDiagnostics,
             _activityCounter
         );
@@ -124,17 +141,18 @@ public sealed class WindowCache<TRange, TData, TDomain>
     /// </summary>
     private static IRebalanceExecutionController<TRange, TData, TDomain> CreateExecutionController(
         RebalanceExecutor<TRange, TData, TDomain> executor,
-        WindowCacheOptions options,
+        RuntimeCacheOptionsHolder optionsHolder,
+        int? rebalanceQueueCapacity,
         ICacheDiagnostics cacheDiagnostics,
         AsyncActivityCounter activityCounter
     )
     {
-        if (options.RebalanceQueueCapacity == null)
+        if (rebalanceQueueCapacity == null)
         {
             // Unbounded strategy: Task-based serialization (default, recommended for most scenarios)
             return new TaskBasedRebalanceExecutionController<TRange, TData, TDomain>(
                 executor,
-                options.DebounceDelay,
+                optionsHolder,
                 cacheDiagnostics,
                 activityCounter
             );
@@ -143,10 +161,10 @@ public sealed class WindowCache<TRange, TData, TDomain>
         // Bounded strategy: Channel-based serialization with backpressure support
         return new ChannelBasedRebalanceExecutionController<TRange, TData, TDomain>(
             executor,
-            options.DebounceDelay,
+            optionsHolder,
             cacheDiagnostics,
             activityCounter,
-            options.RebalanceQueueCapacity.Value
+            rebalanceQueueCapacity.Value
         );
     }
 
@@ -155,13 +173,13 @@ public sealed class WindowCache<TRange, TData, TDomain>
     /// </summary>
     private static ICacheStorage<TRange, TData, TDomain> CreateCacheStorage(
         TDomain domain,
-        WindowCacheOptions windowCacheOptions
-    ) => windowCacheOptions.ReadMode switch
+        UserCacheReadMode readMode
+    ) => readMode switch
     {
         UserCacheReadMode.Snapshot => new SnapshotReadStorage<TRange, TData, TDomain>(domain),
         UserCacheReadMode.CopyOnRead => new CopyOnReadStorage<TRange, TData, TDomain>(domain),
-        _ => throw new ArgumentOutOfRangeException(nameof(windowCacheOptions.ReadMode),
-            windowCacheOptions.ReadMode, "Unknown read mode.")
+        _ => throw new ArgumentOutOfRangeException(nameof(readMode),
+            readMode, "Unknown read mode.")
     };
 
     /// <inheritdoc cref="IWindowCache{TRange,TData,TDomain}.GetDataAsync"/>
@@ -234,6 +252,56 @@ public sealed class WindowCache<TRange, TData, TDomain>
         }
 
         return _activityCounter.WaitForIdleAsync(cancellationToken);
+    }
+
+    /// <inheritdoc cref="IWindowCache{TRange,TData,TDomain}.UpdateRuntimeOptions"/>
+    /// <remarks>
+    /// <para><strong>Implementation:</strong></para>
+    /// <para>
+    /// Reads the current snapshot from <see cref="_runtimeOptionsHolder"/>, applies the builder deltas,
+    /// validates the merged result (via <see cref="RuntimeCacheOptions"/> constructor), then publishes
+    /// the new snapshot via <see cref="RuntimeCacheOptionsHolder.Update"/> using a Volatile.Write
+    /// (release fence). Background threads pick up the new snapshot on their next read cycle.
+    /// </para>
+    /// <para>
+    /// If validation throws, the holder is not updated and the current options remain active.
+    /// </para>
+    /// </remarks>
+    public void UpdateRuntimeOptions(Action<RuntimeOptionsUpdateBuilder> configure)
+    {
+        // Check disposal state using Volatile.Read (lock-free)
+        if (Volatile.Read(ref _disposeState) != 0)
+        {
+            throw new ObjectDisposedException(
+                nameof(WindowCache<TRange, TData, TDomain>),
+                "Cannot update runtime options on a disposed cache.");
+        }
+
+        // ApplyTo reads the current snapshot, merges deltas, and validates —
+        // throws if validation fails (holder not updated in that case).
+        var builder = new RuntimeOptionsUpdateBuilder();
+        configure(builder);
+        var newOptions = builder.ApplyTo(_runtimeOptionsHolder.Current);
+
+        // Publish atomically; background threads see the new snapshot on next read.
+        _runtimeOptionsHolder.Update(newOptions);
+    }
+
+    /// <inheritdoc cref="IWindowCache{TRange,TData,TDomain}.CurrentRuntimeOptions"/>
+    public RuntimeOptionsSnapshot CurrentRuntimeOptions
+    {
+        get
+        {
+            // Check disposal state using Volatile.Read (lock-free)
+            if (Volatile.Read(ref _disposeState) != 0)
+            {
+                throw new ObjectDisposedException(
+                    nameof(WindowCache<TRange, TData, TDomain>),
+                    "Cannot access runtime options on a disposed cache.");
+            }
+
+            return _runtimeOptionsHolder.Current.ToSnapshot();
+        }
     }
 
     /// <summary>

@@ -4,7 +4,7 @@
 
 ## Understanding This Document
 
-This document lists **49 system invariants** that define the behavior, architecture, and design intent of the Sliding Window Cache.
+This document lists **54 system invariants** that define the behavior, architecture, and design intent of the Sliding Window Cache.
 
 ### Invariant Categories
 
@@ -239,12 +239,13 @@ without polling or timing dependencies.
 - *Observable via*: Returned data length and content
 - *Test verifies*: Data matches requested range exactly (no more, no less)
 
-**A.10a** 🔵 **[Architectural]** `GetDataAsync` returns `RangeResult<TRange, TData>` containing both the actual range fulfilled and the corresponding data.
+**A.10a** 🔵 **[Architectural]** `GetDataAsync` returns `RangeResult<TRange, TData>` containing the actual range fulfilled, the corresponding data, and the cache interaction classification.
 
 **Formal Specification:**
 - Return type: `ValueTask<RangeResult<TRange, TData>>`
 - `RangeResult.Range` indicates the actual range returned (may differ from requested in bounded data sources)
 - `RangeResult.Data` contains `ReadOnlyMemory<TData>` for the returned range
+- `RangeResult.CacheInteraction` classifies how the request was served (`FullHit`, `PartialHit`, or `FullMiss`)
 - `Range` is nullable to signal data unavailability without exceptions
 - When `Range` is non-null, `Data.Length` MUST equal `Range.Span(domain)`
 
@@ -252,8 +253,20 @@ without polling or timing dependencies.
 - Explicit boundary contracts between cache and consumers
 - Bounded data sources can signal truncation or unavailability gracefully
 - No exceptions for normal boundary conditions (out-of-bounds is expected, not exceptional)
+- `CacheInteraction` exposes per-request cache efficiency classification for programmatic use
 
 **Related Documentation:** [Boundary Handling Guide](boundary-handling.md) — comprehensive coverage of RangeResult usage patterns, bounded data source implementation, partial fulfillment handling, and testing.
+
+**A.10b** 🔵 **[Architectural]** `RangeResult.CacheInteraction` **accurately reflects** the cache interaction type for every request.
+
+**Formal Specification:**
+- `CacheInteraction.FullMiss` — `IsInitialized == false` (cold start) OR `CurrentCacheRange` does not intersect `RequestedRange` (jump)
+- `CacheInteraction.FullHit` — `CurrentCacheRange` fully contains `RequestedRange`
+- `CacheInteraction.PartialHit` — `CurrentCacheRange` intersects but does not fully contain `RequestedRange`
+
+**Rationale:** Enables callers to branch on cache efficiency per request — for example, `GetDataAndWaitOnMissAsync` (hybrid consistency mode) uses `CacheInteraction` to decide whether to call `WaitForIdleAsync`.
+
+**Implementation:** Set exclusively by `UserRequestHandler.HandleRequestAsync` at scenario classification time. `RangeResult` constructor is `internal`; only `UserRequestHandler` may construct instances.
 
 ### A.3 Cache Mutation Rules (User Path)
 
@@ -824,6 +837,14 @@ Activity counter accurately reflects active work count at all times:
 - *Implication*: Callers requiring stronger guarantees (e.g., "still idle after await") must implement retry logic or re-check state
 - *Testing usage*: Sufficient for convergence testing — system stabilized at snapshot time
 
+**Parallel Access Implication for Hybrid/Strong Consistency Extension Methods:**
+`GetDataAndWaitOnMissAsync` and `GetDataAndWaitForIdleAsync` provide their warm-cache guarantee only under **serialized (one-at-a-time) access**. Under parallel access, the guarantee degrades:
+- Thread A increments the activity counter 0→1 (has not yet published its new TCS)
+- Thread B increments 1→2, then calls `WaitForIdleAsync`, reads the old (already-completed) TCS, and returns immediately — without waiting for Thread A's rebalance
+- Result: Thread B observes "was idle" from the *previous* idle period, not the one Thread A is driving
+
+Under parallel access, the methods remain safe (no deadlocks, no crashes, no data corruption) but the "warm cache after await" guarantee is not reliable. These methods are designed for single-logical-consumer, one-at-a-time access patterns.
+
 ### Activity-Based Stabilization Barrier
 
 The combination of H.47 and H.48 creates a **stabilization barrier** with strong guarantees:
@@ -909,22 +930,53 @@ Complete trace demonstrating both invariants in current architecture:
 
 ---
 
+## I. Runtime Options Update Invariants
+
+**I.50** 🟢 **[Behavioral — Tests: `RuntimeOptionsUpdateTests`]** `UpdateRuntimeOptions` **validates the merged options** before publishing. Invalid updates (negative sizes, threshold sum > 1.0, out-of-range threshold) throw and leave the current options unchanged.
+- *Observable via*: Exception type and cache still accepts subsequent valid updates
+- *Test verifies*: `ArgumentOutOfRangeException` / `ArgumentException` thrown; cache not partially updated
+
+**I.51** 🔵 **[Architectural]** `UpdateRuntimeOptions` uses **next-cycle semantics**: the new options snapshot takes effect on the next rebalance decision/execution cycle. Ongoing cycles use the snapshot already read at cycle start.
+
+**Formal Specification:**
+- `RuntimeCacheOptionsHolder.Update` performs a `Volatile.Write` (release fence)
+- Planners and execution controllers snapshot `holder.Current` once at the start of their operation
+- No running cycle is interrupted or modified mid-flight by an options update
+
+**Rationale:** Prevents mid-cycle inconsistencies (e.g., a planner using new `LeftCacheSize` with old `RightCacheSize`). Cycles are short; the next cycle reflects the update.
+
+**Implementation:** `RuntimeCacheOptionsHolder.Update` in `src/SlidingWindowCache/Core/State/RuntimeCacheOptionsHolder.cs`.
+
+**I.52** 🔵 **[Architectural]** `UpdateRuntimeOptions` on a disposed cache **always throws `ObjectDisposedException`**.
+
+**Formal Specification:**
+- Disposal state checked via `Volatile.Read` before any options update work
+- Consistent with all other post-disposal operation guards in the public API
+
+**Implementation:** Disposal guard in `WindowCache.UpdateRuntimeOptions`.
+
+**I.53** 🟡 **[Conceptual]** **`ReadMode` and `RebalanceQueueCapacity` are creation-time only** — they determine the storage strategy and execution controller strategy, which are wired at construction and cannot be replaced at runtime without reconstruction.
+- *Design decision*: These choices affect fundamental system structure (object graph), not just configuration parameters
+- *Rationale*: Storage strategies and execution controllers have different object identities and lifecycles; hot-swapping them would require disposal and re-creation of component graphs
+
+---
+
 ## Summary Statistics
 
-### Total Invariants: 49
+### Total Invariants: 54
 
 #### By Category:
-- 🟢 **Behavioral** (test-covered): 19 invariants
-- 🔵 **Architectural** (structure-enforced): 22 invariants  
-- 🟡 **Conceptual** (design-level): 8 invariants
+- 🟢 **Behavioral** (test-covered): 20 invariants
+- 🔵 **Architectural** (structure-enforced): 25 invariants  
+- 🟡 **Conceptual** (design-level): 9 invariants
 
 #### Test Coverage Analysis:
 - **29 automated tests** in `WindowCacheInvariantTests`
-- **19 behavioral invariants** directly covered
-- **22 architectural invariants** enforced by code structure (not tested)
-- **8 conceptual invariants** documented as design guidance (not tested)
+- **20 behavioral invariants** directly covered
+- **25 architectural invariants** enforced by code structure (not tested)
+- **9 conceptual invariants** documented as design guidance (not tested)
 
-**This is by design.** The gap between 49 invariants and 29 tests is intentional:
+**This is by design.** The gap between 54 invariants and 29 tests is intentional:
 - Architecture enforces structural constraints automatically
 - Conceptual invariants guide development, not runtime behavior
 - Tests focus on externally observable behavior

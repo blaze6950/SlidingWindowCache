@@ -80,6 +80,8 @@ While the single-writer architecture eliminates write-write races between User P
 | **Task-based** (default) | `rebalanceQueueCapacity: null` | Lock-free task chaining             | None (returns immediately)              | Recommended for most scenarios         |
 | **Channel-based**        | `rebalanceQueueCapacity: >= 1` | `System.Threading.Channels` bounded | Async await on `WriteAsync()` when full | High-frequency or resource-constrained |
 
+Both strategies extend `RebalanceExecutionControllerBase`, which implements the shared execution pipeline (`ExecuteRequestCoreAsync`: debounce + execute), last-execution-request tracking, and idempotent `DisposeAsync`. Concrete subclasses implement only the publication mechanism (`PublishExecutionRequest`) and their own disposal cleanup (`DisposeAsyncCore`).
+
 **Task-Based Strategy (default):**
 - Lock-free using volatile write (single-writer pattern — only intent processing loop writes)
 - Fire-and-forget: returns `ValueTask.CompletedTask` immediately, executes on ThreadPool
@@ -105,6 +107,23 @@ While the single-writer architecture eliminates write-write races between User P
 **Strategy selection:**
 - Use **Task-based** for normal operation, maximum performance, minimal overhead
 - Use **Channel-based** for high-frequency rebalance scenarios requiring backpressure, or memory-constrained environments
+
+### Runtime-Updatable Options
+
+A subset of cache configuration — `LeftCacheSize`, `RightCacheSize`, `LeftThreshold`, `RightThreshold`, and `DebounceDelay` — can be changed on a live cache instance without reconstruction via `IWindowCache.UpdateRuntimeOptions`.
+
+**Mechanism:**
+- `WindowCache` constructs a `RuntimeCacheOptionsHolder` from `WindowCacheOptions` at creation time.
+- The holder is shared (by reference) with all components that need configuration: `ProportionalRangePlanner`, `NoRebalanceRangePlanner`, `TaskBasedRebalanceExecutionController`, and `ChannelBasedRebalanceExecutionController`.
+- `UpdateRuntimeOptions` applies the builder's deltas to the current `RuntimeCacheOptions` snapshot, validates the result, then publishes the new snapshot via `Volatile.Write`.
+- All readers call `holder.Current` at the start of their operation — they always see the latest published snapshot.
+- `CurrentRuntimeOptions` returns `holder.Current.ToSnapshot()`, projecting the internal `RuntimeCacheOptions` to the public `RuntimeOptionsSnapshot` DTO. The snapshot is immutable; callers must re-read the property to observe later updates.
+
+**"Next cycle" semantics:** Changes take effect on the next rebalance decision/execution cycle. Ongoing cycles use the snapshot they already read.
+
+**Single-writer guarantee is not affected:** `RuntimeCacheOptionsHolder` is a separate shared reference from `CacheState`. Writing to it does not violate the single-writer rule (which covers cache content mutations only).
+
+**Non-updatable at runtime:** `ReadMode` (materialization strategy) and `RebalanceQueueCapacity` (execution controller selection) are determined at construction and cannot be changed.
 
 ### Intent Model (Signals, Not Commands)
 
@@ -137,7 +156,7 @@ The canonical formal definition of the validation pipeline is in `docs/invariant
 
 Cache state converges to optimal configuration asynchronously through decision-driven rebalance execution:
 
-1. **User Path** returns correct data immediately (from cache or `IDataSource`)
+1. **User Path** returns correct data immediately (from cache or `IDataSource`) and classifies the request as `FullHit`, `PartialHit`, or `FullMiss` — exposed on `RangeResult.CacheInteraction`
 2. **User Path** publishes intent with delivered data (synchronously in user thread — lightweight signal only)
 3. **Intent processing loop** (background) wakes on semaphore signal, reads latest intent via `Interlocked.Exchange`
 4. **Rebalance Decision Engine** validates rebalance necessity through multi-stage analytical pipeline (background intent loop — CPU-only, side-effect free)
@@ -197,7 +216,11 @@ Idle detection requires state-based semantics: when the system becomes idle, ALL
 
 **"Was idle" semantics — not "is idle":** `WaitForIdleAsync` completes when the system was idle at some point. It does not guarantee the system is still idle after completion. This is correct for eventual consistency models. Callers requiring stronger guarantees must re-check state after await.
 
-**Opt-in strong consistency mode:** For scenarios that require the cache to be fully converged before proceeding, the `GetDataAndWaitForIdleAsync` extension method on `IWindowCache` composes `GetDataAsync` and `WaitForIdleAsync` into a single call. This provides a convenient strong consistency mode on top of the default eventual consistency model, at the cost of waiting for rebalance to complete. See `README.md` and `docs/components/public-api.md` for usage details.
+**Opt-in consistency modes:** Two extension methods on `IWindowCache` layer consistency guarantees on top of the default eventual consistency model:
+- `GetDataAndWaitOnMissAsync` — **hybrid mode**: waits for idle only when `CacheInteraction` is `PartialHit` or `FullMiss`; returns immediately on `FullHit`. Provides warm-cache performance on hot paths while ensuring convergence on cold or near-boundary requests.
+- `GetDataAndWaitForIdleAsync` — **strong mode**: always waits for idle regardless of cache interaction type. Useful for cold start synchronization and integration tests.
+
+**Serialized access requirement:** Both extension methods provide their "cache has converged" guarantee only under serialized (one-at-a-time) access. Under parallel access the guarantee degrades: a caller may observe an already-completed (stale) idle `TaskCompletionSource` due to the gap between `Interlocked.Increment` (0→1) and `Volatile.Write` of the new TCS in `AsyncActivityCounter.IncrementActivity`. The methods remain safe (no deadlocks or data corruption) but may return before convergence is actually complete. See `README.md` and `docs/components/public-api.md` for usage details.
 
 ---
 

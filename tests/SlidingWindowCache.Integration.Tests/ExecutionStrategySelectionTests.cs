@@ -1,5 +1,6 @@
 using Intervals.NET.Domain.Default.Numeric;
 using SlidingWindowCache.Public;
+using SlidingWindowCache.Public.Cache;
 using SlidingWindowCache.Public.Configuration;
 using SlidingWindowCache.Public.Dto;
 using SlidingWindowCache.Tests.Infrastructure.DataSources;
@@ -97,10 +98,10 @@ public class ExecutionStrategySelectionTests
 
         // ACT - Rapid sequential requests (should trigger multiple rebalances)
         var tasks = new List<Task<RangeResult<int, string>>>();
-        for (int i = 0; i < 10; i++)
+        for (var i = 0; i < 10; i++)
         {
-            int start = i * 10;
-            int end = start + 10;
+            var start = i * 10;
+            var end = start + 10;
             tasks.Add(cache.GetDataAsync(Intervals.NET.Factories.Range.Closed<int>(start, end), CancellationToken.None).AsTask());
         }
 
@@ -173,10 +174,10 @@ public class ExecutionStrategySelectionTests
 
         // ACT - Rapid sequential requests (may experience backpressure)
         var tasks = new List<Task<RangeResult<int, string>>>();
-        for (int i = 0; i < 10; i++)
+        for (var i = 0; i < 10; i++)
         {
-            int start = i * 10;
-            int end = start + 10;
+            var start = i * 10;
+            var end = start + 10;
             tasks.Add(cache.GetDataAsync(Intervals.NET.Factories.Range.Closed<int>(start, end), CancellationToken.None).AsTask());
         }
 

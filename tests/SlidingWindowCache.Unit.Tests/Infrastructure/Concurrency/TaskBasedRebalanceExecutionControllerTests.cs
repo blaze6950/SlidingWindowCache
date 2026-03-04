@@ -40,7 +40,7 @@ public sealed class TaskBasedRebalanceExecutionControllerTests
 
         var controller = new TaskBasedRebalanceExecutionController<int, int, IntegerFixedStepDomain>(
             executor,
-            TimeSpan.Zero,
+            new RuntimeCacheOptionsHolder(new RuntimeCacheOptions(0, 0, null, null, TimeSpan.Zero)),
             diagnostics,
             activityCounter
         );

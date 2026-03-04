@@ -1,21 +1,25 @@
-﻿namespace SlidingWindowCache.Public.Configuration;
+﻿using SlidingWindowCache.Core.State;
+
+namespace SlidingWindowCache.Public.Configuration;
 
 /// <summary>
 /// Options for configuring the behavior of the sliding window cache.
 /// </summary>
 /// <remarks>
-/// <para><strong>Warning — record <c>with</c>-expressions bypass constructor validation:</strong></para>
+/// <para><strong>Immutability:</strong></para>
 /// <para>
-/// Because <see cref="WindowCacheOptions"/> is a <c>record</c> type, C# allows creating mutated copies
-/// via <c>with</c>-expressions (e.g., <c>options with { LeftThreshold = 0.9, RightThreshold = 0.9 }</c>).
-/// <c>with</c>-expressions do NOT invoke the constructor, so all validation guards are bypassed.
+/// <see cref="WindowCacheOptions"/> is a <c>sealed class</c> with get-only properties. All values
+/// are validated at construction time and cannot be changed on this object afterwards.
+/// Runtime-updatable options (cache sizes, thresholds, debounce delay) may be changed on a live
+/// cache instance via <see cref="SlidingWindowCache.Public.IWindowCache{TRange,TData,TDomain}.UpdateRuntimeOptions"/>.
 /// </para>
-/// <para>
-/// Always construct <see cref="WindowCacheOptions"/> using the primary constructor to ensure
-/// all invariants (range sizes ≥ 0, threshold sum ≤ 1.0, queue capacity > 0) are enforced.
-/// </para>
+/// <para><strong>Creation-time vs Runtime options:</strong></para>
+/// <list type="bullet">
+/// <item><description><strong>Creation-time only</strong> — <see cref="ReadMode"/>, <see cref="RebalanceQueueCapacity"/>: determine which concrete classes are instantiated and cannot change after construction.</description></item>
+/// <item><description><strong>Runtime-updatable</strong> — <see cref="LeftCacheSize"/>, <see cref="RightCacheSize"/>, <see cref="LeftThreshold"/>, <see cref="RightThreshold"/>, <see cref="DebounceDelay"/>: configure sliding window geometry and execution timing; may be updated on a live cache instance.</description></item>
+/// </list>
 /// </remarks>
-public record WindowCacheOptions
+public sealed class WindowCacheOptions : IEquatable<WindowCacheOptions>
 {
     /// <summary>
     /// Initializes a new instance of the <see cref="WindowCacheOptions"/> class.
@@ -37,7 +41,7 @@ public record WindowCacheOptions
     /// </param>
     /// <exception cref="ArgumentOutOfRangeException">
     /// Thrown when LeftCacheSize, RightCacheSize, LeftThreshold, RightThreshold is less than 0,
-    /// or when RebalanceQueueCapacity is less than or equal to 0.
+    /// when DebounceDelay is negative, or when RebalanceQueueCapacity is less than or equal to 0.
     /// </exception>
     /// <exception cref="ArgumentException">
     /// Thrown when the sum of LeftThreshold and RightThreshold exceeds 1.0.
@@ -52,57 +56,19 @@ public record WindowCacheOptions
         int? rebalanceQueueCapacity = null
     )
     {
-        if (leftCacheSize < 0)
-        {
-            throw new ArgumentOutOfRangeException(nameof(leftCacheSize),
-                "LeftCacheSize must be greater than or equal to 0.");
-        }
-
-        if (rightCacheSize < 0)
-        {
-            throw new ArgumentOutOfRangeException(nameof(rightCacheSize),
-                "RightCacheSize must be greater than or equal to 0.");
-        }
-
-        if (leftThreshold is < 0)
-        {
-            throw new ArgumentOutOfRangeException(nameof(leftThreshold),
-                "LeftThreshold must be greater than or equal to 0.");
-        }
-
-        if (rightThreshold is < 0)
-        {
-            throw new ArgumentOutOfRangeException(nameof(rightThreshold),
-                "RightThreshold must be greater than or equal to 0.");
-        }
-
-        if (leftThreshold is > 1.0)
-        {
-            throw new ArgumentOutOfRangeException(nameof(leftThreshold),
-                "LeftThreshold must not exceed 1.0.");
-        }
-
-        if (rightThreshold is > 1.0)
-        {
-            throw new ArgumentOutOfRangeException(nameof(rightThreshold),
-                "RightThreshold must not exceed 1.0.");
-        }
-
-        // Validate that thresholds don't overlap (sum must not exceed 1.0)
-        if (leftThreshold.HasValue && rightThreshold.HasValue &&
-            (leftThreshold.Value + rightThreshold.Value) > 1.0)
-        {
-            throw new ArgumentException(
-                $"The sum of LeftThreshold ({leftThreshold.Value:F6}) and RightThreshold ({rightThreshold.Value:F6}) " +
-                $"must not exceed 1.0 (actual sum: {leftThreshold.Value + rightThreshold.Value:F6}). " +
-                "Thresholds represent percentages of the total cache window that are shrunk from each side. " +
-                "When their sum exceeds 1.0, the shrinkage zones would overlap, creating an invalid configuration.");
-        }
+        RuntimeOptionsValidator.ValidateCacheSizesAndThresholds(
+            leftCacheSize, rightCacheSize, leftThreshold, rightThreshold);
 
         if (rebalanceQueueCapacity is <= 0)
         {
             throw new ArgumentOutOfRangeException(nameof(rebalanceQueueCapacity),
                 "RebalanceQueueCapacity must be greater than 0 or null.");
+        }
+
+        if (debounceDelay.HasValue && debounceDelay.Value < TimeSpan.Zero)
+        {
+            throw new ArgumentOutOfRangeException(nameof(debounceDelay),
+                "DebounceDelay must be non-negative.");
         }
 
         LeftCacheSize = leftCacheSize;
@@ -194,4 +160,40 @@ public record WindowCacheOptions
     /// </list>
     /// </remarks>
     public int? RebalanceQueueCapacity { get; }
+
+    /// <inheritdoc/>
+    public bool Equals(WindowCacheOptions? other)
+    {
+        if (other is null)
+        {
+            return false;
+        }
+
+        if (ReferenceEquals(this, other))
+        {
+            return true;
+        }
+
+        return LeftCacheSize.Equals(other.LeftCacheSize)
+               && RightCacheSize.Equals(other.RightCacheSize)
+               && ReadMode == other.ReadMode
+               && Nullable.Equals(LeftThreshold, other.LeftThreshold)
+               && Nullable.Equals(RightThreshold, other.RightThreshold)
+               && DebounceDelay == other.DebounceDelay
+               && RebalanceQueueCapacity == other.RebalanceQueueCapacity;
+    }
+
+    /// <inheritdoc/>
+    public override bool Equals(object? obj) => Equals(obj as WindowCacheOptions);
+
+    /// <inheritdoc/>
+    public override int GetHashCode() =>
+        HashCode.Combine(LeftCacheSize, RightCacheSize, ReadMode, LeftThreshold, RightThreshold, DebounceDelay, RebalanceQueueCapacity);
+
+    /// <summary>Determines whether two <see cref="WindowCacheOptions"/> instances are equal.</summary>
+    public static bool operator ==(WindowCacheOptions? left, WindowCacheOptions? right) =>
+        left?.Equals(right) ?? right is null;
+
+    /// <summary>Determines whether two <see cref="WindowCacheOptions"/> instances are not equal.</summary>
+    public static bool operator !=(WindowCacheOptions? left, WindowCacheOptions? right) => !(left == right);
 }

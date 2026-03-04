@@ -50,7 +50,7 @@ Invariant ownership
 - 24f. Delivered data represents what user actually received
 
 Components
-- `WindowCache<TRange, TData, TDomain>` (facade / composition root)
+- `WindowCache<TRange, TData, TDomain>` (facade / composition root; also owns `RuntimeCacheOptionsHolder` and exposes `UpdateRuntimeOptions`)
 - `UserRequestHandler<TRange, TData, TDomain>`
 - `CacheDataExtensionService<TRange, TData, TDomain>`
 
@@ -77,8 +77,8 @@ Invariant ownership
 - 35. Threshold sum constraint (leftThreshold + rightThreshold ≤ 1.0)
 
 Components
-- `ProportionalRangePlanner<TRange, TDomain>` — computes `DesiredCacheRange`
-- `NoRebalanceSatisfactionPolicy<TRange>` / `NoRebalanceRangePlanner<TRange, TDomain>` — computes `NoRebalanceRange`
+- `ProportionalRangePlanner<TRange, TDomain>` — computes `DesiredCacheRange`; reads configuration from `RuntimeCacheOptionsHolder` at invocation time
+- `NoRebalanceSatisfactionPolicy<TRange>` / `NoRebalanceRangePlanner<TRange, TDomain>` — computes `NoRebalanceRange`; reads configuration from `RuntimeCacheOptionsHolder` at invocation time
 
 ---
 

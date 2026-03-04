@@ -1,6 +1,6 @@
 # Sliding Window Cache
 
-A read-only, range-based, sequential-optimized cache with decision-driven background rebalancing, smart eventual consistency, and intelligent work avoidance.
+A read-only, range-based, sequential-optimized cache with decision-driven background rebalancing, three consistency modes (eventual/hybrid/strong), and intelligent work avoidance.
 
 [![CI/CD](https://github.com/blaze6950/SlidingWindowCache/actions/workflows/slidingwindowcache.yml/badge.svg)](https://github.com/blaze6950/SlidingWindowCache/actions/workflows/slidingwindowcache.yml)
 [![NuGet](https://img.shields.io/nuget/v/SlidingWindowCache.svg)](https://www.nuget.org/packages/SlidingWindowCache/)
@@ -17,6 +17,7 @@ Optimized for access patterns that move predictably across a domain (scrolling, 
 - Single-writer architecture: only rebalance execution mutates shared cache state
 - Decision-driven execution: multi-stage analytical validation prevents thrashing and unnecessary I/O
 - Smart eventual consistency: cache converges to optimal configuration while avoiding unnecessary work
+- Opt-in hybrid or strong consistency via extension methods (`GetDataAndWaitOnMissAsync`, `GetDataAndWaitForIdleAsync`)
 
 For the canonical architecture docs, see `docs/architecture.md`.
 
@@ -126,7 +127,7 @@ Key points:
 2. **Decision happens in background** — CPU-only validation (microseconds) in the intent processing loop
 3. **Work avoidance prevents thrashing** — validation may skip rebalance entirely if unnecessary
 4. **Only I/O happens asynchronously** — debounce + data fetching + cache updates run in background
-5. **Smart eventual consistency** — cache converges to optimal state while avoiding unnecessary operations
+5. **Smart eventual consistency** — cache converges to optimal state while avoiding unnecessary operations; opt-in hybrid or strong consistency via extension methods
 
 ## Materialization for Fast Access
 
@@ -143,23 +144,17 @@ For detailed comparison and guidance, see `docs/storage-strategies.md`.
 
 ```csharp
 using SlidingWindowCache;
-using SlidingWindowCache.Configuration;
+using SlidingWindowCache.Public.Cache;
+using SlidingWindowCache.Public.Configuration;
 using Intervals.NET;
 using Intervals.NET.Domain.Default.Numeric;
 
-var options = new WindowCacheOptions(
-    leftCacheSize: 1.0,    // Cache 100% of requested range size to the left
-    rightCacheSize: 2.0,   // Cache 200% of requested range size to the right
-    leftThreshold: 0.2,    // Rebalance if <20% left buffer remains
-    rightThreshold: 0.2    // Rebalance if <20% right buffer remains
-);
-
-var cache = WindowCache<int, string, IntegerFixedStepDomain>.Create(
-    dataSource: myDataSource,
-    domain: new IntegerFixedStepDomain(),
-    options: options,
-    readMode: UserCacheReadMode.Snapshot
-);
+await using var cache = WindowCacheBuilder.For(myDataSource, new IntegerFixedStepDomain())
+    .WithOptions(o => o
+        .WithCacheSize(left: 1.0, right: 2.0)   // 100% left / 200% right of requested range
+        .WithReadMode(UserCacheReadMode.Snapshot)
+        .WithThresholds(0.2))                    // rebalance if <20% buffer remains
+    .Build();
 
 var result = await cache.GetDataAsync(Range.Closed(100, 200), cancellationToken);
 
@@ -167,9 +162,47 @@ foreach (var item in result.Data.Span)
     Console.WriteLine(item);
 ```
 
+## Implementing a Data Source
+
+Implement `IDataSource<TRange, TData>` to connect the cache to your backing store. The `FetchAsync` single-range overload is the only method you must provide; the batch overload has a default implementation that parallelizes single-range calls.
+
+### FuncDataSource — inline without a class
+
+`FuncDataSource<TRange, TData>` wraps an async delegate so you can create a data source in one expression:
+
+```csharp
+using SlidingWindowCache.Public;
+using SlidingWindowCache.Public.Dto;
+
+// Unbounded source — always returns data for any range
+IDataSource<int, string> source = new FuncDataSource<int, string>(
+    async (range, ct) =>
+    {
+        var data = await myService.QueryAsync(range, ct);
+        return new RangeChunk<int, string>(range, data);
+    });
+```
+
+For **bounded** sources (database with min/max IDs, time-series with temporal limits), return a `RangeChunk` with `Range = null` when no data is available — never throw:
+
+```csharp
+IDataSource<int, Record> bounded = new FuncDataSource<int, Record>(
+    async (range, ct) =>
+    {
+        var available = range.Intersect(Range.Closed(minId, maxId));
+        if (available is null)
+            return new RangeChunk<int, Record>(null, []);
+
+        var records = await db.FetchAsync(available, ct);
+        return new RangeChunk<int, Record>(available, records);
+    });
+```
+
+For sources where a dedicated class is warranted (custom batch optimization, retry logic, dependency injection), implement `IDataSource<TRange, TData>` directly. See `docs/boundary-handling.md` for the full boundary contract.
+
 ## Boundary Handling
 
-`GetDataAsync` returns `RangeResult<TRange, TData>` where `Range` may be `null` when the data source has no data for the requested range. Always check before accessing data:
+`GetDataAsync` returns `RangeResult<TRange, TData>` where `Range` may be `null` when the data source has no data for the requested range, and `CacheInteraction` indicates whether the request was a `FullHit`, `PartialHit`, or `FullMiss`. Always check `Range` before accessing data:
 
 ```csharp
 var result = await cache.GetDataAsync(Range.Closed(100, 200), ct);
@@ -267,6 +300,51 @@ var options = new WindowCacheOptions(
 );
 ```
 
+## Runtime Options Update
+
+Cache sizing, threshold, and debounce options can be changed on a live cache instance without recreation. Updates take effect on the **next rebalance decision/execution cycle**.
+
+```csharp
+// Change left and right cache sizes at runtime
+cache.UpdateRuntimeOptions(update =>
+    update.WithLeftCacheSize(3.0)
+          .WithRightCacheSize(3.0));
+
+// Change debounce delay
+cache.UpdateRuntimeOptions(update =>
+    update.WithDebounceDelay(TimeSpan.Zero));
+
+// Change thresholds — or clear a threshold to null
+cache.UpdateRuntimeOptions(update =>
+    update.WithLeftThreshold(0.15)
+          .ClearRightThreshold());
+```
+
+`UpdateRuntimeOptions` uses a **fluent builder** (`RuntimeOptionsUpdateBuilder`). Only fields explicitly set via builder calls are changed — all other options remain at their current values.
+
+**Constraints:**
+- `ReadMode` and `RebalanceQueueCapacity` are creation-time only and cannot be changed at runtime.
+- All validation rules from construction still apply (`ArgumentOutOfRangeException` for negative sizes, `ArgumentException` for threshold sum > 1.0, etc.). A failed update leaves the current options unchanged — no partial application.
+- Calling `UpdateRuntimeOptions` on a disposed cache throws `ObjectDisposedException`.
+
+**`LayeredWindowCache`** delegates `UpdateRuntimeOptions` to the outermost (user-facing) layer. To update a specific inner layer, use the `Layers` property (see Multi-Layer Cache below).
+
+## Reading Current Runtime Options
+
+Use `CurrentRuntimeOptions` to inspect the live option values on any cache instance. It returns a `RuntimeOptionsSnapshot` — a read-only point-in-time copy of the five runtime-updatable values.
+
+```csharp
+var snapshot = cache.CurrentRuntimeOptions;
+Console.WriteLine($"Left: {snapshot.LeftCacheSize}, Right: {snapshot.RightCacheSize}");
+
+// Useful for relative updates — double the current left size:
+var current = cache.CurrentRuntimeOptions;
+cache.UpdateRuntimeOptions(u => u.WithLeftCacheSize(current.LeftCacheSize * 2));
+```
+
+The snapshot is immutable. Subsequent calls to `UpdateRuntimeOptions` do not affect previously obtained snapshots — obtain a new snapshot to see updated values.
+
+- Calling `CurrentRuntimeOptions` on a disposed cache throws `ObjectDisposedException`.
 ## Diagnostics
 
 ⚠️ **CRITICAL: You MUST handle `RebalanceExecutionFailed` in production.** Rebalance operations run in background tasks. Without handling this event, failures are silently swallowed and the cache stops rebalancing with no indication.
@@ -320,9 +398,50 @@ Canonical guide: `docs/diagnostics.md`.
 6. `docs/state-machine.md` — formal state transitions and mutation ownership
 7. `docs/actors.md` — actor responsibilities and execution contexts
 
-## Strong Consistency Mode
+## Consistency Modes
 
-By default, `GetDataAsync` is **eventually consistent**: data is returned immediately while the cache window converges asynchronously in the background. For scenarios where you need the cache to be fully converged before proceeding, use the `GetDataAndWaitForIdleAsync` extension method:
+By default, `GetDataAsync` is **eventually consistent**: data is returned immediately while the cache window converges asynchronously in the background. Two opt-in extension methods provide stronger consistency guarantees. Both require a `using SlidingWindowCache.Public;` import.
+
+> **Serialized access requirement:** The hybrid and strong consistency modes provide their warm-cache guarantee only when requests are made one at a time (serialized). Under concurrent/parallel callers they remain safe (no crashes or hangs) but the guarantee degrades — due to `AsyncActivityCounter`'s "was idle at some point" semantics (Invariant H.49) and a brief gap between the counter increment and TCS publication in `IncrementActivity`, a concurrent waiter may observe a previously completed idle TCS and return without waiting for the new rebalance.
+
+### Eventual Consistency (Default)
+
+```csharp
+// Returns immediately; rebalance converges asynchronously in background
+var result = await cache.GetDataAsync(Range.Closed(100, 200), cancellationToken);
+```
+
+Use for all hot paths and rapid sequential access. No latency beyond data assembly.
+
+### Hybrid Consistency — `GetDataAndWaitOnMissAsync`
+
+```csharp
+using SlidingWindowCache.Public;
+
+// Waits for idle only if the request was a PartialHit or FullMiss; returns immediately on FullHit
+var result = await cache.GetDataAndWaitOnMissAsync(
+    Range.Closed(100, 200),
+    cancellationToken);
+
+// result.CacheInteraction tells you which path was taken:
+// CacheInteraction.FullHit     → returned immediately (no wait)
+// CacheInteraction.PartialHit  → waited for cache to converge
+// CacheInteraction.FullMiss    → waited for cache to converge
+if (result.Range.HasValue)
+    ProcessData(result.Data);
+```
+
+**When to use:**
+- Warm-cache fast path: pays no penalty on cache hits, still waits on misses
+- Access patterns where most requests are hits but you want convergence on misses
+
+**When NOT to use:**
+- First request (always a miss — pays full debounce + I/O wait)
+- Hot paths with many misses
+
+> **Cancellation:** If the cancellation token fires during the idle wait (after `GetDataAsync` has already returned data), the method catches `OperationCanceledException` and returns the already-obtained result gracefully — degrading to eventual consistency for that call. The background rebalance is not affected.
+
+### Strong Consistency — `GetDataAndWaitForIdleAsync`
 
 ```csharp
 using SlidingWindowCache.Public;
@@ -347,17 +466,30 @@ This is a thin composition of `GetDataAsync` followed by `WaitForIdleAsync`. The
 **When NOT to use:**
 - Hot paths or rapid sequential requests — each call waits for full rebalance, which includes the debounce delay plus data fetching. For normal usage, the default eventual consistency model is faster.
 
+> **Cancellation:** If the cancellation token fires during the idle wait (after `GetDataAsync` has already returned data), the method catches `OperationCanceledException` and returns the already-obtained result gracefully — degrading to eventual consistency for that call. The background rebalance is not affected.
+
 ### Deterministic Testing
 
 `WaitForIdleAsync()` provides race-free synchronization with background operations for tests. Uses "was idle at some point" semantics — does not guarantee still idle after completion. See `docs/invariants.md` (Activity tracking invariants).
+
+### CacheInteraction on RangeResult
+
+Every `RangeResult` carries a `CacheInteraction` property classifying the request:
+
+| Value        | Meaning                                                                         |
+|--------------|---------------------------------------------------------------------------------|
+| `FullHit`    | Entire requested range was served from cache                                    |
+| `PartialHit` | Request partially overlapped the cache; missing part fetched from `IDataSource` |
+| `FullMiss`   | No overlap (cold start or jump); full range fetched from `IDataSource`          |
+
+This is the per-request programmatic alternative to the `UserRequestFullCacheHit` / `UserRequestPartialCacheHit` / `UserRequestFullCacheMiss` diagnostics callbacks.
 
 ## Multi-Layer Cache
 
 For workloads with high-latency data sources, you can compose multiple `WindowCache` instances into a layered stack. Each layer uses the layer below it as its data source, allowing you to trade memory for reduced data-source I/O.
 
 ```csharp
-await using var cache = LayeredWindowCacheBuilder<int, byte[], IntegerFixedStepDomain>
-    .Create(realDataSource, domain)
+await using var cache = WindowCacheBuilder.Layered(realDataSource, domain)
     .AddLayer(new WindowCacheOptions(        // L2: deep background cache
         leftCacheSize: 10.0,
         rightCacheSize: 10.0,
@@ -374,6 +506,21 @@ var result = await cache.GetDataAsync(range, ct);
 ```
 
 `LayeredWindowCache` implements `IWindowCache` and is `IAsyncDisposable` — it owns and disposes all layers when you dispose it.
+
+**Accessing and updating individual layers:**
+
+Use the `Layers` property to access any specific layer by index (0 = innermost, last = outermost). Each layer exposes the full `IWindowCache` interface:
+
+```csharp
+// Update options on the innermost (deep background) layer
+layeredCache.Layers[0].UpdateRuntimeOptions(u => u.WithLeftCacheSize(8.0));
+
+// Inspect the outermost (user-facing) layer's current options
+var outerOptions = layeredCache.Layers[^1].CurrentRuntimeOptions;
+
+// cache.UpdateRuntimeOptions() is shorthand for Layers[^1].UpdateRuntimeOptions()
+layeredCache.UpdateRuntimeOptions(u => u.WithRightCacheSize(1.0));
+```
 
 **Recommended layer configuration pattern:**
 - **Inner layers** (closest to the data source): `CopyOnRead`, large buffer sizes (5–10×), handles the heavy prefetching
@@ -393,8 +540,7 @@ var result = await cache.GetDataAsync(range, ct);
 
 **Three-layer example:**
 ```csharp
-await using var cache = LayeredWindowCacheBuilder<int, byte[], IntegerFixedStepDomain>
-    .Create(realDataSource, domain)
+await using var cache = WindowCacheBuilder.Layered(realDataSource, domain)
     .AddLayer(l3Options)   // L3: 10× CopyOnRead — network/disk absorber
     .AddLayer(l2Options)   // L2: 2× CopyOnRead  — mid-level buffer
     .AddLayer(l1Options)   // L1: 0.5× Snapshot  — user-facing

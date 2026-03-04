@@ -23,11 +23,13 @@ All user-path code executes on the **⚡ User Thread** (the caller's thread). No
 
 ## Operation Flow
 
-1. **Cold-start check** — `!state.IsInitialized`: fetch full range from `IDataSource` and serve directly.
-2. **Full cache hit** — `RequestedRange ⊆ Cache.Range`: read directly from storage (zero allocation for Snapshot mode).
-3. **Partial cache hit** — intersection exists: serve cached portion + fetch missing segments via `CacheDataExtensionService`.
-4. **Full cache miss** — no intersection: fetch full range from `IDataSource` directly.
+1. **Cold-start check** — `!state.IsInitialized`: fetch full range from `IDataSource` and serve directly; `CacheInteraction = FullMiss`.
+2. **Full cache hit** — `RequestedRange ⊆ Cache.Range`: read directly from storage (zero allocation for Snapshot mode); `CacheInteraction = FullHit`.
+3. **Partial cache hit** — intersection exists: serve cached portion + fetch missing segments via `CacheDataExtensionService`; `CacheInteraction = PartialHit`.
+4. **Full cache miss** — no intersection: fetch full range from `IDataSource` directly; `CacheInteraction = FullMiss`.
 5. **Publish intent** — fire-and-forget; passes `deliveredData` to `IntentController.PublishIntent` and returns immediately.
+
+`CacheInteraction` is classified during scenario detection (steps 1–4) and set on the `RangeResult` returned to the caller (Invariant A.10b).
 
 ## Responsibilities
 
@@ -51,6 +53,8 @@ All user-path code executes on the **⚡ User Thread** (the caller's thread). No
 | A.4       | Intent publication is fire-and-forget (background only)                                                                                                                                |
 | A.5       | User path is strictly read-only w.r.t. `CacheState`                                                                                                                                    |
 | A.10      | Returns exactly `RequestedRange` data                                                                                                                                                  |
+| A.10a     | `RangeResult` contains `Range`, `Data`, and `CacheInteraction` — all set by `UserRequestHandler`                                                                                       |
+| A.10b     | `CacheInteraction` accurately reflects the cache scenario: `FullMiss` (cold start / jump), `FullHit` (fully cached), `PartialHit` (partial overlap)                                    |
 | G.45      | I/O isolation: `IDataSource` called on user's behalf from User Thread (partial hits) or Background Thread (rebalance execution); shared `CacheDataExtensionService` used by both paths |
 
 See `docs/invariants.md` (Section A: User Path invariants) for full specification.

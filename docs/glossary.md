@@ -50,7 +50,7 @@ RangeChunk
 - See `docs/boundary-handling.md`.
 
 RangeResult
-- The public API return from `GetDataAsync`: the delivered `Range<TRange>?` and the materialized data.
+- The public API return from `GetDataAsync`: the delivered `Range<TRange>?`, the materialized data, and the `CacheInteraction` classification (`FullHit`, `PartialHit`, or `FullMiss`).
 - See `docs/boundary-handling.md`.
 
 ## Architectural Concepts
@@ -107,11 +107,41 @@ AsyncActivityCounter
 WaitForIdleAsync (“Was Idle” Semantics)
 - Completes when the system was idle at some point, which is appropriate for tests and convergence checks.
 - It does not guarantee the system is still idle after the task completes.
+- Under serialized (one-at-a-time) access this is sufficient for hybrid and strong consistency guarantees. Under parallel access the guarantee degrades: a caller may observe an already-completed (stale) idle TCS if another thread incremented the activity counter between the 0→1 transition and the new TCS publication. See Invariant H.49 and `docs/architecture.md`.
+
+CacheInteraction
+- A per-request classification set on every `RangeResult` by `UserRequestHandler`, indicating how the cache contributed to serving the request.
+- Values: `FullHit` (request fully served from cache), `PartialHit` (request partially served from cache; missing portion fetched from `IDataSource`), `FullMiss` (cache was uninitialized or had no overlap; full range fetched from `IDataSource`).
+- Provides a programmatic per-request alternative to the aggregate `ICacheDiagnostics` callbacks (`UserRequestFullCacheHit`, `UserRequestPartialCacheHit`, `UserRequestFullCacheMiss`).
+- See `docs/invariants.md` (A.10a, A.10b) and `docs/boundary-handling.md`.
+
+Hybrid Consistency Mode
+- An opt-in mode provided by the `GetDataAndWaitOnMissAsync` extension method on `IWindowCache`.
+- Composes `GetDataAsync` with conditional `WaitForIdleAsync`: waits only when `CacheInteraction` is `PartialHit` or `FullMiss`; returns immediately on `FullHit`.
+- Provides warm-cache-speed hot paths with convergence guarantees on cold or near-boundary requests.
+- The convergence guarantee holds only under serialized (one-at-a-time) access; under parallel access the "was idle" semantics may return a stale completed TCS.
+- If cancellation is requested during the idle wait, the already-obtained result is returned gracefully (degrades to eventual consistency for that call); the background rebalance is not affected.
+- See `README.md` and `docs/components/public-api.md`.
+
+Serialized Access
+- An access pattern in which calls to a cache are issued one at a time (each call completes before the next begins).
+- Required for the `GetDataAndWaitOnMissAsync` and `GetDataAndWaitForIdleAsync` extension methods to provide their “cache has converged” guarantee.
+- Under parallel access the extension methods remain safe (no deadlocks or data corruption) but the idle-wait may return early due to `AsyncActivityCounter`’s “was idle at some point” semantics (see Invariant H.49).
+
+GetDataAndWaitOnMissAsync
+- Extension method on `IWindowCache` providing hybrid consistency mode.
+- Calls `GetDataAsync`, then conditionally calls `WaitForIdleAsync` only when the result's `CacheInteraction` is not `FullHit`.
+- On `FullHit`, returns immediately (no idle wait). On `PartialHit` or `FullMiss`, waits for the cache to converge.
+- If `WaitForIdleAsync` throws `OperationCanceledException`, the already-obtained result is returned gracefully (degrades to eventual consistency); the background rebalance continues.
+- See `Hybrid Consistency Mode` above and `docs/components/public-api.md`.
 
 Strong Consistency Mode
 - An opt-in mode provided by the `GetDataAndWaitForIdleAsync` extension method on `IWindowCache`.
 - Composes `GetDataAsync` (returns data immediately) with `WaitForIdleAsync` (waits for convergence), returning the same `RangeResult` as `GetDataAsync` but only after the cache has reached an idle state.
+- Unlike hybrid mode, always waits regardless of `CacheInteraction` value.
 - Useful for cold start synchronization, integration testing, and any scenario requiring a guarantee that the cache window has converged before proceeding.
+- The convergence guarantee holds only under serialized (one-at-a-time) access; see `Serialized Access` above.
+- If `WaitForIdleAsync` throws `OperationCanceledException`, the already-obtained result is returned gracefully (degrades to eventual consistency for that call); the background rebalance continues.
 - Not recommended for hot paths: adds latency equal to the rebalance execution time (debounce delay + I/O).
 - See `README.md` and `docs/components/public-api.md`.
 
@@ -133,10 +163,10 @@ WindowCacheDataSourceAdapter
 - Adapts an `IWindowCache` to the `IDataSource` interface, enabling it to act as the backing store for an outer `WindowCache`. This is the composition point for building layered caches. The adapter does not own the inner cache; ownership is managed by `LayeredWindowCache`. See `src/SlidingWindowCache/Public/WindowCacheDataSourceAdapter.cs`.
 
 LayeredWindowCacheBuilder
-- Fluent builder that wires `WindowCache` layers into a `LayeredWindowCache`. Layers are added bottom-up (deepest/innermost first, user-facing last). Each `AddLayer` call adds one `WindowCache` on top of the current stack. `Build()` returns a `LayeredWindowCache` that owns all layers. See `src/SlidingWindowCache/Public/LayeredWindowCacheBuilder.cs`.
+- Fluent builder that wires `WindowCache` layers into a `LayeredWindowCache`. Obtain an instance via `WindowCacheBuilder.Layered(dataSource, domain)`. Layers are added bottom-up (deepest/innermost first, user-facing last). Each `AddLayer` call accepts either a pre-built `WindowCacheOptions` or an `Action<WindowCacheOptionsBuilder>` for inline configuration. `Build()` returns `IWindowCache<>` (concrete type: `LayeredWindowCache<>`). See `src/SlidingWindowCache/Public/Cache/LayeredWindowCacheBuilder.cs`.
 
 LayeredWindowCache
-- A thin `IWindowCache` wrapper that owns a stack of `WindowCache` layers. Delegates `GetDataAsync` to the outermost layer. `WaitForIdleAsync` awaits all layers sequentially, outermost to innermost, ensuring full-stack convergence (required for correct behavior of `GetDataAndWaitForIdleAsync`). Disposes all layers outermost-first on `DisposeAsync`. Exposes `LayerCount`. See `src/SlidingWindowCache/Public/LayeredWindowCache.cs`.
+- A thin `IWindowCache` wrapper that owns a stack of `WindowCache` layers. Delegates `GetDataAsync` to the outermost layer. `WaitForIdleAsync` awaits all layers sequentially, outermost to innermost, ensuring full-stack convergence (required for correct behavior of `GetDataAndWaitForIdleAsync`). Disposes all layers outermost-first on `DisposeAsync`. Exposes `LayerCount` and `Layers`. See `src/SlidingWindowCache/Public/LayeredWindowCache.cs`.
 
 ## Storage And Materialization
 
@@ -161,6 +191,44 @@ ICacheDiagnostics
 
 NoOpDiagnostics
 - The default diagnostics implementation that does nothing (intended to be effectively zero overhead).
+
+UpdateRuntimeOptions
+- A method on `IWindowCache` (and its implementations) that updates cache sizing, threshold, and debounce options on a live cache instance without reconstruction.
+- Takes an `Action<RuntimeOptionsUpdateBuilder>` callback; only fields set via builder calls are changed (all others remain at current values).
+- Updates use **next-cycle semantics**: changed values take effect on the next rebalance decision/execution cycle.
+- Throws `ObjectDisposedException` if called after disposal.
+- Throws `ArgumentOutOfRangeException` / `ArgumentException` if the resulting options would be invalid; invalid updates leave the current options unchanged.
+- `ReadMode` and `RebalanceQueueCapacity` are creation-time only and cannot be changed at runtime.
+
+RuntimeOptionsUpdateBuilder
+- Public fluent builder passed to the `UpdateRuntimeOptions` callback.
+- Exposes `WithLeftCacheSize`, `WithRightCacheSize`, `WithLeftThreshold`, `ClearLeftThreshold`, `WithRightThreshold`, `ClearRightThreshold`, and `WithDebounceDelay`.
+- `ClearLeftThreshold` / `ClearRightThreshold` explicitly set the threshold to `null`, distinguishing "don't change" from "set to null".
+- Constructed internally; constructor is `internal`.
+
+RuntimeOptionsValidator
+- Internal static helper class that contains the shared validation logic for cache sizes and thresholds.
+- Used by both `WindowCacheOptions` and `RuntimeCacheOptions` to avoid duplicated validation rules.
+- Validates: cache sizes ≥ 0, individual thresholds in [0, 1], threshold sum ≤ 1.0 when both thresholds are provided.
+- See `src/SlidingWindowCache/Core/State/RuntimeOptionsValidator.cs`.
+
+RuntimeCacheOptions
+- Internal immutable snapshot of the runtime-updatable subset of cache configuration: `LeftCacheSize`, `RightCacheSize`, `LeftThreshold`, `RightThreshold`, `DebounceDelay`.
+- Created from `WindowCacheOptions` at construction time and republished on each `UpdateRuntimeOptions` call.
+- All validation rules match `WindowCacheOptions` (negative sizes rejected, threshold sum ≤ 1.0 when both specified).
+- Exposes `ToSnapshot()` which projects the internal values to a public `RuntimeOptionsSnapshot`.
+
+RuntimeOptionsSnapshot
+- Public read-only DTO that captures the current values of the five runtime-updatable options.
+- Obtained via `IWindowCache.CurrentRuntimeOptions`.
+- Immutable — a snapshot of values at the moment the property was read. Subsequent `UpdateRuntimeOptions` calls do not affect previously obtained snapshots.
+- Constructor is `internal`; created only via `RuntimeCacheOptions.ToSnapshot()`.
+- See `src/SlidingWindowCache/Public/Configuration/RuntimeOptionsSnapshot.cs`.
+
+RuntimeCacheOptionsHolder
+- Internal volatile wrapper that holds the current `RuntimeCacheOptions` snapshot.
+- Readers (planners, execution controllers) call `holder.Current` at invocation time — always see the latest published snapshot.
+- `Update(RuntimeCacheOptions)` publishes atomically via `Volatile.Write`.
 
 ## Common Misconceptions
 

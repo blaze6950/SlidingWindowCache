@@ -78,7 +78,33 @@ Configuration parameters:
 
 **File**: `src/SlidingWindowCache/Public/DTO/RangeResult.cs`
 
-Returned by `GetDataAsync`. `Range` may be null for physical boundary misses (when `IDataSource` returns null for the requested range).
+Returned by `GetDataAsync`. Contains three properties:
+
+| Property           | Type                    | Description                                                                                                                 |
+|--------------------|-------------------------|-----------------------------------------------------------------------------------------------------------------------------|
+| `Range`            | `Range<TRange>?`        | **Nullable**. The actual range returned. `null` indicates no data available (physical boundary miss).                       |
+| `Data`             | `ReadOnlyMemory<TData>` | The materialized data. Empty when `Range` is `null`.                                                                        |
+| `CacheInteraction` | `CacheInteraction`      | How the request was served: `FullHit` (from cache), `PartialHit` (cache + fetch), or `FullMiss` (cold start or jump fetch). |
+
+`RangeResult` constructor is `internal`; instances are created exclusively by `UserRequestHandler`.
+
+### CacheInteraction
+
+**File**: `src/SlidingWindowCache/Public/Dto/CacheInteraction.cs`
+
+**Type**: `enum`
+
+Classifies how a `GetDataAsync` request was served relative to the current cache state.
+
+| Value        | Meaning                                                                                         |
+|--------------|-------------------------------------------------------------------------------------------------|
+| `FullMiss`   | Cache was uninitialized (cold start) or `RequestedRange` did not intersect `CurrentCacheRange`. |
+| `FullHit`    | `RequestedRange` was fully contained within `CurrentCacheRange`.                                |
+| `PartialHit` | `RequestedRange` partially overlapped `CurrentCacheRange`; missing segments were fetched.       |
+
+**Usage**: Inspect `result.CacheInteraction` to branch on cache efficiency per request. The `GetDataAndWaitOnMissAsync` extension method uses this value to decide whether to call `WaitForIdleAsync`.
+
+**Note**: `ICacheDiagnostics` provides the same three-way classification via `UserRequestFullCacheHit`, `UserRequestPartialCacheHit`, and `UserRequestFullCacheMiss` callbacks — those are aggregate counters; `CacheInteraction` is the per-request programmatic alternative.
 
 ### RangeChunk\<TRange, TData\>
 
@@ -111,13 +137,37 @@ Optional observability interface with 18 event recording methods covering:
 
 ## Extensions
 
-### WindowCacheExtensions
+### WindowCacheConsistencyExtensions
 
-**File**: `src/SlidingWindowCache/Public/WindowCacheExtensions.cs`
+**File**: `src/SlidingWindowCache/Public/WindowCacheConsistencyExtensions.cs`
 
 **Type**: `static class` (extension methods on `IWindowCache<TRange, TData, TDomain>`)
 
-Provides opt-in strong consistency mode on top of the default eventual consistency model.
+Provides opt-in hybrid and strong consistency modes on top of the default eventual consistency model.
+
+#### GetDataAndWaitOnMissAsync
+
+```csharp
+ValueTask<RangeResult<TRange, TData>> GetDataAndWaitOnMissAsync<TRange, TData, TDomain>(
+    this IWindowCache<TRange, TData, TDomain> cache,
+    Range<TRange> requestedRange,
+    CancellationToken cancellationToken = default)
+```
+
+Composes `GetDataAsync` + conditional `WaitForIdleAsync` into a single call. Waits for idle only when `result.CacheInteraction != CacheInteraction.FullHit` — i.e., on cold start, jump, or partial hit where a rebalance was triggered. Returns immediately (no idle wait) on a `FullHit`.
+
+**When to use:**
+- Warm-cache guarantee on the first request to a new region (cold start or jump)
+- Sequential access patterns where occasional rebalances should be awaited but hot hits should not
+- Lower overhead than `GetDataAndWaitForIdleAsync` for workloads with frequent `FullHit` results
+
+**When NOT to use:**
+- Parallel callers — the "warm cache after await" guarantee requires serialized (one-at-a-time) access (Invariant H.49)
+- Hot paths — even though `FullHit` skips the wait, missed requests still incur the full rebalance cycle delay
+
+**Idle semantics**: Inherits "was idle at some point" semantics from `WaitForIdleAsync` (Invariant H.49).
+
+**Exception propagation**: If `GetDataAsync` throws, `WaitForIdleAsync` is never called. If `WaitForIdleAsync` throws `OperationCanceledException`, the already-obtained result is returned (graceful degradation to eventual consistency). Other exceptions from `WaitForIdleAsync` propagate normally.
 
 #### GetDataAndWaitForIdleAsync
 
@@ -128,7 +178,7 @@ ValueTask<RangeResult<TRange, TData>> GetDataAndWaitForIdleAsync<TRange, TData, 
     CancellationToken cancellationToken = default)
 ```
 
-Composes `GetDataAsync` + `WaitForIdleAsync` into a single call. Returns the same `RangeResult<TRange, TData>` as `GetDataAsync`, but does not complete until the cache has reached an idle state (no pending intent, no executing rebalance).
+Composes `GetDataAsync` + `WaitForIdleAsync` into a single call. Always waits for idle regardless of `CacheInteraction`. Returns the same `RangeResult<TRange, TData>` as `GetDataAsync`, but does not complete until the cache has reached an idle state.
 
 **When to use:**
 - Asserting or inspecting cache geometry after a request (e.g., verifying a rebalance occurred)
@@ -138,12 +188,13 @@ Composes `GetDataAsync` + `WaitForIdleAsync` into a single call. Returns the sam
 **When NOT to use:**
 - Hot paths — the idle wait adds latency equal to the full rebalance cycle (debounce delay + data fetch + cache update)
 - Rapid sequential requests — eliminates debounce and work-avoidance benefits
+- Parallel callers — same serialized access requirement as `GetDataAndWaitOnMissAsync`
 
-**Idle semantics**: Inherits "was idle at some point" semantics from `WaitForIdleAsync` (Invariant H.49). Sufficient for all strong consistency use cases.
+**Idle semantics**: Inherits "was idle at some point" semantics from `WaitForIdleAsync` (Invariant H.49). Unlike `GetDataAndWaitOnMissAsync`, always waits even on `FullHit`.
 
-**Exception propagation**: If `GetDataAsync` throws, `WaitForIdleAsync` is never called. If `WaitForIdleAsync` throws, the `GetDataAsync` result is discarded.
+**Exception propagation**: If `GetDataAsync` throws, `WaitForIdleAsync` is never called. If `WaitForIdleAsync` throws `OperationCanceledException`, the already-obtained result is returned (graceful degradation to eventual consistency). Other exceptions from `WaitForIdleAsync` propagate normally.
 
-**See**: `README.md` (Strong Consistency Mode section) and `docs/architecture.md` for broader context.
+**See**: `README.md` (Consistency Modes section) and `docs/architecture.md` for broader context.
 
 ## Multi-Layer Cache
 
@@ -176,22 +227,21 @@ Typically created via `LayeredWindowCacheBuilder.Build()` rather than directly.
 
 ### LayeredWindowCacheBuilder\<TRange, TData, TDomain\>
 
-**File**: `src/SlidingWindowCache/Public/LayeredWindowCacheBuilder.cs`
+**File**: `src/SlidingWindowCache/Public/Cache/LayeredWindowCacheBuilder.cs`
 
 **Type**: `sealed class` — fluent builder
 
 ```csharp
-await using var cache = LayeredWindowCacheBuilder<int, byte[], IntegerFixedStepDomain>
-    .Create(realDataSource, domain)
+await using var cache = WindowCacheBuilder.Layered(realDataSource, domain)
     .AddLayer(deepOptions)   // L2: inner layer (CopyOnRead, large buffers)
     .AddLayer(userOptions)   // L1: outer layer (Snapshot, small buffers)
     .Build();
 ```
 
-- `Create(dataSource, domain)` — factory entry point; validates both `dataSource` and `domain` are not null.
-- `AddLayer(options, diagnostics?)` — adds a layer on top; first call = innermost layer, last call = outermost (user-facing).
-- `Build()` — constructs all `WindowCache` instances, wires them via `WindowCacheDataSourceAdapter`, and wraps them in `LayeredWindowCache`.
-- Throws `InvalidOperationException` from `Build()` if no layers were added.
+- Obtain an instance via `WindowCacheBuilder.Layered(dataSource, domain)` — enables full generic type inference.
+- `AddLayer(options, diagnostics?)` — adds a layer on top; first call = innermost layer, last call = outermost (user-facing). Also accepts `Action<WindowCacheOptionsBuilder>` for inline configuration.
+- `Build()` — constructs all `WindowCache` instances, wires them via `WindowCacheDataSourceAdapter`, and wraps them in `LayeredWindowCache`. Returns `IWindowCache<TRange, TData, TDomain>`; concrete type is `LayeredWindowCache<>`.
+- Throws `InvalidOperationException` from `Build()` if no layers were added, or if an inline delegate fails validation.
 
 **See**: `README.md` (Multi-Layer Cache section) and `docs/storage-strategies.md` for recommended layer configuration patterns.
 

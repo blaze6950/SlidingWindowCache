@@ -1,9 +1,9 @@
 using Intervals.NET.Domain.Default.Numeric;
-using SlidingWindowCache.Public;
+using SlidingWindowCache.Public.Cache;
 using SlidingWindowCache.Public.Configuration;
 using SlidingWindowCache.Tests.Infrastructure.DataSources;
 
-namespace SlidingWindowCache.Unit.Tests.Public;
+namespace SlidingWindowCache.Unit.Tests.Public.Cache;
 
 /// <summary>
 /// Unit tests for WindowCache disposal behavior.

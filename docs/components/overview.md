@@ -17,11 +17,15 @@ The system is easier to reason about when components are grouped by:
 ### Top-Level Component Roles
 
 - Public facade: `WindowCache<TRange, TData, TDomain>`
-- Public extensions: `WindowCacheExtensions` — opt-in strong consistency mode (`GetDataAndWaitForIdleAsync`)
+- Public extensions: `WindowCacheConsistencyExtensions` — opt-in hybrid and strong consistency modes (`GetDataAndWaitOnMissAsync`, `GetDataAndWaitForIdleAsync`)
+- Runtime configuration: `RuntimeOptionsUpdateBuilder` — fluent builder for `UpdateRuntimeOptions`; only fields explicitly set are changed
+- Runtime options snapshot: `RuntimeOptionsSnapshot` — public read-only DTO returned by `IWindowCache.CurrentRuntimeOptions`
+- Shared validation: `RuntimeOptionsValidator` — internal static helper; centralizes cache-size and threshold validation for both `WindowCacheOptions` and `RuntimeCacheOptions`
 - Multi-layer support: `WindowCacheDataSourceAdapter`, `LayeredWindowCacheBuilder`, `LayeredWindowCache`
 - User Path: assembles requested data and publishes intent
 - Intent loop: observes latest intent and runs analytical validation
 - Execution: performs debounced, cancellable rebalance work and mutates cache state
+- Execution controller base: `RebalanceExecutionControllerBase` — abstract base class for both `TaskBasedRebalanceExecutionController` and `ChannelBasedRebalanceExecutionController`; holds shared dependencies, implements `LastExecutionRequest`, `ExecuteRequestCoreAsync`, and `DisposeAsync`
 
 ### Component Index
 
@@ -47,14 +51,33 @@ The system is easier to reason about when components are grouped by:
     ├── 🟦 CacheState<TRange, TData, TDomain>              ⚠️ Shared Mutable
     ├── 🟦 IntentController<TRange, TData, TDomain>
     │   └── uses → 🟧 IRebalanceExecutionController<TRange, TData, TDomain>
-    │       ├── implements → 🟦 TaskBasedRebalanceExecutionController (default)
-    │       └── implements → 🟦 ChannelBasedRebalanceExecutionController (optional)
+    │       ├── implements → 🟦 TaskBasedRebalanceExecutionController (default, extends RebalanceExecutionControllerBase)
+    │       └── implements → 🟦 ChannelBasedRebalanceExecutionController (optional, extends RebalanceExecutionControllerBase)
     ├── 🟦 RebalanceDecisionEngine<TRange, TDomain>
     │   ├── owns → 🟩 NoRebalanceSatisfactionPolicy<TRange>
     │   └── owns → 🟩 ProportionalRangePlanner<TRange, TDomain>
     ├── 🟦 RebalanceExecutor<TRange, TData, TDomain>
     └── 🟦 CacheDataExtensionService<TRange, TData, TDomain>
         └── uses → 🟧 IDataSource<TRange, TData> (user-provided)
+
+──────────────────────────── Execution Controllers ────────────────────────────
+
+🟦 RebalanceExecutionControllerBase<TRange, TData, TDomain>   [Abstract base]
+│  Holds: Executor, OptionsHolder, CacheDiagnostics, ActivityCounter
+│  Implements: LastExecutionRequest, StoreLastExecutionRequest()
+│              ExecuteRequestCoreAsync() (shared debounce + execute pipeline)
+│              DisposeAsync() (idempotent guard + cancel + DisposeAsyncCore)
+│  Abstract: PublishExecutionRequest(...), DisposeAsyncCore()
+│
+├── implements → 🟦 TaskBasedRebalanceExecutionController (default)
+│                  Adds: lock-free task chain (_lastTask)
+│                  Overrides: PublishExecutionRequest → chains new task
+│                             DisposeAsyncCore → awaits task chain
+│
+└── implements → 🟦 ChannelBasedRebalanceExecutionController (optional)
+                   Adds: BoundedChannel<ExecutionRequest>, background loop task
+                   Overrides: PublishExecutionRequest → writes to channel
+                              DisposeAsyncCore → completes channel + awaits loop
 
 ──────────────────────────── Multi-Layer Support ────────────────────────────
 
@@ -75,9 +98,12 @@ The system is easier to reason about when components are grouped by:
 
 🟦 LayeredWindowCache<TRange, TData, TDomain>              [IWindowCache wrapper]
 │  LayerCount: int
-│  GetDataAsync()      → delegates to outermost WindowCache
-│  WaitForIdleAsync()  → awaits all layers sequentially, outermost to innermost
-│  DisposeAsync()      → disposes all layers outermost-first
+│  Layers: IReadOnlyList<IWindowCache<TRange, TData, TDomain>>
+│  GetDataAsync()              → delegates to outermost WindowCache
+│  WaitForIdleAsync()          → awaits all layers sequentially, outermost to innermost
+│  UpdateRuntimeOptions()      → delegates to outermost WindowCache
+│  CurrentRuntimeOptions       → delegates to outermost WindowCache
+│  DisposeAsync()              → disposes all layers outermost-first
 
 🟦 WindowCacheDataSourceAdapter<TRange, TData, TDomain>    [IDataSource adapter]
 │  Wraps IWindowCache as IDataSource
@@ -90,7 +116,8 @@ The system is easier to reason about when components are grouped by:
 - 🟩 STRUCT = Value type (stack-allocated or inline)
 - 🟧 INTERFACE = Contract definition
 - 🟪 ENUM = Value type enumeration
-- 🟨 RECORD = Reference type with value semantics
+
+> **Note:** `ProportionalRangePlanner` and `NoRebalanceRangePlanner` were previously `readonly struct` types. They are now `internal sealed class` types so they can hold a reference to the shared `RuntimeCacheOptionsHolder` and read configuration at invocation time.
 
 ## Ownership & Data Flow Diagram
 
@@ -107,6 +134,7 @@ The system is easier to reason about when components are grouped by:
 │                                                                            │
 │ Constructor wires:                                                         │
 │  • CacheState (shared mutable)                                             │
+│  • RuntimeCacheOptionsHolder (shared, volatile — runtime option updates)   │
 │  • UserRequestHandler                                                      │
 │  • CacheDataExtensionService                                               │
 │  • IntentController                                                        │
@@ -116,7 +144,9 @@ The system is easier to reason about when components are grouped by:
 │      └─ ProportionalRangePlanner                                           │
 │  • RebalanceExecutor                                                       │
 │                                                                            │
-│ GetDataAsync() → delegates to UserRequestHandler                           │
+│ GetDataAsync()           → delegates to UserRequestHandler                 │
+│ UpdateRuntimeOptions()   → updates OptionsHolder atomically                │
+│ CurrentRuntimeOptions    → returns OptionsHolder.Current.ToSnapshot()      │
 └────────────────────────────────────────────────────────────────────────────┘
 
 
@@ -213,6 +243,13 @@ The system is easier to reason about when components are grouped by:
 │ ICacheStorage implementations:                                             │
 │  • SnapshotReadStorage   (array — zero-alloc reads)                        │
 │  • CopyOnReadStorage     (List — cheap writes)                             │
+│                                                                            │
+│ RuntimeCacheOptionsHolder  [SHARED RUNTIME CONFIGURATION]                  │
+│                                                                            │
+│ Written by:  WindowCache.UpdateRuntimeOptions (Volatile.Write)             │
+│ Read by:     ProportionalRangePlanner, NoRebalanceRangePlanner,            │
+│              TaskBasedRebalanceExecutionController,                        │
+│              ChannelBasedRebalanceExecutionController                      │
 └────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -327,7 +364,7 @@ Previous execution cancelled before starting new one. Single `IRebalanceExecutio
 ### Pure Decision Logic
 **Invariants**: D.25, D.26
 
-`RebalanceDecisionEngine` has no mutable fields. Decision policies are structs with no side effects. No I/O in decision path. Pure function: `(state, intent, config) → decision`.
+`RebalanceDecisionEngine` has no mutable fields. Decision policies are classes with no side effects. No I/O in decision path. Pure function: `(state, intent, config) → decision`.
 
 - `src/SlidingWindowCache/Core/Rebalance/Decision/RebalanceDecisionEngine.cs` — pure evaluation logic
 - `src/SlidingWindowCache/Core/Planning/NoRebalanceSatisfactionPolicy.cs` — stateless struct
@@ -351,14 +388,14 @@ Five-stage pipeline with early exits. Stage 1: current `NoRebalanceRange` contai
 ### Desired Range Computation
 **Invariants**: E.30, E.31
 
-`ProportionalRangePlanner.Plan(requestedRange, config)` is a pure function — same inputs always produce same output. Never reads `CurrentCacheRange`.
+`ProportionalRangePlanner.Plan(requestedRange, config)` is a pure function — same inputs always produce same output. Never reads `CurrentCacheRange`. Reads configuration from a shared `RuntimeCacheOptionsHolder` at invocation time to support runtime option updates.
 
 - `src/SlidingWindowCache/Core/Planning/ProportionalRangePlanner.cs` — pure range calculation
 
 ### NoRebalanceRange Computation
 **Invariants**: E.34, E.35
 
-`NoRebalanceRangePlanner.Plan(currentCacheRange)` — pure function of current range + config. Applies threshold percentages as negative expansion. Returns `null` when individual thresholds ≥ 1.0 (no stability zone possible). `WindowCacheOptions` constructor ensures threshold sum ≤ 1.0 at construction time.
+`NoRebalanceRangePlanner.Plan(currentCacheRange)` — pure function of current range + config. Applies threshold percentages as negative expansion. Returns `null` when individual thresholds ≥ 1.0 (no stability zone possible). `WindowCacheOptions` constructor ensures threshold sum ≤ 1.0 at construction time. Reads configuration from a shared `RuntimeCacheOptionsHolder` at invocation time to support runtime option updates.
 
 - `src/SlidingWindowCache/Core/Planning/NoRebalanceRangePlanner.cs` — NoRebalanceRange computation
 - `src/SlidingWindowCache/Public/Configuration/WindowCacheOptions.cs` — threshold sum validation

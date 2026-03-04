@@ -3,7 +3,9 @@ using Intervals.NET.Domain.Extensions.Fixed;
 using Intervals.NET.Extensions;
 using SlidingWindowCache.Tests.Infrastructure.Helpers;
 using SlidingWindowCache.Public;
+using SlidingWindowCache.Public.Cache;
 using SlidingWindowCache.Public.Configuration;
+using SlidingWindowCache.Public.Extensions;
 using SlidingWindowCache.Public.Instrumentation;
 
 namespace SlidingWindowCache.Invariants.Tests;

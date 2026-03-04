@@ -1,5 +1,7 @@
 using Intervals.NET;
 using Intervals.NET.Domain.Abstractions;
+using SlidingWindowCache.Public.Cache;
+using SlidingWindowCache.Public.Configuration;
 using SlidingWindowCache.Public.Dto;
 
 namespace SlidingWindowCache.Public;
@@ -125,4 +127,81 @@ public interface IWindowCache<TRange, TData, TDomain> : IAsyncDisposable
     /// </list>
     /// </remarks>
     Task WaitForIdleAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Atomically updates one or more runtime configuration values on the live cache instance.
+    /// </summary>
+    /// <param name="configure">
+    /// A delegate that receives a <see cref="RuntimeOptionsUpdateBuilder"/> and applies the desired changes.
+    /// Only the fields explicitly set on the builder are changed; all others retain their current values.
+    /// </param>
+    /// <remarks>
+    /// <para><strong>Partial Updates:</strong></para>
+    /// <para>
+    /// You only need to specify the fields you want to change:
+    /// </para>
+    /// <code>
+    /// cache.UpdateRuntimeOptions(update =>
+    ///     update.WithLeftCacheSize(2.0)
+    ///           .WithDebounceDelay(TimeSpan.FromMilliseconds(50)));
+    /// </code>
+    /// <para><strong>Threshold Handling:</strong></para>
+    /// <para>
+    /// Because thresholds are <c>double?</c>, use explicit clear methods to set a threshold to <c>null</c>:
+    /// </para>
+    /// <code>
+    /// cache.UpdateRuntimeOptions(update => update.ClearLeftThreshold());
+    /// </code>
+    /// <para><strong>Validation:</strong></para>
+    /// <para>
+    /// The merged options are validated before publishing. If validation fails (e.g. negative cache size,
+    /// threshold sum &gt; 1.0), an exception is thrown and the current options are left unchanged.
+    /// </para>
+    /// <para><strong>"Next Cycle" Semantics:</strong></para>
+    /// <para>
+    /// Updates take effect on the next rebalance decision/execution cycle. In-flight rebalance operations
+    /// continue with the options that were active when they started.
+    /// </para>
+    /// <para><strong>Thread Safety:</strong></para>
+    /// <para>
+    /// This method is thread-safe. Concurrent calls follow last-writer-wins semantics, which is acceptable
+    /// for configuration updates where the latest user intent should prevail.
+    /// </para>
+    /// </remarks>
+    /// <exception cref="ObjectDisposedException">Thrown when called on a disposed cache instance.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">Thrown when any updated value fails validation.</exception>
+    /// <exception cref="ArgumentException">Thrown when the merged threshold sum exceeds 1.0.</exception>
+    void UpdateRuntimeOptions(Action<RuntimeOptionsUpdateBuilder> configure);
+
+    /// <summary>
+    /// Gets a snapshot of the current runtime-updatable option values on this cache instance.
+    /// </summary>
+    /// <remarks>
+    /// <para><strong>Snapshot Semantics:</strong></para>
+    /// <para>
+    /// The returned <see cref="RuntimeOptionsSnapshot"/> captures the option values at the moment
+    /// this property is read. It is not updated if
+    /// <see cref="UpdateRuntimeOptions"/> is called afterward — obtain a new snapshot to see
+    /// updated values.
+    /// </para>
+    /// <para><strong>Usage:</strong></para>
+    /// <code>
+    /// // Inspect current options
+    /// var current = cache.CurrentRuntimeOptions;
+    /// Console.WriteLine($"LeftCacheSize={current.LeftCacheSize}");
+    ///
+    /// // Perform a relative update (e.g. double the left cache size)
+    /// var snapshot = cache.CurrentRuntimeOptions;
+    /// cache.UpdateRuntimeOptions(u => u.WithLeftCacheSize(snapshot.LeftCacheSize * 2));
+    /// </code>
+    /// <para><strong>Layered Caches:</strong></para>
+    /// <para>
+    /// On a <see cref="LayeredWindowCache{TRange,TData,TDomain}"/>, this property returns the
+    /// options of the outermost (user-facing) layer. To inspect the options of a specific inner
+    /// layer, access that layer directly via
+    /// <see cref="LayeredWindowCache{TRange,TData,TDomain}.Layers"/>.
+    /// </para>
+    /// </remarks>
+    /// <exception cref="ObjectDisposedException">Thrown when called on a disposed cache instance.</exception>
+    RuntimeOptionsSnapshot CurrentRuntimeOptions { get; }
 }
