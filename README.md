@@ -1,11 +1,12 @@
-# Sliding Window Cache
+# Intervals.NET.Caching
+## Sliding Window Cache
 
 A read-only, range-based, sequential-optimized cache with decision-driven background rebalancing, three consistency modes (eventual/hybrid/strong), and intelligent work avoidance.
 
-[![CI/CD](https://github.com/blaze6950/SlidingWindowCache/actions/workflows/slidingwindowcache.yml/badge.svg)](https://github.com/blaze6950/SlidingWindowCache/actions/workflows/slidingwindowcache.yml)
-[![NuGet](https://img.shields.io/nuget/v/SlidingWindowCache.svg)](https://www.nuget.org/packages/SlidingWindowCache/)
-[![NuGet Downloads](https://img.shields.io/nuget/dt/SlidingWindowCache.svg)](https://www.nuget.org/packages/SlidingWindowCache/)
-[![codecov](https://codecov.io/gh/blaze6950/SlidingWindowCache/graph/badge.svg?token=RFQBNX7MMD)](https://codecov.io/gh/blaze6950/SlidingWindowCache)
+[![CI/CD](https://github.com/blaze6950/Intervals.NET.Caching/actions/workflows/Intervals.NET.Caching.yml/badge.svg)](https://github.com/blaze6950/Intervals.NET.Caching/actions/workflows/Intervals.NET.Caching.yml)
+[![NuGet](https://img.shields.io/nuget/v/Intervals.NET.Caching.svg)](https://www.nuget.org/packages/Intervals.NET.Caching/)
+[![NuGet Downloads](https://img.shields.io/nuget/dt/Intervals.NET.Caching.svg)](https://www.nuget.org/packages/Intervals.NET.Caching/)
+[![codecov](https://codecov.io/gh/blaze6950/Intervals.NET.Caching/graph/badge.svg?token=RFQBNX7MMD)](https://codecov.io/gh/blaze6950/Intervals.NET.Caching)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![.NET 8.0](https://img.shields.io/badge/.NET-8.0-blue.svg)](https://dotnet.microsoft.com/download/dotnet/8.0)
 
@@ -24,7 +25,7 @@ For the canonical architecture docs, see `docs/architecture.md`.
 ## Install
 
 ```bash
-dotnet add package SlidingWindowCache
+dotnet add package Intervals.NET.Caching
 ```
 
 ## Sliding Window Cache Concept
@@ -143,9 +144,9 @@ For detailed comparison and guidance, see `docs/storage-strategies.md`.
 ## Quick Start
 
 ```csharp
-using SlidingWindowCache;
-using SlidingWindowCache.Public.Cache;
-using SlidingWindowCache.Public.Configuration;
+using Intervals.NET.Caching;
+using Intervals.NET.Caching.Public.Cache;
+using Intervals.NET.Caching.Public.Configuration;
 using Intervals.NET;
 using Intervals.NET.Domain.Default.Numeric;
 
@@ -171,8 +172,8 @@ Implement `IDataSource<TRange, TData>` to connect the cache to your backing stor
 `FuncDataSource<TRange, TData>` wraps an async delegate so you can create a data source in one expression:
 
 ```csharp
-using SlidingWindowCache.Public;
-using SlidingWindowCache.Public.Dto;
+using Intervals.NET.Caching.Public;
+using Intervals.NET.Caching.Public.Dto;
 
 // Unbounded source — always returns data for any range
 IDataSource<int, string> source = new FuncDataSource<int, string>(
@@ -400,7 +401,7 @@ Canonical guide: `docs/diagnostics.md`.
 
 ## Consistency Modes
 
-By default, `GetDataAsync` is **eventually consistent**: data is returned immediately while the cache window converges asynchronously in the background. Two opt-in extension methods provide stronger consistency guarantees. Both require a `using SlidingWindowCache.Public;` import.
+By default, `GetDataAsync` is **eventually consistent**: data is returned immediately while the cache window converges asynchronously in the background. Two opt-in extension methods provide stronger consistency guarantees. Both require a `using Intervals.NET.Caching.Public;` import.
 
 > **Serialized access requirement:** The hybrid and strong consistency modes provide their warm-cache guarantee only when requests are made one at a time (serialized). Under concurrent/parallel callers they remain safe (no crashes or hangs) but the guarantee degrades — due to `AsyncActivityCounter`'s "was idle at some point" semantics (Invariant H.3) and a brief gap between the counter increment and TCS publication in `IncrementActivity`, a concurrent waiter may observe a previously completed idle TCS and return without waiting for the new rebalance.
 
@@ -416,7 +417,7 @@ Use for all hot paths and rapid sequential access. No latency beyond data assemb
 ### Hybrid Consistency — `GetDataAndWaitOnMissAsync`
 
 ```csharp
-using SlidingWindowCache.Public;
+using Intervals.NET.Caching.Public;
 
 // Waits for idle only if the request was a PartialHit or FullMiss; returns immediately on FullHit
 var result = await cache.GetDataAndWaitOnMissAsync(
@@ -444,7 +445,7 @@ if (result.Range.HasValue)
 ### Strong Consistency — `GetDataAndWaitForIdleAsync`
 
 ```csharp
-using SlidingWindowCache.Public;
+using Intervals.NET.Caching.Public;
 
 // Returns only after cache has converged to its desired window geometry
 var result = await cache.GetDataAndWaitForIdleAsync(

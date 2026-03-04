@@ -2,13 +2,13 @@
 
 ## Overview
 
-SlidingWindowCache is a range-based cache optimized for sequential access. It serves user requests immediately (User Path) and converges the cache to an optimal window asynchronously (Rebalance Path).
+Intervals.NET.Caching is a range-based cache optimized for sequential access. It serves user requests immediately (User Path) and converges the cache to an optimal window asynchronously (Rebalance Path).
 
 This document defines the canonical architecture: threading model, single-writer rule, intent model, decision-driven execution, coordination mechanisms, and disposal.
 
 ## Motivation
 
-Traditional caches optimize for random access. SlidingWindowCache targets workloads where requests move predictably across a domain (e.g., scrolling, playback, time-series inspection). The goal is:
+Traditional caches optimize for random access. Intervals.NET.Caching targets workloads where requests move predictably across a domain (e.g., scrolling, playback, time-series inspection). The goal is:
 
 - Fast reads for the requested range.
 - Background window maintenance (prefetch/trim) without blocking the caller.

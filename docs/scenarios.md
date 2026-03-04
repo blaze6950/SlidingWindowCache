@@ -2,7 +2,7 @@
 
 ## Overview
 
-This document describes the temporal behavior of SlidingWindowCache: what happens over time when user requests occur, decisions are evaluated, and background executions run.
+This document describes the temporal behavior of Intervals.NET.Caching: what happens over time when user requests occur, decisions are evaluated, and background executions run.
 
 ## Motivation
 

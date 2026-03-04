@@ -2,12 +2,12 @@
 
 ## Overview
 
-This page documents the public surface area of SlidingWindowCache: the cache facade, configuration, data source contract, diagnostics, and public DTOs.
+This page documents the public surface area of Intervals.NET.Caching: the cache facade, configuration, data source contract, diagnostics, and public DTOs.
 
 ## Facade
 
 - `WindowCache<TRange, TData, TDomain>`: primary entry point and composition root.
-  - **File**: `src/SlidingWindowCache/Public/WindowCache.cs`
+  - **File**: `src/Intervals.NET.Caching/Public/WindowCache.cs`
   - Constructs and wires all internal components.
   - Delegates user requests to `UserRequestHandler`.
   - Exposes `WaitForIdleAsync()` for infrastructure/testing synchronization.
@@ -17,7 +17,7 @@ This page documents the public surface area of SlidingWindowCache: the cache fac
 
 ### WindowCacheOptions
 
-**File**: `src/SlidingWindowCache/Public/Configuration/WindowCacheOptions.cs`
+**File**: `src/Intervals.NET.Caching/Public/Configuration/WindowCacheOptions.cs`
 
 **Type**: `record` (immutable, value semantics)
 
@@ -43,7 +43,7 @@ Configuration parameters:
 
 ### UserCacheReadMode
 
-**File**: `src/SlidingWindowCache/Public/Configuration/UserCacheReadMode.cs`
+**File**: `src/Intervals.NET.Caching/Public/Configuration/UserCacheReadMode.cs`
 
 **Type**: `enum`
 
@@ -58,7 +58,7 @@ Configuration parameters:
 
 ### IDataSource\<TRange, TData\>
 
-**File**: `src/SlidingWindowCache/Public/IDataSource.cs`
+**File**: `src/Intervals.NET.Caching/Public/IDataSource.cs`
 
 **Type**: Interface (user-implemented)
 
@@ -76,7 +76,7 @@ Configuration parameters:
 
 ### RangeResult\<TRange, TData\>
 
-**File**: `src/SlidingWindowCache/Public/DTO/RangeResult.cs`
+**File**: `src/Intervals.NET.Caching/Public/DTO/RangeResult.cs`
 
 Returned by `GetDataAsync`. Contains three properties:
 
@@ -90,7 +90,7 @@ Returned by `GetDataAsync`. Contains three properties:
 
 ### CacheInteraction
 
-**File**: `src/SlidingWindowCache/Public/Dto/CacheInteraction.cs`
+**File**: `src/Intervals.NET.Caching/Public/Dto/CacheInteraction.cs`
 
 **Type**: `enum`
 
@@ -108,7 +108,7 @@ Classifies how a `GetDataAsync` request was served relative to the current cache
 
 ### RangeChunk\<TRange, TData\>
 
-**File**: `src/SlidingWindowCache/Public/DTO/RangeChunk.cs`
+**File**: `src/Intervals.NET.Caching/Public/DTO/RangeChunk.cs`
 
 Batch fetch result from `IDataSource`. Contains:
 - `Range<TRange> Range` — the range covered by this chunk
@@ -118,7 +118,7 @@ Batch fetch result from `IDataSource`. Contains:
 
 ### ICacheDiagnostics
 
-**File**: `src/SlidingWindowCache/Public/Instrumentation/ICacheDiagnostics.cs`
+**File**: `src/Intervals.NET.Caching/Public/Instrumentation/ICacheDiagnostics.cs`
 
 Optional observability interface with 18 event recording methods covering:
 - User request outcomes (full hit, partial hit, full miss)
@@ -139,7 +139,7 @@ Optional observability interface with 18 event recording methods covering:
 
 ### WindowCacheConsistencyExtensions
 
-**File**: `src/SlidingWindowCache/Public/WindowCacheConsistencyExtensions.cs`
+**File**: `src/Intervals.NET.Caching/Public/WindowCacheConsistencyExtensions.cs`
 
 **Type**: `static class` (extension methods on `IWindowCache<TRange, TData, TDomain>`)
 
@@ -202,7 +202,7 @@ Three classes support building layered cache stacks where each layer's data sour
 
 ### WindowCacheDataSourceAdapter\<TRange, TData, TDomain\>
 
-**File**: `src/SlidingWindowCache/Public/WindowCacheDataSourceAdapter.cs`
+**File**: `src/Intervals.NET.Caching/Public/WindowCacheDataSourceAdapter.cs`
 
 **Type**: `sealed class` implementing `IDataSource<TRange, TData>`
 
@@ -213,7 +213,7 @@ Wraps an `IWindowCache` as an `IDataSource`, allowing any `WindowCache` to act a
 
 ### LayeredWindowCache\<TRange, TData, TDomain\>
 
-**File**: `src/SlidingWindowCache/Public/LayeredWindowCache.cs`
+**File**: `src/Intervals.NET.Caching/Public/LayeredWindowCache.cs`
 
 **Type**: `sealed class` implementing `IWindowCache<TRange, TData, TDomain>` and `IAsyncDisposable`
 
@@ -227,7 +227,7 @@ Typically created via `LayeredWindowCacheBuilder.Build()` rather than directly.
 
 ### LayeredWindowCacheBuilder\<TRange, TData, TDomain\>
 
-**File**: `src/SlidingWindowCache/Public/Cache/LayeredWindowCacheBuilder.cs`
+**File**: `src/Intervals.NET.Caching/Public/Cache/LayeredWindowCacheBuilder.cs`
 
 **Type**: `sealed class` — fluent builder
 

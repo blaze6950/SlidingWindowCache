@@ -12,10 +12,10 @@ User requests must not block on background optimization. The user path does the 
 
 | Component                                           | File                                                                           | Role                                                |
 |-----------------------------------------------------|--------------------------------------------------------------------------------|-----------------------------------------------------|
-| `WindowCache<TRange, TData, TDomain>`               | `src/SlidingWindowCache/Public/WindowCache.cs`                                 | Public facade; delegates to `UserRequestHandler`    |
-| `UserRequestHandler<TRange, TData, TDomain>`        | `src/SlidingWindowCache/Core/UserPath/UserRequestHandler.cs`                   | Internal user-path logic; sole publisher of intents |
-| `CacheDataExtensionService<TRange, TData, TDomain>` | `src/SlidingWindowCache/Core/Rebalance/Execution/CacheDataExtensionService.cs` | Assembles requested range from cache + IDataSource  |
-| `IntentController<TRange, TData, TDomain>`          | `src/SlidingWindowCache/Core/Rebalance/Intent/IntentController.cs`             | Publish-side only from user path                    |
+| `WindowCache<TRange, TData, TDomain>`               | `src/Intervals.NET.Caching/Public/WindowCache.cs`                                 | Public facade; delegates to `UserRequestHandler`    |
+| `UserRequestHandler<TRange, TData, TDomain>`        | `src/Intervals.NET.Caching/Core/UserPath/UserRequestHandler.cs`                   | Internal user-path logic; sole publisher of intents |
+| `CacheDataExtensionService<TRange, TData, TDomain>` | `src/Intervals.NET.Caching/Core/Rebalance/Execution/CacheDataExtensionService.cs` | Assembles requested range from cache + IDataSource  |
+| `IntentController<TRange, TData, TDomain>`          | `src/Intervals.NET.Caching/Core/Rebalance/Intent/IntentController.cs`             | Publish-side only from user path                    |
 
 ## Execution Context
 

@@ -1,0 +1,21 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+    <PropertyGroup>
+        <TargetFramework>net8.0-browser</TargetFramework>
+        <ImplicitUsings>enable</ImplicitUsings>
+        <Nullable>enable</Nullable>
+        <IsPackable>false</IsPackable>
+        <OutputType>Library</OutputType>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <PackageReference Include="Intervals.NET.Data" Version="0.0.1" />
+        <PackageReference Include="Intervals.NET.Domain.Default" Version="0.0.2" />
+        <PackageReference Include="Intervals.NET.Domain.Extensions" Version="0.0.3" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <ProjectReference Include="..\Intervals.NET.Caching\Intervals.NET.Caching.csproj" />
+    </ItemGroup>
+
+</Project>

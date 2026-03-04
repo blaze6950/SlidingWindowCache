@@ -1,10 +1,10 @@
-# Agent Guidelines for SlidingWindowCache
+# Agent Guidelines for Intervals.NET.Caching
 
-This document provides essential information for AI coding agents working on the SlidingWindowCache codebase.
+This document provides essential information for AI coding agents working on the Intervals.NET.Caching codebase.
 
 ## Project Overview
 
-**SlidingWindowCache** is a C# .NET 8.0 library implementing a read-only, range-based, sequential-optimized cache with decision-driven background rebalancing. This is a production-ready concurrent systems project with extensive architectural documentation.
+**Intervals.NET.Caching** is a C# .NET 8.0 library implementing a read-only, range-based, sequential-optimized cache with decision-driven background rebalancing. This is a production-ready concurrent systems project with extensive architectural documentation.
 
 **Key Architecture Principles:**
 - Single-Writer Architecture: Only rebalance execution mutates cache state
@@ -21,19 +21,19 @@ This document provides essential information for AI coding agents working on the
 ### Common Build Commands
 ```bash
 # Restore dependencies
-dotnet restore SlidingWindowCache.sln
+dotnet restore Intervals.NET.Caching.sln
 
 # Build solution (Debug)
-dotnet build SlidingWindowCache.sln
+dotnet build Intervals.NET.Caching.sln
 
 # Build solution (Release)
-dotnet build SlidingWindowCache.sln --configuration Release
+dotnet build Intervals.NET.Caching.sln --configuration Release
 
 # Build specific project
-dotnet build src/SlidingWindowCache/SlidingWindowCache.csproj --configuration Release
+dotnet build src/Intervals.NET.Caching/Intervals.NET.Caching.csproj --configuration Release
 
 # Pack for NuGet
-dotnet pack src/SlidingWindowCache/SlidingWindowCache.csproj --configuration Release --output ./artifacts
+dotnet pack src/Intervals.NET.Caching/Intervals.NET.Caching.csproj --configuration Release --output ./artifacts
 ```
 
 ## Test Commands
@@ -42,15 +42,15 @@ dotnet pack src/SlidingWindowCache/SlidingWindowCache.csproj --configuration Rel
 
 ```bash
 # Run all tests
-dotnet test SlidingWindowCache.sln --configuration Release
+dotnet test Intervals.NET.Caching.sln --configuration Release
 
 # Run specific test project
-dotnet test tests/SlidingWindowCache.Unit.Tests/SlidingWindowCache.Unit.Tests.csproj
-dotnet test tests/SlidingWindowCache.Integration.Tests/SlidingWindowCache.Integration.Tests.csproj
-dotnet test tests/SlidingWindowCache.Invariants.Tests/SlidingWindowCache.Invariants.Tests.csproj
+dotnet test tests/Intervals.NET.Caching.Unit.Tests/Intervals.NET.Caching.Unit.Tests.csproj
+dotnet test tests/Intervals.NET.Caching.Integration.Tests/Intervals.NET.Caching.Integration.Tests.csproj
+dotnet test tests/Intervals.NET.Caching.Invariants.Tests/Intervals.NET.Caching.Invariants.Tests.csproj
 
 # Run single test by fully qualified name
-dotnet test --filter "FullyQualifiedName=SlidingWindowCache.Unit.Tests.Public.Configuration.WindowCacheOptionsTests.Constructor_WithValidParameters_InitializesAllProperties"
+dotnet test --filter "FullyQualifiedName=Intervals.NET.Caching.Unit.Tests.Public.Configuration.WindowCacheOptionsTests.Constructor_WithValidParameters_InitializesAllProperties"
 
 # Run tests matching pattern
 dotnet test --filter "FullyQualifiedName~Constructor"
@@ -77,15 +77,15 @@ dotnet test --collect:"XPlat Code Coverage" --results-directory ./TestResults
 ### Namespace Organization
 ```csharp
 // Use file-scoped namespace declarations (C# 10+)
-namespace SlidingWindowCache.Public;
-namespace SlidingWindowCache.Core.UserPath;
-namespace SlidingWindowCache.Infrastructure.Storage;
+namespace Intervals.NET.Caching.Public;
+namespace Intervals.NET.Caching.Core.UserPath;
+namespace Intervals.NET.Caching.Infrastructure.Storage;
 ```
 
 **Namespace Structure:**
-- `SlidingWindowCache.Public` - Public API surface
-- `SlidingWindowCache.Core` - Business logic (internal)
-- `SlidingWindowCache.Infrastructure` - Infrastructure concerns (internal)
+- `Intervals.NET.Caching.Public` - Public API surface
+- `Intervals.NET.Caching.Core` - Business logic (internal)
+- `Intervals.NET.Caching.Infrastructure` - Infrastructure concerns (internal)
 
 ### Naming Conventions
 
@@ -123,16 +123,16 @@ namespace SlidingWindowCache.Infrastructure.Storage;
 
 **Import Order:**
 1. External libraries (e.g., `Intervals.NET`)
-2. Project namespaces (e.g., `SlidingWindowCache.*`)
+2. Project namespaces (e.g., `Intervals.NET.Caching.*`)
 3. Alphabetically sorted within each group
 
 **Example:**
 ```csharp
 using Intervals.NET;
 using Intervals.NET.Domain.Abstractions;
-using SlidingWindowCache.Core.Planning;
-using SlidingWindowCache.Core.State;
-using SlidingWindowCache.Public.Instrumentation;
+using Intervals.NET.Caching.Core.Planning;
+using Intervals.NET.Caching.Core.State;
+using Intervals.NET.Caching.Public.Instrumentation;
 ```
 
 ### XML Documentation
@@ -350,24 +350,24 @@ refactor: AsyncActivityCounter lock has been removed and replaced with lock-free
 ## File Locations
 
 **Public API:**
-- `src/SlidingWindowCache/Public/WindowCache.cs` - Main cache facade
-- `src/SlidingWindowCache/Public/IDataSource.cs` - Data source contract
-- `src/SlidingWindowCache/Public/Configuration/` - Configuration classes
-- `src/SlidingWindowCache/Public/Instrumentation/` - Diagnostics
+- `src/Intervals.NET.Caching/Public/WindowCache.cs` - Main cache facade
+- `src/Intervals.NET.Caching/Public/IDataSource.cs` - Data source contract
+- `src/Intervals.NET.Caching/Public/Configuration/` - Configuration classes
+- `src/Intervals.NET.Caching/Public/Instrumentation/` - Diagnostics
 
 **Core Logic:**
-- `src/SlidingWindowCache/Core/UserPath/` - User request handling (read-only)
-- `src/SlidingWindowCache/Core/Rebalance/Decision/` - Decision engine
-- `src/SlidingWindowCache/Core/Rebalance/Execution/` - Cache mutations (single writer)
-- `src/SlidingWindowCache/Core/State/` - State management
+- `src/Intervals.NET.Caching/Core/UserPath/` - User request handling (read-only)
+- `src/Intervals.NET.Caching/Core/Rebalance/Decision/` - Decision engine
+- `src/Intervals.NET.Caching/Core/Rebalance/Execution/` - Cache mutations (single writer)
+- `src/Intervals.NET.Caching/Core/State/` - State management
 
 **Infrastructure:**
-- `src/SlidingWindowCache/Infrastructure/Storage/` - Storage strategies
-- `src/SlidingWindowCache/Infrastructure/Concurrency/` - Async coordination
+- `src/Intervals.NET.Caching/Infrastructure/Storage/` - Storage strategies
+- `src/Intervals.NET.Caching/Infrastructure/Concurrency/` - Async coordination
 
 ## CI/CD
 
-**GitHub Actions:** `.github/workflows/slidingwindowcache.yml`
+**GitHub Actions:** `.github/workflows/Intervals.NET.Caching.yml`
 - Triggers: Push/PR to main/master, manual dispatch
 - Runs: Build, WebAssembly validation, all test suites with coverage
 - Coverage: Uploaded to Codecov

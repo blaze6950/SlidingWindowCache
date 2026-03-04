@@ -8,11 +8,11 @@ The execution subsystem performs debounced, cancellable background work and is t
 
 | Component                                                          | File                                                                                          | Role                                                               |
 |--------------------------------------------------------------------|-----------------------------------------------------------------------------------------------|--------------------------------------------------------------------|
-| `IRebalanceExecutionController<TRange, TData, TDomain>`            | `src/SlidingWindowCache/Core/Rebalance/Execution/IRebalanceExecutionController.cs`            | Execution serialization contract                                   |
-| `TaskBasedRebalanceExecutionController<TRange, TData, TDomain>`    | `src/SlidingWindowCache/Core/Rebalance/Execution/TaskBasedRebalanceExecutionController.cs`    | Default: async task-chaining debounce + per-request cancellation   |
-| `ChannelBasedRebalanceExecutionController<TRange, TData, TDomain>` | `src/SlidingWindowCache/Core/Rebalance/Execution/ChannelBasedRebalanceExecutionController.cs` | Optional: channel-based bounded execution queue with backpressure  |
-| `RebalanceExecutor<TRange, TData, TDomain>`                        | `src/SlidingWindowCache/Core/Rebalance/Execution/RebalanceExecutor.cs`                        | Sole writer; performs `Rematerialize`; the single-writer authority |
-| `CacheDataExtensionService<TRange, TData, TDomain>`                | `src/SlidingWindowCache/Infrastructure/Services/CacheDataExtensionService.cs`                 | Incremental data fetching; range gap analysis                      |
+| `IRebalanceExecutionController<TRange, TData, TDomain>`            | `src/Intervals.NET.Caching/Core/Rebalance/Execution/IRebalanceExecutionController.cs`            | Execution serialization contract                                   |
+| `TaskBasedRebalanceExecutionController<TRange, TData, TDomain>`    | `src/Intervals.NET.Caching/Core/Rebalance/Execution/TaskBasedRebalanceExecutionController.cs`    | Default: async task-chaining debounce + per-request cancellation   |
+| `ChannelBasedRebalanceExecutionController<TRange, TData, TDomain>` | `src/Intervals.NET.Caching/Core/Rebalance/Execution/ChannelBasedRebalanceExecutionController.cs` | Optional: channel-based bounded execution queue with backpressure  |
+| `RebalanceExecutor<TRange, TData, TDomain>`                        | `src/Intervals.NET.Caching/Core/Rebalance/Execution/RebalanceExecutor.cs`                        | Sole writer; performs `Rematerialize`; the single-writer authority |
+| `CacheDataExtensionService<TRange, TData, TDomain>`                | `src/Intervals.NET.Caching/Infrastructure/Services/CacheDataExtensionService.cs`                 | Incremental data fetching; range gap analysis                      |
 
 ## Execution Controllers
 
@@ -60,7 +60,7 @@ The execution subsystem performs debounced, cancellable background work and is t
 
 ## CacheDataExtensionService — Incremental Fetching
 
-**File**: `src/SlidingWindowCache/Infrastructure/Services/CacheDataExtensionService.cs`
+**File**: `src/Intervals.NET.Caching/Infrastructure/Services/CacheDataExtensionService.cs`
 
 - Computes missing ranges via range algebra: `DesiredRange \ CachedRange`
 - Fetches only the gaps (not the full desired range)

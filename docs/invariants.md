@@ -833,7 +833,7 @@ When activity counter reaches zero (idle state), NO work exists in any of these 
 
 **Rationale:** Ensures idle detection accurately reflects all enqueued work, preventing premature idle signals.
 
-**Implementation:** See `src/SlidingWindowCache/Infrastructure/Concurrency/AsyncActivityCounter.cs`.
+**Implementation:** See `src/Intervals.NET.Caching/Infrastructure/Concurrency/AsyncActivityCounter.cs`.
 - 🔵 **[Architectural — Enforced by call site ordering]**
 
 ### H.2: Decrement-After-Completion Invariant
@@ -852,7 +852,7 @@ Activity counter accurately reflects active work count at all times:
 
 **Rationale:** Ensures `WaitForIdleAsync()` will eventually complete by preventing counter leaks on any execution path.
 
-**Implementation:** See `src/SlidingWindowCache/Infrastructure/Concurrency/AsyncActivityCounter.cs`.
+**Implementation:** See `src/Intervals.NET.Caching/Infrastructure/Concurrency/AsyncActivityCounter.cs`.
 - 🔵 **[Architectural — Enforced by finally blocks]**
 
 **H.3** 🟡 **[Conceptual — Eventual consistency design]** **"Was Idle" Semantics:**
@@ -971,7 +971,7 @@ Complete trace demonstrating both invariants in current architecture:
 
 **Rationale:** Prevents mid-cycle inconsistencies (e.g., a planner using new `LeftCacheSize` with old `RightCacheSize`). Cycles are short; the next cycle reflects the update.
 
-**Implementation:** `RuntimeCacheOptionsHolder.Update` in `src/SlidingWindowCache/Core/State/RuntimeCacheOptionsHolder.cs`.
+**Implementation:** `RuntimeCacheOptionsHolder.Update` in `src/Intervals.NET.Caching/Core/State/RuntimeCacheOptionsHolder.cs`.
 
 **I.3** 🔵 **[Architectural]** `UpdateRuntimeOptions` on a disposed cache **always throws `ObjectDisposedException`**.
 

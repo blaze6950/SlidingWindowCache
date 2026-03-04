@@ -8,14 +8,14 @@ State and storage define how cached data is held, read, and published. `CacheSta
 
 | Component                                     | File                                                                   | Role                                                |
 |-----------------------------------------------|------------------------------------------------------------------------|-----------------------------------------------------|
-| `CacheState<TRange, TData, TDomain>`          | `src/SlidingWindowCache/Core/State/CacheState.cs`                      | Shared mutable state; the single coordination point |
-| `ICacheStorage<TRange, TData, TDomain>`       | `src/SlidingWindowCache/Infrastructure/Storage/ICacheStorage.cs`       | Internal storage contract                           |
-| `SnapshotReadStorage<TRange, TData, TDomain>` | `src/SlidingWindowCache/Infrastructure/Storage/SnapshotReadStorage.cs` | Array-based; zero-allocation reads                  |
-| `CopyOnReadStorage<TRange, TData, TDomain>`   | `src/SlidingWindowCache/Infrastructure/Storage/CopyOnReadStorage.cs`   | List-based; cheap rematerialization                 |
+| `CacheState<TRange, TData, TDomain>`          | `src/Intervals.NET.Caching/Core/State/CacheState.cs`                      | Shared mutable state; the single coordination point |
+| `ICacheStorage<TRange, TData, TDomain>`       | `src/Intervals.NET.Caching/Infrastructure/Storage/ICacheStorage.cs`       | Internal storage contract                           |
+| `SnapshotReadStorage<TRange, TData, TDomain>` | `src/Intervals.NET.Caching/Infrastructure/Storage/SnapshotReadStorage.cs` | Array-based; zero-allocation reads                  |
+| `CopyOnReadStorage<TRange, TData, TDomain>`   | `src/Intervals.NET.Caching/Infrastructure/Storage/CopyOnReadStorage.cs`   | List-based; cheap rematerialization                 |
 
 ## CacheState
 
-**File**: `src/SlidingWindowCache/Core/State/CacheState.cs`
+**File**: `src/Intervals.NET.Caching/Core/State/CacheState.cs`
 
 `CacheState` is shared by reference across `UserRequestHandler`, `RebalanceDecisionEngine`, and `RebalanceExecutor`. It holds:
 

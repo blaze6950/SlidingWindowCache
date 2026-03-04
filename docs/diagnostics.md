@@ -1,4 +1,4 @@
-﻿# Cache Diagnostics - Instrumentation and Observability
+# Cache Diagnostics - Instrumentation and Observability
 
 ## Overview
 
@@ -100,19 +100,19 @@ Console.WriteLine($"Rebalances: {diagnostics.RebalanceExecutionCompleted}");
 ```
 
 **Features:**
-- ✅ Thread-safe (uses `Interlocked.Increment`)
-- ✅ Low overhead (integer increment per event)
-- ✅ Read-only properties for all 18 counters (17 counters + 1 exception event)
-- ✅ `Reset()` method for test isolation
-- ✅ Instance-based (multiple caches can have separate diagnostics)
-- ⚠️ **Warning**: Default implementation only writes RebalanceExecutionFailed to Debug output
+- ? Thread-safe (uses `Interlocked.Increment`)
+- ? Low overhead (integer increment per event)
+- ? Read-only properties for all 18 counters (17 counters + 1 exception event)
+- ? `Reset()` method for test isolation
+- ? Instance-based (multiple caches can have separate diagnostics)
+- ?? **Warning**: Default implementation only writes RebalanceExecutionFailed to Debug output
 
 **Use for:**
 - Testing and validation
 - Development and debugging
 - Production monitoring (acceptable overhead)
 
-**⚠️ CRITICAL: Production Usage Requirement**
+**?? CRITICAL: Production Usage Requirement**
 
 The default `EventCounterCacheDiagnostics` implementation of `RebalanceExecutionFailed` only writes to Debug output. **For production use, you MUST create a custom implementation that logs to your logging infrastructure.**
 
@@ -148,10 +148,10 @@ Rebalance operations run in fire-and-forget background tasks. When exceptions oc
 3. Without logging, failures are **completely silent**
 
 Ignoring this event means:
-- ❌ Data source errors go unnoticed
-- ❌ Cache stops rebalancing with no indication
-- ❌ Performance degrades silently
-- ❌ No diagnostics for troubleshooting
+- ? Data source errors go unnoticed
+- ? Cache stops rebalancing with no indication
+- ? Performance degrades silently
+- ? No diagnostics for troubleshooting
 
 **Recommended production implementation:**
 - Always log with full exception details (message, stack trace, inner exceptions)
@@ -174,10 +174,10 @@ var cache = new WindowCache<int, string, IntegerFixedStepDomain>(
 ```
 
 **Features:**
-- ✅ **Absolute zero overhead** - methods are empty and get inlined/eliminated
-- ✅ No memory allocations
-- ✅ No performance impact whatsoever
-- ✅ Default when diagnostics not provided
+- ? **Absolute zero overhead** - methods are empty and get inlined/eliminated
+- ? No memory allocations
+- ? No performance impact whatsoever
+- ? Default when diagnostics not provided
 
 **Use for:**
 - Production deployments where diagnostics are not needed
@@ -194,7 +194,7 @@ var cache = new WindowCache<int, string, IntegerFixedStepDomain>(
 **Tracks:** Completion of user request (data returned to caller)  
 **Location:** `UserRequestHandler.HandleRequestAsync` (final step, inside `!exceptionOccurred` block)  
 **Scenarios:** All user scenarios (U1-U5) and physical boundary miss (full vacuum)  
-**Fires when:** No exception occurred — regardless of whether a rebalance intent was published  
+**Fires when:** No exception occurred � regardless of whether a rebalance intent was published  
 **Does NOT fire when:** An exception propagated out of `HandleRequestAsync`  
 **Interpretation:** Total number of user requests that completed without exception (including boundary misses where `Range == null`)
 
@@ -346,30 +346,30 @@ Assert.Equal(1, diagnostics.DataSourceFetchMissingSegments);
 ---
 
 #### `DataSegmentUnavailable()`
-**Tracks:** A fetched chunk returned a `null` Range — the requested segment does not exist in the data source  
+**Tracks:** A fetched chunk returned a `null` Range � the requested segment does not exist in the data source  
 **Location:** `CacheDataExtensionService.UnionAll` (when a `RangeChunk.Range` is null)  
-**Context:** User Thread (Partial Cache Hit — Scenario 3) **and** Background Thread (Rebalance Execution)  
+**Context:** User Thread (Partial Cache Hit � Scenario 3) **and** Background Thread (Rebalance Execution)  
 **Invariants:** G.5 (IDataSource Boundary Semantics), A.12b (Cache Contiguity)  
 **Interpretation:** Physical boundary encountered; the unavailable segment is silently skipped to preserve cache contiguity
 
 **Typical Scenarios:**
-- Database with min/max ID bounds — extension tries to expand beyond available range
-- Time-series data with temporal limits — requesting future/past data not yet/no longer available
-- Paginated API with maximum pages — attempting to fetch beyond last page
+- Database with min/max ID bounds � extension tries to expand beyond available range
+- Time-series data with temporal limits � requesting future/past data not yet/no longer available
+- Paginated API with maximum pages � attempting to fetch beyond last page
 
 **Important:** This is purely informational. The system gracefully skips unavailable segments during `UnionAll`, and cache contiguity is preserved. No action is required by the caller.
 
 **Example Usage:**
 ```csharp
 // BoundedDataSource has data in [1000, 9999]
-// Request [500, 1500] overlaps lower boundary — partial cache hit fetches [500, 999] which returns null
+// Request [500, 1500] overlaps lower boundary � partial cache hit fetches [500, 999] which returns null
 var result = await cache.GetDataAsync(Range.Closed(500, 1500), ct);
 await cache.WaitForIdleAsync();
 
 // At least one unavailable segment was encountered during extension
 Assert.True(diagnostics.DataSegmentUnavailable >= 1);
 
-// Cache contiguity preserved — result is the intersection of requested and available
+// Cache contiguity preserved � result is the intersection of requested and available
 Assert.Equal(Range.Closed(1000, 1500), result.Range);
 ```
 
@@ -395,7 +395,7 @@ Assert.Equal(1, diagnostics.RebalanceIntentPublished);
 
 #### `RebalanceIntentCancelled()`
 **Tracks:** Intent cancellation before or during execution  
-**Location:** `IntentController.ProcessIntentsAsync` (background loop — when new intent supersedes pending intent)  
+**Location:** `IntentController.ProcessIntentsAsync` (background loop � when new intent supersedes pending intent)  
 **Invariants:** A.2 (User Path priority), A.2a (User cancels rebalance), C.4 (Obsolete intent doesn't start)  
 **Interpretation:** Single-flight execution - new request cancels previous intent
 
@@ -473,12 +473,12 @@ Assert.True(diagnostics.RebalanceExecutionCancelled >= 1);
 
 ---
 
-#### `RebalanceExecutionFailed(Exception ex)` ⚠️ CRITICAL
+#### `RebalanceExecutionFailed(Exception ex)` ?? CRITICAL
 **Tracks:** Rebalance execution failure due to exception  
 **Location:** `RebalanceExecutor.ExecuteAsync` (catch `Exception`)  
 **Interpretation:** **CRITICAL ERROR** - background rebalance operation failed
 
-**⚠️ WARNING: This event MUST be handled in production applications**
+**?? WARNING: This event MUST be handled in production applications**
 
 Rebalance operations execute in fire-and-forget background tasks. When an exception occurs:
 1. The exception is caught and this event is recorded
@@ -486,11 +486,11 @@ Rebalance operations execute in fire-and-forget background tasks. When an except
 3. The cache continues serving user requests but rebalancing stops
 
 **Consequences of ignoring this event:**
-- ❌ Silent failures in background operations
-- ❌ Cache stops rebalancing without any indication
-- ❌ Performance degrades with no diagnostics
-- ❌ Data source errors go completely unnoticed
-- ❌ Impossible to troubleshoot production issues
+- ? Silent failures in background operations
+- ? Cache stops rebalancing without any indication
+- ? Performance degrades with no diagnostics
+- ? Data source errors go completely unnoticed
+- ? Impossible to troubleshoot production issues
 
 **Minimum requirement: Always log**
 
@@ -572,7 +572,7 @@ Assert.Equal(1, diagnostics.RebalanceExecutionFailed);
 ### Rebalance Skip / Schedule Optimization Events
 
 #### `RebalanceSkippedCurrentNoRebalanceRange()`
-**Tracks:** Rebalance skipped — last requested position is within the current `NoRebalanceRange`  
+**Tracks:** Rebalance skipped � last requested position is within the current `NoRebalanceRange`  
 **Location:** `RebalanceDecisionEngine.Evaluate` (Stage 1 early exit)  
 **Scenarios:** Decision Scenario D1 (inside current no-rebalance threshold)  
 **Invariants:** D.3 (No rebalance if inside NoRebalanceRange), C.8b (RebalanceSkippedNoRebalanceRange counter semantics)
@@ -598,9 +598,9 @@ Assert.True(diagnostics.RebalanceSkippedCurrentNoRebalanceRange >= 1);
 ---
 
 #### `RebalanceSkippedPendingNoRebalanceRange()`
-**Tracks:** Rebalance skipped — last requested position is within the *pending* (desired) `NoRebalanceRange` of an already-scheduled execution  
+**Tracks:** Rebalance skipped � last requested position is within the *pending* (desired) `NoRebalanceRange` of an already-scheduled execution  
 **Location:** `RebalanceDecisionEngine.Evaluate` (Stage 2 early exit)  
-**Scenarios:** Decision Scenario D2 (pending rebalance covers the request — anti-thrashing)  
+**Scenarios:** Decision Scenario D2 (pending rebalance covers the request � anti-thrashing)  
 **Invariants:** D.2a (No rebalance if pending rebalance covers request)
 
 **Example Usage:**
@@ -608,7 +608,7 @@ Assert.True(diagnostics.RebalanceSkippedCurrentNoRebalanceRange >= 1);
 // Request 1 publishes intent and schedules execution
 var _ = cache.GetDataAsync(Range.Closed(100, 200), ct);
 
-// Request 2 (before debounce completes) — pending execution already covers it
+// Request 2 (before debounce completes) � pending execution already covers it
 await cache.GetDataAsync(Range.Closed(110, 190), ct);
 await cache.WaitForIdleAsync();
 
@@ -637,7 +637,7 @@ Assert.True(diagnostics.RebalanceSkippedSameRange >= 0); // May or may not occur
 
 #### `RebalanceScheduled()`
 **Tracks:** Rebalance execution successfully scheduled after all decision stages approved  
-**Location:** `IntentController.ProcessIntentsAsync` (Stage 5 — after `RebalanceDecisionEngine` returns `ShouldSchedule=true`)  
+**Location:** `IntentController.ProcessIntentsAsync` (Stage 5 � after `RebalanceDecisionEngine` returns `ShouldSchedule=true`)  
 **Scenarios:** Decision Scenario D4 (rebalance required)  
 **Invariant:** D.5 (Rebalance triggered only if confirmed necessary)
 
@@ -793,7 +793,7 @@ Omit the second argument (or pass `null`) to use the default `NoOpDiagnostics` f
 ### What Each Layer's Diagnostics Report
 
 Because each layer is a fully independent `WindowCache`, every `ICacheDiagnostics` event has
-the same meaning as documented in the single-cache sections above — but scoped to that layer:
+the same meaning as documented in the single-cache sections above � but scoped to that layer:
 
 | Event                                     | Meaning in a layered context                                                       |
 |-------------------------------------------|------------------------------------------------------------------------------------|
@@ -804,7 +804,7 @@ the same meaning as documented in the single-cache sections above — but scoped
 | `DataSourceFetchSingleRange`              | This layer called the layer below (via the adapter) for a single range             |
 | `DataSourceFetchMissingSegments`          | This layer called the layer below for gap-filling segments only                    |
 | `RebalanceExecutionCompleted`             | This layer completed a background rebalance (window expansion/shrink)              |
-| `RebalanceSkippedCurrentNoRebalanceRange` | This layer's rebalance was skipped — still within its stability zone               |
+| `RebalanceSkippedCurrentNoRebalanceRange` | This layer's rebalance was skipped � still within its stability zone               |
 
 ### Detecting Cascading Rebalances
 
@@ -813,7 +813,7 @@ inner layer that fall outside the inner layer's `NoRebalanceRange`, causing the 
 to also rebalance. Under correct configuration this should be rare. Under misconfiguration
 it becomes continuous and defeats the purpose of layering.
 
-**Primary indicator — compare rebalance completion counts:**
+**Primary indicator � compare rebalance completion counts:**
 
 ```csharp
 // After a sustained sequential access session:
@@ -824,10 +824,10 @@ var l2Rate = l2Diagnostics.RebalanceExecutionCompleted;
 // l2Rate should be << l1Rate for normal sequential access
 
 // Unhealthy: L2 rebalances nearly as often as L1
-// l2Rate ≈ l1Rate  →  cascading rebalance thrashing
+// l2Rate ? l1Rate  >  cascading rebalance thrashing
 ```
 
-**Secondary confirmation — check skip counts on the inner layer:**
+**Secondary confirmation � check skip counts on the inner layer:**
 
 ```csharp
 // Under correct configuration, the inner layer's Decision Engine
@@ -836,7 +836,7 @@ var l2Rate = l2Diagnostics.RebalanceExecutionCompleted;
 var l2SkippedStage1 = l2Diagnostics.RebalanceSkippedCurrentNoRebalanceRange;
 
 // Healthy ratio: l2SkippedStage1 >> l2Rate
-// Unhealthy ratio: l2SkippedStage1 ≈ 0 while l2Rate is high
+// Unhealthy ratio: l2SkippedStage1 ? 0 while l2Rate is high
 ```
 
 **Confirming the data source is being hit too frequently:**
@@ -851,15 +851,15 @@ var dataSourceFetches = lInnerDiagnostics.DataSourceFetchMissingSegments
 
 **Resolution checklist when cascading is detected:**
 
-1. Increase inner layer `leftCacheSize` and `rightCacheSize` to 5–10× the outer layer's values
-2. Set inner layer `leftThreshold` and `rightThreshold` to 0.2–0.3
+1. Increase inner layer `leftCacheSize` and `rightCacheSize` to 5�10? the outer layer's values
+2. Set inner layer `leftThreshold` and `rightThreshold` to 0.2�0.3
 3. Re-run the access pattern and verify `l2.RebalanceSkippedCurrentNoRebalanceRange` dominates
 4. See `docs/architecture.md` (Cascading Rebalance Behavior) and `docs/scenarios.md` (L6, L7)
    for a full explanation of the mechanics and the anti-pattern
 ```
 l2Diagnostics.UserRequestFullCacheHit / l2Diagnostics.UserRequestServed
 ```
-A low hit rate on the inner layer means L1 is frequently delegating to L2 — consider
+A low hit rate on the inner layer means L1 is frequently delegating to L2 � consider
 increasing L2's buffer sizes (`leftCacheSize` / `rightCacheSize`).
 
 **Outer layer hit rate:**
@@ -888,7 +888,7 @@ access pattern has high variability. Consider loosening L1's thresholds or widen
 
 - **Always handle `RebalanceExecutionFailed` on each layer.** Background rebalance failures
   on any layer are silent without a proper implementation. See the production requirements
-  section above — they apply to every layer independently.
+  section above � they apply to every layer independently.
 
 - **Use separate `EventCounterCacheDiagnostics` instances per layer** during development
   and staging to establish baseline metrics. In production, replace with custom
@@ -904,5 +904,5 @@ access pattern has high variability. Consider loosening L1's thresholds or widen
 
 - **[Invariants](invariants.md)** - System invariants tracked by diagnostics
 - **[Scenarios](scenarios.md)** - User/Decision/Rebalance scenarios referenced in event descriptions
-- **[Invariant Test Suite](../tests/SlidingWindowCache.Invariants.Tests/README.md)** - Examples of diagnostic usage in tests
+- **[Invariant Test Suite](../tests/Intervals.NET.Caching.Invariants.Tests/README.md)** - Examples of diagnostic usage in tests
 - **[Components](components/overview.md)** - Component locations where events are recorded

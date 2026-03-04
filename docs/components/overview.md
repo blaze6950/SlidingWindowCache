@@ -2,7 +2,7 @@
 
 ## Overview
 
-This folder documents the internal component set of SlidingWindowCache. It is intentionally split by responsibility and execution context to avoid a single mega-document.
+This folder documents the internal component set of Intervals.NET.Caching. It is intentionally split by responsibility and execution context to avoid a single mega-document.
 
 ## Motivation
 
@@ -262,196 +262,196 @@ This section bridges architectural invariants (in `docs/invariants.md`) to their
 
 Only `RebalanceExecutor` has write access to `CacheState` internal setters. User Path components have read-only references. Internal visibility modifiers prevent external mutations.
 
-- `src/SlidingWindowCache/Core/State/CacheState.cs` — internal setters restrict write access
-- `src/SlidingWindowCache/Core/Rebalance/Execution/RebalanceExecutor.cs` — exclusive mutation authority
-- `src/SlidingWindowCache/Core/UserPath/UserRequestHandler.cs` — read-only access pattern
+- `src/Intervals.NET.Caching/Core/State/CacheState.cs` — internal setters restrict write access
+- `src/Intervals.NET.Caching/Core/Rebalance/Execution/RebalanceExecutor.cs` — exclusive mutation authority
+- `src/Intervals.NET.Caching/Core/UserPath/UserRequestHandler.cs` — read-only access pattern
 
 ### Priority and Cancellation
 **Invariants**: A.2, A.2a, C.3, F.1a
 
 `CancellationTokenSource` coordination between intent publishing and execution. `RebalanceDecisionEngine` validates necessity before triggering cancellation. Multiple checkpoints in execution pipeline check for cancellation.
 
-- `src/SlidingWindowCache/Core/Rebalance/Intent/IntentController.cs` — cancellation token lifecycle
-- `src/SlidingWindowCache/Core/Rebalance/Decision/RebalanceDecisionEngine.cs` — validation gates cancellation
-- `src/SlidingWindowCache/Core/Rebalance/Execution/RebalanceExecutor.cs` — `ThrowIfCancellationRequested` checkpoints
+- `src/Intervals.NET.Caching/Core/Rebalance/Intent/IntentController.cs` — cancellation token lifecycle
+- `src/Intervals.NET.Caching/Core/Rebalance/Decision/RebalanceDecisionEngine.cs` — validation gates cancellation
+- `src/Intervals.NET.Caching/Core/Rebalance/Execution/RebalanceExecutor.cs` — `ThrowIfCancellationRequested` checkpoints
 
 ### Intent Management and Cancellation
 **Invariants**: A.2a, C.1, C.4, C.5
 
 `Interlocked.Exchange` replaces previous intent atomically (latest-wins). Single-writer architecture for intent state. Cancellation checked after debounce delay before execution starts.
 
-- `src/SlidingWindowCache/Core/Rebalance/Intent/IntentController.cs` — atomic intent replacement
+- `src/Intervals.NET.Caching/Core/Rebalance/Intent/IntentController.cs` — atomic intent replacement
 
 ### UserRequestHandler Responsibilities
 **Invariants**: A.5, A.7
 
 Only `UserRequestHandler` has access to `IntentController.PublishIntent`. Its scope is limited to data assembly; no normalization logic.
 
-- `src/SlidingWindowCache/Core/UserPath/UserRequestHandler.cs` — exclusive intent publisher
-- `src/SlidingWindowCache/Core/Rebalance/Intent/IntentController.cs` — internal visibility on publication interface
+- `src/Intervals.NET.Caching/Core/UserPath/UserRequestHandler.cs` — exclusive intent publisher
+- `src/Intervals.NET.Caching/Core/Rebalance/Intent/IntentController.cs` — internal visibility on publication interface
 
 ### Async Execution Model
 **Invariants**: A.6, G.2
 
 `UserRequestHandler` publishes intent and returns immediately (fire-and-forget). `IRebalanceExecutionController` schedules execution via `Task.Run` or channels. User thread and ThreadPool thread contexts are separated.
 
-- `src/SlidingWindowCache/Core/Rebalance/Intent/IntentController.cs` — `ProcessIntentsAsync` runs on background thread
-- `src/SlidingWindowCache/Infrastructure/Execution/TaskBasedRebalanceExecutionController.cs` — `Task.Run` scheduling
-- `src/SlidingWindowCache/Infrastructure/Execution/ChannelBasedRebalanceExecutionController.cs` — channel-based background execution
+- `src/Intervals.NET.Caching/Core/Rebalance/Intent/IntentController.cs` — `ProcessIntentsAsync` runs on background thread
+- `src/Intervals.NET.Caching/Infrastructure/Execution/TaskBasedRebalanceExecutionController.cs` — `Task.Run` scheduling
+- `src/Intervals.NET.Caching/Infrastructure/Execution/ChannelBasedRebalanceExecutionController.cs` — channel-based background execution
 
 ### Atomic Cache Updates
 **Invariants**: B.2, B.3
 
 Storage strategies build new state before atomic swap. `Volatile.Write` atomically publishes new cache state reference (Snapshot). `CopyOnReadStorage` uses a lock-protected buffer swap instead. `Rematerialize` succeeds completely or not at all.
 
-- `src/SlidingWindowCache/Infrastructure/Storage/SnapshotReadStorage.cs` — `Array.Copy` + `Volatile.Write`
-- `src/SlidingWindowCache/Infrastructure/Storage/CopyOnReadStorage.cs` — lock-protected dual-buffer swap (`_lock`)
-- `src/SlidingWindowCache/Core/State/CacheState.cs` — `Rematerialize` ensures atomicity
+- `src/Intervals.NET.Caching/Infrastructure/Storage/SnapshotReadStorage.cs` — `Array.Copy` + `Volatile.Write`
+- `src/Intervals.NET.Caching/Infrastructure/Storage/CopyOnReadStorage.cs` — lock-protected dual-buffer swap (`_lock`)
+- `src/Intervals.NET.Caching/Core/State/CacheState.cs` — `Rematerialize` ensures atomicity
 
 ### Consistency Under Cancellation
 **Invariants**: B.3, B.5, F.1b
 
 Final cancellation check before applying cache updates. Results applied atomically or discarded entirely. `try-finally` blocks ensure cleanup on cancellation.
 
-- `src/SlidingWindowCache/Core/Rebalance/Execution/RebalanceExecutor.cs` — `ThrowIfCancellationRequested` before `Rematerialize`
+- `src/Intervals.NET.Caching/Core/Rebalance/Execution/RebalanceExecutor.cs` — `ThrowIfCancellationRequested` before `Rematerialize`
 
 ### Obsolete Result Prevention
 **Invariants**: B.6, C.4
 
 Each intent has a unique `CancellationToken`. Execution checks if cancellation is requested before applying results. Only results from the latest non-cancelled intent are applied.
 
-- `src/SlidingWindowCache/Core/Rebalance/Execution/RebalanceExecutor.cs` — cancellation validation before mutation
-- `src/SlidingWindowCache/Core/Rebalance/Intent/IntentController.cs` — token lifecycle management
+- `src/Intervals.NET.Caching/Core/Rebalance/Execution/RebalanceExecutor.cs` — cancellation validation before mutation
+- `src/Intervals.NET.Caching/Core/Rebalance/Intent/IntentController.cs` — token lifecycle management
 
 ### Intent Singularity
 **Invariant**: C.1
 
 `Interlocked.Exchange` ensures exactly one active intent. New intent atomically replaces previous one. At most one pending intent at any time (no queue buildup).
 
-- `src/SlidingWindowCache/Core/Rebalance/Intent/IntentController.cs` — `Interlocked.Exchange` for atomic intent replacement
+- `src/Intervals.NET.Caching/Core/Rebalance/Intent/IntentController.cs` — `Interlocked.Exchange` for atomic intent replacement
 
 ### Cancellation Protocol
 **Invariant**: C.3
 
 `CancellationToken` passed through the entire pipeline. Multiple checkpoints: before I/O, after I/O, before mutations. Results from cancelled operations are never applied.
 
-- `src/SlidingWindowCache/Core/Rebalance/Execution/RebalanceExecutor.cs` — multiple `ThrowIfCancellationRequested` calls
-- `src/SlidingWindowCache/Infrastructure/Services/CacheDataExtensionService.cs` — cancellation token propagated to `IDataSource`
+- `src/Intervals.NET.Caching/Core/Rebalance/Execution/RebalanceExecutor.cs` — multiple `ThrowIfCancellationRequested` calls
+- `src/Intervals.NET.Caching/Infrastructure/Services/CacheDataExtensionService.cs` — cancellation token propagated to `IDataSource`
 
 ### Early Exit Validation
 **Invariants**: C.4, D.5
 
 Post-debounce cancellation check before execution. Each validation stage can exit early. All stages must pass for execution to proceed.
 
-- `src/SlidingWindowCache/Core/Rebalance/Intent/IntentController.cs` — cancellation check after debounce
-- `src/SlidingWindowCache/Core/Rebalance/Decision/RebalanceDecisionEngine.cs` — multi-stage early exit
+- `src/Intervals.NET.Caching/Core/Rebalance/Intent/IntentController.cs` — cancellation check after debounce
+- `src/Intervals.NET.Caching/Core/Rebalance/Decision/RebalanceDecisionEngine.cs` — multi-stage early exit
 
 ### Serial Execution Guarantee
 **Invariant**: C.5
 
 Previous execution cancelled before starting new one. Single `IRebalanceExecutionController` instance per cache. Intent processing loop ensures serial execution.
 
-- `src/SlidingWindowCache/Core/Rebalance/Intent/IntentController.cs` — sequential intent loop + cancellation of prior execution
+- `src/Intervals.NET.Caching/Core/Rebalance/Intent/IntentController.cs` — sequential intent loop + cancellation of prior execution
 
 ### Intent Data Contract
 **Invariant**: C.8e
 
 `PublishIntent` signature requires `deliveredData` parameter. `UserRequestHandler` materializes data once, passes it to both user and intent. Compiler enforces data presence.
 
-- `src/SlidingWindowCache/Core/Rebalance/Intent/IntentController.cs` — `PublishIntent(requestedRange, deliveredData)` signature
-- `src/SlidingWindowCache/Core/UserPath/UserRequestHandler.cs` — single data materialization shared between paths
+- `src/Intervals.NET.Caching/Core/Rebalance/Intent/IntentController.cs` — `PublishIntent(requestedRange, deliveredData)` signature
+- `src/Intervals.NET.Caching/Core/UserPath/UserRequestHandler.cs` — single data materialization shared between paths
 
 ### Pure Decision Logic
 **Invariants**: D.1, D.2
 
 `RebalanceDecisionEngine` has no mutable fields. Decision policies are classes with no side effects. No I/O in decision path. Pure function: `(state, intent, config) → decision`.
 
-- `src/SlidingWindowCache/Core/Rebalance/Decision/RebalanceDecisionEngine.cs` — pure evaluation logic
-- `src/SlidingWindowCache/Core/Planning/NoRebalanceSatisfactionPolicy.cs` — stateless struct
-- `src/SlidingWindowCache/Core/Planning/ProportionalRangePlanner.cs` — stateless struct
+- `src/Intervals.NET.Caching/Core/Rebalance/Decision/RebalanceDecisionEngine.cs` — pure evaluation logic
+- `src/Intervals.NET.Caching/Core/Planning/NoRebalanceSatisfactionPolicy.cs` — stateless struct
+- `src/Intervals.NET.Caching/Core/Planning/ProportionalRangePlanner.cs` — stateless struct
 
 ### Decision-Execution Separation
 **Invariant**: D.2
 
 Decision components have no references to mutable state setters. Decision Engine reads `CacheState` but cannot modify it. Decision and Execution interfaces are distinct.
 
-- `src/SlidingWindowCache/Core/Rebalance/Decision/RebalanceDecisionEngine.cs` — read-only state access
-- `src/SlidingWindowCache/Core/Rebalance/Execution/RebalanceExecutor.cs` — exclusive write access
+- `src/Intervals.NET.Caching/Core/Rebalance/Decision/RebalanceDecisionEngine.cs` — read-only state access
+- `src/Intervals.NET.Caching/Core/Rebalance/Execution/RebalanceExecutor.cs` — exclusive write access
 
 ### Multi-Stage Decision Pipeline
 **Invariant**: D.5
 
 Five-stage pipeline with early exits. Stage 1: current `NoRebalanceRange` containment (fast path). Stage 2: pending `NoRebalanceRange` validation (thrashing prevention). Stage 3: `DesiredCacheRange` computation. Stage 4: equality check (`DesiredCacheRange == CurrentCacheRange`). Stage 5: execution scheduling (only if all stages pass).
 
-- `src/SlidingWindowCache/Core/Rebalance/Decision/RebalanceDecisionEngine.cs` — complete pipeline implementation
+- `src/Intervals.NET.Caching/Core/Rebalance/Decision/RebalanceDecisionEngine.cs` — complete pipeline implementation
 
 ### Desired Range Computation
 **Invariants**: E.1, E.2
 
 `ProportionalRangePlanner.Plan(requestedRange, config)` is a pure function — same inputs always produce same output. Never reads `CurrentCacheRange`. Reads configuration from a shared `RuntimeCacheOptionsHolder` at invocation time to support runtime option updates.
 
-- `src/SlidingWindowCache/Core/Planning/ProportionalRangePlanner.cs` — pure range calculation
+- `src/Intervals.NET.Caching/Core/Planning/ProportionalRangePlanner.cs` — pure range calculation
 
 ### NoRebalanceRange Computation
 **Invariants**: E.5, E.6
 
 `NoRebalanceRangePlanner.Plan(currentCacheRange)` — pure function of current range + config. Applies threshold percentages as negative expansion. Returns `null` when individual thresholds ≥ 1.0 (no stability zone possible). `WindowCacheOptions` constructor ensures threshold sum ≤ 1.0 at construction time. Reads configuration from a shared `RuntimeCacheOptionsHolder` at invocation time to support runtime option updates.
 
-- `src/SlidingWindowCache/Core/Planning/NoRebalanceRangePlanner.cs` — NoRebalanceRange computation
-- `src/SlidingWindowCache/Public/Configuration/WindowCacheOptions.cs` — threshold sum validation
+- `src/Intervals.NET.Caching/Core/Planning/NoRebalanceRangePlanner.cs` — NoRebalanceRange computation
+- `src/Intervals.NET.Caching/Public/Configuration/WindowCacheOptions.cs` — threshold sum validation
 
 ### Cancellation Checkpoints
 **Invariants**: F.1, F.1a
 
 Three checkpoints: before `IDataSource.FetchAsync`, after data fetching, before `Rematerialize`. `OperationCanceledException` propagates to cleanup handlers.
 
-- `src/SlidingWindowCache/Core/Rebalance/Execution/RebalanceExecutor.cs` — multiple checkpoint locations
+- `src/Intervals.NET.Caching/Core/Rebalance/Execution/RebalanceExecutor.cs` — multiple checkpoint locations
 
 ### Cache Normalization Operations
 **Invariant**: F.3
 
 `CacheState.Rematerialize` accepts arbitrary range and data (full replacement). `ICacheStorage` abstraction enables different normalization strategies.
 
-- `src/SlidingWindowCache/Core/State/CacheState.cs` — `Rematerialize` method
-- `src/SlidingWindowCache/Infrastructure/Storage/` — storage strategy implementations
+- `src/Intervals.NET.Caching/Core/State/CacheState.cs` — `Rematerialize` method
+- `src/Intervals.NET.Caching/Infrastructure/Storage/` — storage strategy implementations
 
 ### Incremental Data Fetching
 **Invariant**: F.4
 
 `CacheDataExtensionService.ExtendCacheDataAsync` computes missing ranges via range subtraction (`DesiredRange \ CachedRange`). Fetches only missing subranges via `IDataSource`.
 
-- `src/SlidingWindowCache/Infrastructure/Services/CacheDataExtensionService.cs` — range gap logic in `ExtendCacheDataAsync`
+- `src/Intervals.NET.Caching/Infrastructure/Services/CacheDataExtensionService.cs` — range gap logic in `ExtendCacheDataAsync`
 
 ### Data Preservation During Expansion
 **Invariant**: F.5
 
 New data merged with existing via range union. Existing data enumerated and preserved during rematerialization. New data only fills gaps; does not replace existing.
 
-- `src/SlidingWindowCache/Infrastructure/Services/CacheDataExtensionService.cs` — union logic in `ExtendCacheDataAsync`
+- `src/Intervals.NET.Caching/Infrastructure/Services/CacheDataExtensionService.cs` — union logic in `ExtendCacheDataAsync`
 
 ### I/O Isolation
 **Invariant**: G.3
 
 `UserRequestHandler` completes before any `IDataSource.FetchAsync` calls in rebalance path. All `IDataSource` interactions happen in `RebalanceExecutor` on a background thread.
 
-- `src/SlidingWindowCache/Core/UserPath/UserRequestHandler.cs` — no rebalance-path `IDataSource` calls
-- `src/SlidingWindowCache/Core/Rebalance/Execution/RebalanceExecutor.cs` — `IDataSource` calls only in background execution
+- `src/Intervals.NET.Caching/Core/UserPath/UserRequestHandler.cs` — no rebalance-path `IDataSource` calls
+- `src/Intervals.NET.Caching/Core/Rebalance/Execution/RebalanceExecutor.cs` — `IDataSource` calls only in background execution
 
 ### Activity Counter Ordering
 **Invariant**: H.1
 
 Activity counter incremented **before** semaphore signal, channel write, or volatile write (strict ordering discipline at all publication sites).
 
-- `src/SlidingWindowCache/Core/Rebalance/Intent/IntentController.cs` — increment before `semaphore.Release`
-- `src/SlidingWindowCache/Infrastructure/Execution/` — increment before channel write or `Task.Run`
+- `src/Intervals.NET.Caching/Core/Rebalance/Intent/IntentController.cs` — increment before `semaphore.Release`
+- `src/Intervals.NET.Caching/Infrastructure/Execution/` — increment before channel write or `Task.Run`
 
 ### Activity Counter Cleanup
 **Invariant**: H.2
 
 Decrement in `finally` blocks — unconditional execution regardless of success, failure, or cancellation.
 
-- `src/SlidingWindowCache/Core/Rebalance/Intent/IntentController.cs` — `finally` block in `ProcessIntentsAsync`
-- `src/SlidingWindowCache/Infrastructure/Execution/` — `finally` blocks in execution controllers
+- `src/Intervals.NET.Caching/Core/Rebalance/Intent/IntentController.cs` — `finally` block in `ProcessIntentsAsync`
+- `src/Intervals.NET.Caching/Infrastructure/Execution/` — `finally` blocks in execution controllers
 
 ---
 

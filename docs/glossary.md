@@ -1,6 +1,6 @@
 # Glossary
 
-Canonical definitions for SlidingWindowCache terms. This is a reference, not a tutorial.
+Canonical definitions for Intervals.NET.Caching terms. This is a reference, not a tutorial.
 
 Recommended reading order:
 
@@ -160,13 +160,13 @@ Layer
 - A single `WindowCache` instance in a layered cache stack. Layers are ordered by proximity to the user: L1 = outermost (user-facing), L2 = next inner, Lₙ = innermost (closest to the real data source).
 
 WindowCacheDataSourceAdapter
-- Adapts an `IWindowCache` to the `IDataSource` interface, enabling it to act as the backing store for an outer `WindowCache`. This is the composition point for building layered caches. The adapter does not own the inner cache; ownership is managed by `LayeredWindowCache`. See `src/SlidingWindowCache/Public/WindowCacheDataSourceAdapter.cs`.
+- Adapts an `IWindowCache` to the `IDataSource` interface, enabling it to act as the backing store for an outer `WindowCache`. This is the composition point for building layered caches. The adapter does not own the inner cache; ownership is managed by `LayeredWindowCache`. See `src/Intervals.NET.Caching/Public/WindowCacheDataSourceAdapter.cs`.
 
 LayeredWindowCacheBuilder
-- Fluent builder that wires `WindowCache` layers into a `LayeredWindowCache`. Obtain an instance via `WindowCacheBuilder.Layered(dataSource, domain)`. Layers are added bottom-up (deepest/innermost first, user-facing last). Each `AddLayer` call accepts either a pre-built `WindowCacheOptions` or an `Action<WindowCacheOptionsBuilder>` for inline configuration. `Build()` returns `IWindowCache<>` (concrete type: `LayeredWindowCache<>`). See `src/SlidingWindowCache/Public/Cache/LayeredWindowCacheBuilder.cs`.
+- Fluent builder that wires `WindowCache` layers into a `LayeredWindowCache`. Obtain an instance via `WindowCacheBuilder.Layered(dataSource, domain)`. Layers are added bottom-up (deepest/innermost first, user-facing last). Each `AddLayer` call accepts either a pre-built `WindowCacheOptions` or an `Action<WindowCacheOptionsBuilder>` for inline configuration. `Build()` returns `IWindowCache<>` (concrete type: `LayeredWindowCache<>`). See `src/Intervals.NET.Caching/Public/Cache/LayeredWindowCacheBuilder.cs`.
 
 LayeredWindowCache
-- A thin `IWindowCache` wrapper that owns a stack of `WindowCache` layers. Delegates `GetDataAsync` to the outermost layer. `WaitForIdleAsync` awaits all layers sequentially, outermost to innermost, ensuring full-stack convergence (required for correct behavior of `GetDataAndWaitForIdleAsync`). Disposes all layers outermost-first on `DisposeAsync`. Exposes `LayerCount` and `Layers`. See `src/SlidingWindowCache/Public/LayeredWindowCache.cs`.
+- A thin `IWindowCache` wrapper that owns a stack of `WindowCache` layers. Delegates `GetDataAsync` to the outermost layer. `WaitForIdleAsync` awaits all layers sequentially, outermost to innermost, ensuring full-stack convergence (required for correct behavior of `GetDataAndWaitForIdleAsync`). Disposes all layers outermost-first on `DisposeAsync`. Exposes `LayerCount` and `Layers`. See `src/Intervals.NET.Caching/Public/LayeredWindowCache.cs`.
 
 ## Storage And Materialization
 
@@ -210,7 +210,7 @@ RuntimeOptionsValidator
 - Internal static helper class that contains the shared validation logic for cache sizes and thresholds.
 - Used by both `WindowCacheOptions` and `RuntimeCacheOptions` to avoid duplicated validation rules.
 - Validates: cache sizes ≥ 0, individual thresholds in [0, 1], threshold sum ≤ 1.0 when both thresholds are provided.
-- See `src/SlidingWindowCache/Core/State/RuntimeOptionsValidator.cs`.
+- See `src/Intervals.NET.Caching/Core/State/RuntimeOptionsValidator.cs`.
 
 RuntimeCacheOptions
 - Internal immutable snapshot of the runtime-updatable subset of cache configuration: `LeftCacheSize`, `RightCacheSize`, `LeftThreshold`, `RightThreshold`, `DebounceDelay`.
@@ -223,7 +223,7 @@ RuntimeOptionsSnapshot
 - Obtained via `IWindowCache.CurrentRuntimeOptions`.
 - Immutable — a snapshot of values at the moment the property was read. Subsequent `UpdateRuntimeOptions` calls do not affect previously obtained snapshots.
 - Constructor is `internal`; created only via `RuntimeCacheOptions.ToSnapshot()`.
-- See `src/SlidingWindowCache/Public/Configuration/RuntimeOptionsSnapshot.cs`.
+- See `src/Intervals.NET.Caching/Public/Configuration/RuntimeOptionsSnapshot.cs`.
 
 RuntimeCacheOptionsHolder
 - Internal volatile wrapper that holds the current `RuntimeCacheOptions` snapshot.
