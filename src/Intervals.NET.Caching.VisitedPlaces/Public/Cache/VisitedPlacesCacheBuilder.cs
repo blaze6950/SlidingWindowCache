@@ -34,16 +34,16 @@ namespace Intervals.NET.Caching.VisitedPlaces.Public.Cache;
 /// await using var cache = VisitedPlacesCacheBuilder.For(dataSource, domain)
 ///     .WithOptions(o => o.WithStorageStrategy(StorageStrategy.SnapshotAppendBuffer))
 ///     .WithEviction(
-///         evaluators: [new MaxSegmentCountEvaluator(maxCount: 50)],
-///         executor: new LruEvictionExecutor&lt;int, MyData&gt;())
+///         policies: [new MaxSegmentCountPolicy(maxCount: 50)],
+///         selector: new LruEvictionSelector&lt;int, MyData&gt;())
 ///     .Build();
 /// </code>
 /// <para><strong>Layered-Cache Example:</strong></para>
 /// <code>
 /// await using var cache = VisitedPlacesCacheBuilder.Layered(dataSource, domain)
 ///     .AddVisitedPlacesLayer(
-///         evaluators: [new MaxSegmentCountEvaluator(maxCount: 100)],
-///         executor: new LruEvictionExecutor&lt;int, MyData&gt;())
+///         policies: [new MaxSegmentCountPolicy(maxCount: 100)],
+///         selector: new LruEvictionSelector&lt;int, MyData&gt;())
 ///     .Build();
 /// </code>
 /// </remarks>
@@ -142,8 +142,8 @@ public static class VisitedPlacesCacheBuilder
 /// await using var cache = VisitedPlacesCacheBuilder.For(dataSource, domain)
 ///     .WithOptions(o => o.WithStorageStrategy(StorageStrategy.SnapshotAppendBuffer))
 ///     .WithEviction(
-///         evaluators: [new MaxSegmentCountEvaluator(maxCount: 50)],
-///         executor: new LruEvictionExecutor&lt;int, MyData&gt;())
+///         policies: [new MaxSegmentCountPolicy(maxCount: 50)],
+///         selector: new LruEvictionSelector&lt;int, MyData&gt;())
 ///     .WithDiagnostics(myDiagnostics)
 ///     .Build();
 /// </code>
@@ -157,8 +157,8 @@ public sealed class VisitedPlacesCacheBuilder<TRange, TData, TDomain>
     private VisitedPlacesCacheOptions? _options;
     private Action<VisitedPlacesCacheOptionsBuilder>? _configurePending;
     private ICacheDiagnostics? _diagnostics;
-    private IReadOnlyList<IEvictionEvaluator<TRange, TData>>? _evaluators;
-    private IEvictionExecutor<TRange, TData>? _executor;
+    private IReadOnlyList<IEvictionPolicy<TRange, TData>>? _policies;
+    private IEvictionSelector<TRange, TData>? _selector;
 
     internal VisitedPlacesCacheBuilder(IDataSource<TRange, TData> dataSource, TDomain domain)
     {
@@ -215,42 +215,42 @@ public sealed class VisitedPlacesCacheBuilder<TRange, TData, TDomain>
     }
 
     /// <summary>
-    /// Configures the eviction policy with a list of evaluators and an executor.
+    /// Configures the eviction system with a list of policies and a selector.
     /// Both are required; <see cref="Build"/> throws if this method has not been called.
     /// </summary>
-    /// <param name="evaluators">
-    /// One or more eviction evaluators. Eviction is triggered when ANY evaluator fires (OR semantics).
+    /// <param name="policies">
+    /// One or more eviction policies. Eviction is triggered when ANY policy produces an exceeded pressure (OR semantics).
     /// Must be non-null and non-empty.
     /// </param>
-    /// <param name="executor">
-    /// The eviction executor responsible for selecting which segments to evict and maintaining statistics.
+    /// <param name="selector">
+    /// The eviction selector responsible for determining the order in which candidates are considered for eviction.
     /// Must be non-null.
     /// </param>
     /// <returns>This builder instance, for fluent chaining.</returns>
     /// <exception cref="ArgumentNullException">
-    /// Thrown when <paramref name="evaluators"/> or <paramref name="executor"/> is <c>null</c>.
+    /// Thrown when <paramref name="policies"/> or <paramref name="selector"/> is <c>null</c>.
     /// </exception>
     /// <exception cref="ArgumentException">
-    /// Thrown when <paramref name="evaluators"/> is empty.
+    /// Thrown when <paramref name="policies"/> is empty.
     /// </exception>
     public VisitedPlacesCacheBuilder<TRange, TData, TDomain> WithEviction(
-        IReadOnlyList<IEvictionEvaluator<TRange, TData>> evaluators,
-        IEvictionExecutor<TRange, TData> executor)
+        IReadOnlyList<IEvictionPolicy<TRange, TData>> policies,
+        IEvictionSelector<TRange, TData> selector)
     {
-        if (evaluators is null)
+        if (policies is null)
         {
-            throw new ArgumentNullException(nameof(evaluators));
+            throw new ArgumentNullException(nameof(policies));
         }
 
-        if (evaluators.Count == 0)
+        if (policies.Count == 0)
         {
             throw new ArgumentException(
-                "At least one eviction evaluator must be provided.",
-                nameof(evaluators));
+                "At least one eviction policy must be provided.",
+                nameof(policies));
         }
 
-        _evaluators = evaluators;
-        _executor = executor ?? throw new ArgumentNullException(nameof(executor));
+        _policies = policies;
+        _selector = selector ?? throw new ArgumentNullException(nameof(selector));
         return this;
     }
 
@@ -284,19 +284,19 @@ public sealed class VisitedPlacesCacheBuilder<TRange, TData, TDomain>
                 "Use WithOptions() to supply a VisitedPlacesCacheOptions instance or configure options inline.");
         }
 
-        if (_evaluators is null || _executor is null)
+        if (_policies is null || _selector is null)
         {
             throw new InvalidOperationException(
-                "Eviction policy must be configured before calling Build(). " +
-                "Use WithEviction() to supply evaluators and an executor.");
+                "Eviction must be configured before calling Build(). " +
+                "Use WithEviction() to supply policies and a selector.");
         }
 
         return new VisitedPlacesCache<TRange, TData, TDomain>(
             _dataSource,
             _domain,
             resolvedOptions,
-            _evaluators,
-            _executor,
+            _policies,
+            _selector,
             _diagnostics);
     }
 }

@@ -1,5 +1,6 @@
 using Intervals.NET.Domain.Abstractions;
 using Intervals.NET.Caching.VisitedPlaces.Core.Eviction;
+using Intervals.NET.Caching.VisitedPlaces.Core.Eviction.Pressure;
 using Intervals.NET.Caching.VisitedPlaces.Infrastructure.Storage;
 using Intervals.NET.Caching.VisitedPlaces.Public.Instrumentation;
 
@@ -12,7 +13,7 @@ namespace Intervals.NET.Caching.VisitedPlaces.Core.Background;
 /// </summary>
 /// <typeparam name="TRange">The type representing range boundaries.</typeparam>
 /// <typeparam name="TData">The type of data being cached.</typeparam>
-/// <typeparam name="TDomain">The range domain type; used by domain-aware eviction executors.</typeparam>
+/// <typeparam name="TDomain">The range domain type; used by domain-aware eviction policies.</typeparam>
 /// <remarks>
 /// <para><strong>Execution Context:</strong> Background Storage Loop (single writer thread)</para>
 /// <para><strong>Critical Contract — Background Path is the SINGLE WRITER (Invariant VPC.A.10):</strong></para>
@@ -23,8 +24,9 @@ namespace Intervals.NET.Caching.VisitedPlaces.Core.Background;
 /// <para><strong>Four-step sequence per event (Invariant VPC.B.3):</strong></para>
 /// <list type="number">
 /// <item><description>
-///   Statistics update — <see cref="IEvictionExecutor{TRange,TData}.UpdateStatistics"/> is called
-///   with the segments that were read on the User Path.
+///   Statistics update — per-segment statistics (<c>HitCount</c>, <c>LastAccessedAt</c>) are
+///   updated for segments that were read on the User Path. This is an orthogonal concern
+///   owned directly by the processor (not by any eviction component).
 /// </description></item>
 /// <item><description>
 ///   Store data — each chunk in <see cref="BackgroundEvent{TRange,TData}.FetchedChunks"/> with
@@ -32,13 +34,16 @@ namespace Intervals.NET.Caching.VisitedPlaces.Core.Background;
 ///   Skipped when <c>FetchedChunks</c> is null (full cache hit).
 /// </description></item>
 /// <item><description>
-///   Evaluate eviction — all <see cref="IEvictionEvaluator{TRange,TData}"/> instances are queried.
+///   Evaluate eviction — all <see cref="IEvictionPolicy{TRange,TData}"/> instances are queried.
+///   Each returns an <see cref="IEvictionPressure{TRange,TData}"/>. Pressures with
+///   <c>IsExceeded = true</c> are collected into a <see cref="CompositePressure{TRange,TData}"/>.
 ///   Only runs when step 2 stored at least one segment.
 /// </description></item>
 /// <item><description>
-///   Execute eviction — <see cref="IEvictionExecutor{TRange,TData}.SelectForEviction"/> is called
-///   when at least one evaluator fired; the processor then removes the returned segments from storage
-///   (Invariant VPC.E.2a).
+///   Execute eviction — <see cref="EvictionExecutor{TRange,TData}.Execute"/> is called
+///   with the composite pressure; it removes segments in selector order until all pressures
+///   are satisfied (Invariant VPC.E.2a). The processor then removes the returned segments
+///   from storage.
 /// </description></item>
 /// </list>
 /// <para><strong>Activity counter (Invariant S.H.1):</strong></para>
@@ -58,26 +63,26 @@ internal sealed class BackgroundEventProcessor<TRange, TData, TDomain>
     where TDomain : IRangeDomain<TRange>
 {
     private readonly ISegmentStorage<TRange, TData> _storage;
-    private readonly IReadOnlyList<IEvictionEvaluator<TRange, TData>> _evaluators;
-    private readonly IEvictionExecutor<TRange, TData> _executor;
+    private readonly IReadOnlyList<IEvictionPolicy<TRange, TData>> _policies;
+    private readonly EvictionExecutor<TRange, TData> _executor;
     private readonly ICacheDiagnostics _diagnostics;
 
     /// <summary>
     /// Initializes a new <see cref="BackgroundEventProcessor{TRange,TData,TDomain}"/>.
     /// </summary>
     /// <param name="storage">The segment storage (single writer — only mutated here).</param>
-    /// <param name="evaluators">Eviction evaluators; checked after each storage step.</param>
-    /// <param name="executor">Eviction executor; performs statistics updates and selects segments for eviction.</param>
+    /// <param name="policies">Eviction policies; checked after each storage step.</param>
+    /// <param name="selector">Eviction selector; determines candidate ordering for the executor.</param>
     /// <param name="diagnostics">Diagnostics sink; must never throw.</param>
     public BackgroundEventProcessor(
         ISegmentStorage<TRange, TData> storage,
-        IReadOnlyList<IEvictionEvaluator<TRange, TData>> evaluators,
-        IEvictionExecutor<TRange, TData> executor,
+        IReadOnlyList<IEvictionPolicy<TRange, TData>> policies,
+        IEvictionSelector<TRange, TData> selector,
         ICacheDiagnostics diagnostics)
     {
         _storage = storage;
-        _evaluators = evaluators;
-        _executor = executor;
+        _policies = policies;
+        _executor = new EvictionExecutor<TRange, TData>(selector);
         _diagnostics = diagnostics;
     }
 
@@ -105,7 +110,9 @@ internal sealed class BackgroundEventProcessor<TRange, TData, TDomain>
             var now = DateTime.UtcNow;
 
             // Step 1: Update statistics for segments read on the User Path.
-            _executor.UpdateStatistics(backgroundEvent.UsedSegments, now);
+            // This is an orthogonal concern: HitCount++ and LastAccessedAt = now for each used segment.
+            // Owned directly by the processor (not by any eviction component).
+            UpdateStatistics(backgroundEvent.UsedSegments, now);
             _diagnostics.BackgroundStatisticsUpdated();
 
             // Step 2: Store freshly fetched data (null FetchedChunks means full cache hit — skip).
@@ -137,29 +144,32 @@ internal sealed class BackgroundEventProcessor<TRange, TData, TDomain>
             // Steps 3 & 4: Evaluate and execute eviction only when new data was stored.
             if (justStoredSegments.Count > 0)
             {
-                // Step 3: Evaluate — query all evaluators and take the max removal count.
+                // Step 3: Evaluate — query all policies and collect exceeded pressures.
                 var allSegments = _storage.GetAllSegments();
-                var count = _storage.Count;
 
-                var removalCount = 0;
-                foreach (var evaluator in _evaluators)
+                var exceededPressures = new List<IEvictionPressure<TRange, TData>>();
+                foreach (var policy in _policies)
                 {
-                    var evaluatorCount = evaluator.ComputeEvictionCount(count, allSegments);
-                    if (evaluatorCount > removalCount)
+                    var pressure = policy.Evaluate(allSegments);
+                    if (pressure.IsExceeded)
                     {
-                        removalCount = evaluatorCount;
+                        exceededPressures.Add(pressure);
                     }
                 }
 
                 _diagnostics.EvictionEvaluated();
 
-                // Step 4: Execute eviction if any evaluator fired (Invariant VPC.E.2a).
-                // The executor selects candidates; this processor removes them from storage.
-                if (removalCount > 0)
+                // Step 4: Execute eviction if any policy produced an exceeded pressure (Invariant VPC.E.2a).
+                if (exceededPressures.Count > 0)
                 {
                     _diagnostics.EvictionTriggered();
 
-                    var toRemove = _executor.SelectForEviction(allSegments, justStoredSegments, removalCount);
+                    // Build composite pressure for multi-policy satisfaction.
+                    IEvictionPressure<TRange, TData> compositePressure = exceededPressures.Count == 1
+                        ? exceededPressures[0]
+                        : new CompositePressure<TRange, TData>(exceededPressures.ToArray());
+
+                    var toRemove = _executor.Execute(compositePressure, allSegments, justStoredSegments);
                     foreach (var segment in toRemove)
                     {
                         _storage.Remove(segment);
@@ -178,5 +188,33 @@ internal sealed class BackgroundEventProcessor<TRange, TData, TDomain>
         }
 
         return Task.CompletedTask;
+    }
+
+    /// <summary>
+    /// Updates per-segment statistics for all segments in <paramref name="usedSegments"/>.
+    /// </summary>
+    /// <param name="usedSegments">The segments that were accessed by the User Path.</param>
+    /// <param name="now">The current timestamp to assign to <c>LastAccessedAt</c>.</param>
+    /// <remarks>
+    /// <para>
+    /// For each segment in <paramref name="usedSegments"/>:
+    /// <list type="bullet">
+    /// <item><description><c>HitCount</c> is incremented (Invariant VPC.E.4b)</description></item>
+    /// <item><description><c>LastAccessedAt</c> is set to <paramref name="now"/> (Invariant VPC.E.4b)</description></item>
+    /// </list>
+    /// </para>
+    /// <para>
+    /// This logic was previously duplicated across all three executor implementations
+    /// (<c>LruEvictionExecutor</c>, <c>FifoEvictionExecutor</c>, <c>SmallestFirstEvictionExecutor</c>).
+    /// It is an orthogonal concern that does not belong on candidate selectors.
+    /// </para>
+    /// </remarks>
+    private static void UpdateStatistics(IReadOnlyList<CachedSegment<TRange, TData>> usedSegments, DateTime now)
+    {
+        foreach (var segment in usedSegments)
+        {
+            segment.Statistics.HitCount++;
+            segment.Statistics.LastAccessedAt = now;
+        }
     }
 }

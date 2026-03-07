@@ -20,7 +20,7 @@ public sealed class CachedSegment<TRange, TData>
     public ReadOnlyMemory<TData> Data { get; }
 
     /// <summary>
-    /// The per-segment statistics owned and maintained by the <see cref="Eviction.IEvictionExecutor{TRange,TData}"/>.
+    /// The per-segment statistics maintained by the background event processor.
     /// </summary>
     public SegmentStatistics Statistics { get; internal set; }
 

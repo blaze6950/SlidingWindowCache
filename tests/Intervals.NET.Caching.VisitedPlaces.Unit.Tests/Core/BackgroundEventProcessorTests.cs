@@ -2,8 +2,8 @@ using Intervals.NET.Caching.Dto;
 using Intervals.NET.Caching.VisitedPlaces.Core;
 using Intervals.NET.Caching.VisitedPlaces.Core.Background;
 using Intervals.NET.Caching.VisitedPlaces.Core.Eviction;
-using Intervals.NET.Caching.VisitedPlaces.Core.Eviction.Evaluators;
-using Intervals.NET.Caching.VisitedPlaces.Core.Eviction.Executors;
+using Intervals.NET.Caching.VisitedPlaces.Core.Eviction.Policies;
+using Intervals.NET.Caching.VisitedPlaces.Core.Eviction.Selectors;
 using Intervals.NET.Caching.VisitedPlaces.Infrastructure.Storage;
 using Intervals.NET.Caching.VisitedPlaces.Tests.Infrastructure;
 using Intervals.NET.Caching.VisitedPlaces.Tests.Infrastructure.Helpers;
@@ -19,7 +19,6 @@ namespace Intervals.NET.Caching.VisitedPlaces.Unit.Tests.Core;
 public sealed class BackgroundEventProcessorTests
 {
     private readonly SnapshotAppendBufferStorage<int, int> _storage = new();
-    private readonly LruEvictionExecutor<int, int> _executor = new();
     private readonly EventCounterCacheDiagnostics _diagnostics = new();
 
     #region ProcessEventAsync — Step 1: Statistics Update
@@ -158,7 +157,7 @@ public sealed class BackgroundEventProcessorTests
     [Fact]
     public async Task ProcessEventAsync_WhenStorageBelowLimit_DoesNotTriggerEviction()
     {
-        // ARRANGE — limit is 5, only 1 stored → evaluator does not fire
+        // ARRANGE — limit is 5, only 1 stored → policy does not fire
         var processor = CreateProcessor(maxSegmentCount: 5);
         var chunk = CreateChunk(0, 9);
 
@@ -300,14 +299,14 @@ public sealed class BackgroundEventProcessorTests
     #region ProcessEventAsync — Exception Handling
 
     [Fact]
-    public async Task ProcessEventAsync_WhenExecutorThrows_SwallowsExceptionAndFiresFailedDiagnostic()
+    public async Task ProcessEventAsync_WhenSelectorThrows_SwallowsExceptionAndFiresFailedDiagnostic()
     {
-        // ARRANGE — use a throwing executor to simulate a fault
-        var throwingExecutor = new ThrowingEvictionExecutor();
+        // ARRANGE — use a throwing selector to simulate a fault during eviction
+        var throwingSelector = new ThrowingEvictionSelector();
         var processor = new BackgroundEventProcessor<int, int, IntegerFixedStepDomain>(
             _storage,
-            evaluators: [new MaxSegmentCountEvaluator<int, int>(1)],
-            executor: throwingExecutor,
+            policies: [new MaxSegmentCountPolicy<int, int>(1)],
+            selector: throwingSelector,
             diagnostics: _diagnostics);
 
         // Pre-populate so eviction is triggered (count > 1 after storing)
@@ -336,8 +335,8 @@ public sealed class BackgroundEventProcessorTests
         var throwingStorage = new ThrowingSegmentStorage();
         var processor = new BackgroundEventProcessor<int, int, IntegerFixedStepDomain>(
             throwingStorage,
-            evaluators: [new MaxSegmentCountEvaluator<int, int>(100)],
-            executor: _executor,
+            policies: [new MaxSegmentCountPolicy<int, int>(100)],
+            selector: new LruEvictionSelector<int, int>(),
             diagnostics: _diagnostics);
 
         var chunk = CreateChunk(0, 9);
@@ -363,13 +362,14 @@ public sealed class BackgroundEventProcessorTests
     private BackgroundEventProcessor<int, int, IntegerFixedStepDomain> CreateProcessor(
         int maxSegmentCount)
     {
-        IReadOnlyList<IEvictionEvaluator<int, int>> evaluators =
-            [new MaxSegmentCountEvaluator<int, int>(maxSegmentCount)];
+        IReadOnlyList<IEvictionPolicy<int, int>> policies =
+            [new MaxSegmentCountPolicy<int, int>(maxSegmentCount)];
+        IEvictionSelector<int, int> selector = new LruEvictionSelector<int, int>();
 
         return new BackgroundEventProcessor<int, int, IntegerFixedStepDomain>(
             _storage,
-            evaluators,
-            _executor,
+            policies,
+            selector,
             _diagnostics);
     }
 
@@ -405,20 +405,13 @@ public sealed class BackgroundEventProcessorTests
     #region Test Doubles
 
     /// <summary>
-    /// An eviction executor that throws on <see cref="SelectForEviction"/> to test exception handling.
+    /// An eviction selector that throws on <see cref="OrderCandidates"/> to test exception handling.
     /// </summary>
-    private sealed class ThrowingEvictionExecutor : IEvictionExecutor<int, int>
+    private sealed class ThrowingEvictionSelector : IEvictionSelector<int, int>
     {
-        public void UpdateStatistics(IReadOnlyList<CachedSegment<int, int>> usedSegments, DateTime now)
-        {
-            // no-op
-        }
-
-        public IReadOnlyList<CachedSegment<int, int>> SelectForEviction(
-            IReadOnlyList<CachedSegment<int, int>> allSegments,
-            IReadOnlyList<CachedSegment<int, int>> justStoredSegments,
-            int removalCount) =>
-            throw new InvalidOperationException("Simulated eviction failure.");
+        public IReadOnlyList<CachedSegment<int, int>> OrderCandidates(
+            IReadOnlyList<CachedSegment<int, int>> candidates) =>
+            throw new InvalidOperationException("Simulated selector failure.");
     }
 
     /// <summary>

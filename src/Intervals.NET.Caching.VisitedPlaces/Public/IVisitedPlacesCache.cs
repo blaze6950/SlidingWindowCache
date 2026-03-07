@@ -39,8 +39,8 @@ namespace Intervals.NET.Caching.VisitedPlaces.Public;
 ///     .For(dataSource, domain)
 ///     .WithOptions(o => o.WithStorageStrategy(StorageStrategy.SnapshotAppendBuffer))
 ///     .WithEviction(
-///         evaluators: [new MaxSegmentCountEvaluator(maxCount: 100)],
-///         executor: new LruEvictionExecutor&lt;int, MyData&gt;())
+///         policies: [new MaxSegmentCountPolicy&lt;int, MyData&gt;(maxCount: 100)],
+///         selector: new LruEvictionSelector&lt;int, MyData&gt;())
 ///     .Build();
 /// var result = await cache.GetDataAsync(range, cancellationToken);
 /// </code>

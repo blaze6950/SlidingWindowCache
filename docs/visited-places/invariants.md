@@ -151,10 +151,10 @@ Assert.Equal(expectedCount, cache.SegmentCount);
 
 **VPC.B.3** [Architectural] Each `BackgroundEvent` is processed in the following **fixed sequence**:
 
-1. Update statistics for all `UsedSegments` (via Eviction Executor)
+1. Update statistics for all `UsedSegments` (Background Path directly)
 2. Store `FetchedData` as new segment(s), if present
-3. Evaluate all Eviction Evaluators, if new data was stored in step 2
-4. Execute eviction, if any evaluator fired in step 3
+3. Evaluate all Eviction Policies, if new data was stored in step 2
+4. Execute eviction via constraint satisfaction loop, if any policy produced an exceeded pressure in step 3
 
 **VPC.B.3a** [Architectural] **Statistics update always precedes storage** in the processing sequence.
 
@@ -220,7 +220,7 @@ Assert.Equal(expectedCount, cache.SegmentCount);
 
 **VPC.C.6** [Conceptual] Segments are **not invalidated or refreshed** by VPC itself.
 
-- VPC does not have a TTL-based expiration mechanism; segments are evicted by the configured Eviction Executor, not by age alone
+- VPC does not have a TTL-based expiration mechanism; segments are evicted by the configured eviction policies and selector, not by age alone
 - Freshness is the responsibility of the caller or of a higher-layer eviction strategy
 
 ---
@@ -255,36 +255,38 @@ Assert.Equal(expectedCount, cache.SegmentCount);
 
 ## VPC.E. Eviction Invariants
 
-### VPC.E.1 Evaluator Model
+### VPC.E.1 Policy-Pressure Model
 
-**VPC.E.1** [Architectural] Eviction is governed by a **pluggable Eviction Evaluator** that determines whether eviction should run.
+**VPC.E.1** [Architectural] Eviction is governed by a **pluggable Eviction Policy** (`IEvictionPolicy`) that evaluates cache state and produces **pressure objects** (`IEvictionPressure`) representing violated constraints.
 
-- At least one evaluator is configured at construction time
-- Multiple evaluators may be active simultaneously
+- At least one policy is configured at construction time
+- Multiple policies may be active simultaneously
+- Policies MUST NOT estimate how many segments to remove — they only express whether a constraint is violated
 
-**VPC.E.1a** [Architectural] Eviction is triggered when **ANY** configured Eviction Evaluator fires.
+**VPC.E.1a** [Architectural] Eviction is triggered when **ANY** configured Eviction Policy produces a pressure whose `IsExceeded` is `true`.
 
-- Evaluators are OR-combined: if at least one fires, eviction runs
-- All evaluators are checked after every storage step
+- Policies are OR-combined: if at least one produces an exceeded pressure, eviction runs
+- All policies are checked after every storage step
+- When no policy is exceeded, `NoPressure<TRange,TData>.Instance` is used (singleton, always `IsExceeded = false`)
 
-**VPC.E.2** [Architectural] The **Eviction Executor** is the sole authority for:
+**VPC.E.2** [Architectural] Eviction execution follows a **constraint satisfaction loop**:
 
-- Determining which segments to evict (strategy: LRU, FIFO, smallest-first, etc.)
-- Performing the eviction (removing segments from `CachedSegments`)
-- Maintaining per-segment statistics (owns `SegmentStatistics`)
+- The **Eviction Executor** removes segments in **selector order** until all pressures are satisfied (`IsExceeded = false`)
+- The **Eviction Selector** (`IEvictionSelector`) determines candidate ordering (LRU, FIFO, smallest-first, etc.) but does NOT decide how many to remove
+- Pressure objects update themselves via `Reduce(segment)` as each segment is removed, tracking actual constraint satisfaction
 
-**VPC.E.2a** [Architectural] The Eviction Executor runs **at most once per background event** regardless of how many evaluators fired.
+**VPC.E.2a** [Architectural] The constraint satisfaction loop runs **at most once per background event** regardless of how many policies produced exceeded pressures.
 
-- A single Executor invocation is responsible for satisfying ALL active evaluator constraints simultaneously
-- The Executor does not run once per fired evaluator
+- A `CompositePressure` aggregates all exceeded pressures; the loop removes segments until `IsExceeded = false` for all
+- When only a single policy is exceeded, its pressure is used directly (no composite wrapping)
 
-**Rationale:** Single-pass eviction is more efficient and avoids redundant iterations over `SegmentStatistics`.
+**Rationale:** The constraint satisfaction model eliminates the old mismatch where evaluators estimated removal counts (assuming a specific removal order) while executors used a different order. Pressure objects track actual constraint satisfaction as segments are removed, guaranteeing correctness regardless of selector strategy.
 
 ### VPC.E.2 Just-Stored Segment Immunity
 
 **VPC.E.3** [Architectural] The **just-stored segment is immune** from eviction in the same background event processing step in which it was stored.
 
-- When the Eviction Executor is invoked after storage, the just-stored segment is excluded from the candidate set
+- When the Eviction Executor is invoked after storage, the just-stored segment is excluded from the candidate set before candidates are passed to the selector
 - The immune segment is the exact segment added in step 2 of the current event's processing sequence
 
 **Rationale:** Without immunity, a newly-stored segment could be immediately evicted (e.g., by LRU, since its `LastAccessedAt` is the earliest among all segments). Immediate eviction of just-stored data would cause an infinite fetch-store-evict loop on every new access to an uncached range.
@@ -296,11 +298,11 @@ Assert.Equal(expectedCount, cache.SegmentCount);
 
 ### VPC.E.3 Statistics Ownership
 
-**VPC.E.4** [Architectural] The Eviction Executor **owns the `SegmentStatistics` schema**.
+**VPC.E.4** [Architectural] The **Background Event Processor** owns `SegmentStatistics` updates.
 
-- The executor defines which statistical fields exist and are maintained
-- Not all executors use all fields (e.g., a FIFO executor needs only `CreatedAt`; LRU needs `LastAccessedAt`)
-- The Background Path updates statistics by calling into the Eviction Executor; it does not directly write statistics fields
+- Statistics are updated directly by the Background Path as a private concern (step 1 of event processing)
+- Not all eviction selectors use all fields (e.g., a FIFO selector needs only `CreatedAt`; LRU needs `LastAccessedAt`)
+- Statistics fields are always maintained regardless of selector, ensuring correctness if the selector is changed
 
 **VPC.E.4a** [Architectural] Per-segment statistics are initialized when the segment is stored:
 
@@ -375,6 +377,6 @@ Shared invariants (S.H, S.J) are in `docs/shared/invariants.md`.
 - `docs/shared/invariants.md` — shared invariant groups S.H (activity tracking) and S.J (disposal)
 - `docs/visited-places/scenarios.md` — temporal scenario walkthroughs
 - `docs/visited-places/actors.md` — actor responsibilities and invariant ownership
-- `docs/visited-places/eviction.md` — eviction architecture (evaluator-executor model, strategy catalog)
+- `docs/visited-places/eviction.md` — eviction architecture (policy-pressure-selector model, strategy catalog)
 - `docs/visited-places/storage-strategies.md` — storage internals
 - `docs/shared/glossary.md` — shared term definitions

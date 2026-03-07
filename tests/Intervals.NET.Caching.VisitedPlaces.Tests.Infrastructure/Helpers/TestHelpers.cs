@@ -2,8 +2,8 @@ using Intervals.NET.Domain.Default.Numeric;
 using Moq;
 using Intervals.NET.Caching.Dto;
 using Intervals.NET.Caching.VisitedPlaces.Core.Eviction;
-using Intervals.NET.Caching.VisitedPlaces.Core.Eviction.Evaluators;
-using Intervals.NET.Caching.VisitedPlaces.Core.Eviction.Executors;
+using Intervals.NET.Caching.VisitedPlaces.Core.Eviction.Policies;
+using Intervals.NET.Caching.VisitedPlaces.Core.Eviction.Selectors;
 using Intervals.NET.Caching.VisitedPlaces.Public.Cache;
 using Intervals.NET.Caching.VisitedPlaces.Public.Configuration;
 using Intervals.NET.Caching.VisitedPlaces.Tests.Infrastructure.DataSources;
@@ -48,7 +48,7 @@ public static class TestHelpers
 
     /// <summary>
     /// Creates a <see cref="VisitedPlacesCache{TRange,TData,TDomain}"/> with default options,
-    /// a mock data source, MaxSegmentCount(100) evaluator, and LRU executor.
+    /// a mock data source, MaxSegmentCount(100) policy, and LRU selector.
     /// Returns both the cache and the mock for setup/verification.
     /// </summary>
     public static (VisitedPlacesCache<int, int, IntegerFixedStepDomain> cache,
@@ -66,7 +66,7 @@ public static class TestHelpers
     }
 
     /// <summary>
-    /// Creates a cache backed by the given data source and a MaxSegmentCount(maxSegmentCount) + LRU eviction policy.
+    /// Creates a cache backed by the given data source and a MaxSegmentCount(maxSegmentCount) policy + LRU selector.
     /// </summary>
     public static VisitedPlacesCache<int, int, IntegerFixedStepDomain> CreateCache(
         IDataSource<int, int> dataSource,
@@ -75,12 +75,12 @@ public static class TestHelpers
         EventCounterCacheDiagnostics diagnostics,
         int maxSegmentCount = 100)
     {
-        IReadOnlyList<IEvictionEvaluator<int, int>> evaluators =
-            [new MaxSegmentCountEvaluator<int, int>(maxSegmentCount)];
-        IEvictionExecutor<int, int> executor = new LruEvictionExecutor<int, int>();
+        IReadOnlyList<IEvictionPolicy<int, int>> policies =
+            [new MaxSegmentCountPolicy<int, int>(maxSegmentCount)];
+        IEvictionSelector<int, int> selector = new LruEvictionSelector<int, int>();
 
         return new VisitedPlacesCache<int, int, IntegerFixedStepDomain>(
-            dataSource, domain, options, evaluators, executor, diagnostics);
+            dataSource, domain, options, policies, selector, diagnostics);
     }
 
     /// <summary>

@@ -64,26 +64,25 @@ public sealed class VisitedPlacesCache<TRange, TData, TDomain>
     /// Initializes a new instance of <see cref="VisitedPlacesCache{TRange,TData,TDomain}"/>.
     /// </summary>
     /// <param name="dataSource">The data source from which to fetch missing data.</param>
-    /// <param name="domain">The domain defining range characteristics (used by domain-aware eviction executors).</param>
+    /// <param name="domain">The domain defining range characteristics (used by domain-aware eviction policies).</param>
     /// <param name="options">Configuration options (storage strategy, scheduler type/capacity).</param>
-    /// <param name="evaluators">
-    /// One or more eviction evaluators. Eviction runs when ANY fires (OR semantics, Invariant VPC.E.1a).
+    /// <param name="policies">
+    /// One or more eviction policies. Eviction runs when ANY produces an exceeded pressure (OR semantics, Invariant VPC.E.1a).
     /// </param>
-    /// <param name="executor">Eviction executor; maintains per-segment statistics and performs eviction.</param>
+    /// <param name="selector">Eviction selector; determines candidate ordering for eviction execution.</param>
     /// <param name="cacheDiagnostics">
     /// Optional diagnostics sink. When <see langword="null"/>, <see cref="NoOpDiagnostics.Instance"/> is used.
     /// </param>
     /// <exception cref="ArgumentNullException">
     /// Thrown when <paramref name="dataSource"/>, <paramref name="options"/>,
-    /// <paramref name="evaluators"/>, or <paramref name="executor"/> is <see langword="null"/>.
+    /// <paramref name="policies"/>, or <paramref name="selector"/> is <see langword="null"/>.
     /// </exception>
     public VisitedPlacesCache(
         IDataSource<TRange, TData> dataSource,
         TDomain domain,
         VisitedPlacesCacheOptions options,
-        // todo think about defining evaluators and executors inside options
-        IReadOnlyList<IEvictionEvaluator<TRange, TData>> evaluators,
-        IEvictionExecutor<TRange, TData> executor,
+        IReadOnlyList<IEvictionPolicy<TRange, TData>> policies,
+        IEvictionSelector<TRange, TData> selector,
         ICacheDiagnostics? cacheDiagnostics = null)
     {
         // Fall back to no-op diagnostics so internal actors never receive null.
@@ -98,8 +97,8 @@ public sealed class VisitedPlacesCache<TRange, TData, TDomain>
         // Background event processor: single writer, executes the four-step Background Path.
         var processor = new BackgroundEventProcessor<TRange, TData, TDomain>(
             storage,
-            evaluators,
-            executor,
+            policies,
+            selector,
             cacheDiagnostics);
 
         // Diagnostics adapter: maps IWorkSchedulerDiagnostics → ICacheDiagnostics.

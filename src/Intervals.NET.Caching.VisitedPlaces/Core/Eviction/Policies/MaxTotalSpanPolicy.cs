@@ -1,10 +1,11 @@
 using Intervals.NET.Caching.Extensions;
+using Intervals.NET.Caching.VisitedPlaces.Core.Eviction.Pressure;
 using Intervals.NET.Domain.Abstractions;
 
-namespace Intervals.NET.Caching.VisitedPlaces.Core.Eviction.Evaluators;
+namespace Intervals.NET.Caching.VisitedPlaces.Core.Eviction.Policies;
 
 /// <summary>
-/// An <see cref="IEvictionEvaluator{TRange,TData}"/> that fires when the sum of all cached
+/// An <see cref="IEvictionPolicy{TRange,TData}"/> that fires when the sum of all cached
 /// segment spans (total domain coverage) exceeds a configured maximum.
 /// </summary>
 /// <typeparam name="TRange">The type representing range boundaries.</typeparam>
@@ -13,15 +14,25 @@ namespace Intervals.NET.Caching.VisitedPlaces.Core.Eviction.Evaluators;
 /// <remarks>
 /// <para><strong>Firing Condition:</strong>
 /// <c>sum(segment.Range.Span(domain) for segment in allSegments) &gt; MaxTotalSpan</c></para>
+/// <para><strong>Pressure Produced:</strong> <see cref="TotalSpanPressure{TRange,TData,TDomain}"/>
+/// with the computed total span, the configured maximum, and the domain for per-segment span
+/// computation during <see cref="IEvictionPressure{TRange,TData}.Reduce"/>.</para>
 /// <para>
-/// This evaluator limits the total cached domain coverage regardless of how many
-/// segments it is split into. More meaningful than segment count when segments vary
-/// significantly in span.
+/// This policy limits the total cached domain coverage regardless of how many segments it is
+/// split into. More meaningful than segment count when segments vary significantly in span.
+/// </para>
+/// <para><strong>Key improvement over <c>MaxTotalSpanEvaluator</c>:</strong></para>
+/// <para>
+/// The old evaluator had to estimate removal counts using a greedy algorithm (sort by span
+/// descending, count until excess is covered). This estimate could mismatch the actual executor
+/// order (LRU, FIFO, etc.), leading to under-eviction. The new design avoids this entirely:
+/// the pressure object tracks actual span reduction as segments are removed, regardless of order.
 /// </para>
 /// <para><strong>Span Computation:</strong> Uses <typeparamref name="TDomain"/> to compute each
-/// segment's span at evaluation time. The domain is captured at construction.</para>
+/// segment's span at evaluation time. The domain is captured at construction and passed to the
+/// pressure object for use during <see cref="IEvictionPressure{TRange,TData}.Reduce"/>.</para>
 /// </remarks>
-internal sealed class MaxTotalSpanEvaluator<TRange, TData, TDomain> : IEvictionEvaluator<TRange, TData>
+internal sealed class MaxTotalSpanPolicy<TRange, TData, TDomain> : IEvictionPolicy<TRange, TData>
     where TRange : IComparable<TRange>
     where TDomain : IRangeDomain<TRange>
 {
@@ -33,7 +44,7 @@ internal sealed class MaxTotalSpanEvaluator<TRange, TData, TDomain> : IEvictionE
     public int MaxTotalSpan { get; }
 
     /// <summary>
-    /// Initializes a new <see cref="MaxTotalSpanEvaluator{TRange,TData,TDomain}"/> with the
+    /// Initializes a new <see cref="MaxTotalSpanPolicy{TRange,TData,TDomain}"/> with the
     /// specified maximum total span and domain.
     /// </summary>
     /// <param name="maxTotalSpan">
@@ -46,7 +57,7 @@ internal sealed class MaxTotalSpanEvaluator<TRange, TData, TDomain> : IEvictionE
     /// <exception cref="ArgumentNullException">
     /// Thrown when <paramref name="domain"/> is <see langword="null"/>.
     /// </exception>
-    public MaxTotalSpanEvaluator(int maxTotalSpan, TDomain domain)
+    public MaxTotalSpanPolicy(int maxTotalSpan, TDomain domain)
     {
         if (maxTotalSpan < 1)
         {
@@ -65,36 +76,15 @@ internal sealed class MaxTotalSpanEvaluator<TRange, TData, TDomain> : IEvictionE
     }
 
     /// <inheritdoc/>
-    /// TODO: looks like the parameter list is not optimal. I guess we can pass just allSegments without precalculated count - everything else must be inside this method.
-    public int ComputeEvictionCount(int count, IReadOnlyList<CachedSegment<TRange, TData>> allSegments)
+    public IEvictionPressure<TRange, TData> Evaluate(IReadOnlyList<CachedSegment<TRange, TData>> allSegments)
     {
         var totalSpan = allSegments.Sum(s => s.Range.Span(_domain).Value);
-        var excessSpan = totalSpan - MaxTotalSpan;
-        if (excessSpan <= 0)
+
+        if (totalSpan <= MaxTotalSpan)
         {
-            return 0;
+            return NoPressure<TRange, TData>.Instance;
         }
 
-        // Estimate the minimum number of segments to remove to bring the total span within limit.
-        // Sort segments by span descending and greedily remove from largest to find the lower bound.
-        // The executor may choose a different order (LRU, FIFO, etc.), so this is an estimate;
-        // partial satisfaction is acceptable — the next storage event will trigger another pass.
-        var sortedSpans = allSegments
-            .Select(s => s.Range.Span(_domain).Value)
-            .OrderByDescending(span => span);
-
-        long removedSpan = 0;
-        var segCount = 0;
-        foreach (var span in sortedSpans)
-        {
-            removedSpan += span;
-            segCount++;
-            if (removedSpan >= excessSpan)
-            {
-                break;
-            }
-        }
-
-        return segCount;
+        return new TotalSpanPressure<TRange, TData, TDomain>(totalSpan, MaxTotalSpan, _domain);
     }
 }

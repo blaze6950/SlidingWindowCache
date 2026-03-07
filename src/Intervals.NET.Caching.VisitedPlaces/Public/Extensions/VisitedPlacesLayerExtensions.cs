@@ -17,8 +17,8 @@ namespace Intervals.NET.Caching.VisitedPlaces.Public.Extensions;
 /// await using var cache = VisitedPlacesCacheBuilder.Layered(dataSource, domain)
 ///     .AddVisitedPlacesLayer(
 ///         options: new VisitedPlacesCacheOptions(),
-///         evaluators: [new MaxSegmentCountEvaluator(maxCount: 100)],
-///         executor: new LruEvictionExecutor&lt;int, MyData&gt;())
+///         policies: [new MaxSegmentCountPolicy(maxCount: 100)],
+///         selector: new LruEvictionSelector&lt;int, MyData&gt;())
 ///     .Build();
 /// </code>
 /// <para>
@@ -37,12 +37,12 @@ public static class VisitedPlacesLayerExtensions
     /// <typeparam name="TData">The type of data being cached.</typeparam>
     /// <typeparam name="TDomain">The range domain type. Must implement <see cref="IRangeDomain{TRange}"/>.</typeparam>
     /// <param name="builder">The layered cache builder to add the layer to.</param>
-    /// <param name="evaluators">
-    /// One or more eviction evaluators. Eviction is triggered when ANY evaluator fires (OR semantics).
+    /// <param name="policies">
+    /// One or more eviction policies. Eviction is triggered when ANY produces an exceeded pressure (OR semantics).
     /// Must be non-null and non-empty.
     /// </param>
-    /// <param name="executor">
-    /// The eviction executor responsible for selecting which segments to evict and maintaining statistics.
+    /// <param name="selector">
+    /// The eviction selector responsible for determining candidate ordering for eviction.
     /// Must be non-null.
     /// </param>
     /// <param name="options">
@@ -54,42 +54,42 @@ public static class VisitedPlacesLayerExtensions
     /// </param>
     /// <returns>The same builder instance, for fluent chaining.</returns>
     /// <exception cref="ArgumentNullException">
-    /// Thrown when <paramref name="evaluators"/> or <paramref name="executor"/> is <c>null</c>.
+    /// Thrown when <paramref name="policies"/> or <paramref name="selector"/> is <c>null</c>.
     /// </exception>
     /// <exception cref="ArgumentException">
-    /// Thrown when <paramref name="evaluators"/> is empty.
+    /// Thrown when <paramref name="policies"/> is empty.
     /// </exception>
     public static LayeredRangeCacheBuilder<TRange, TData, TDomain> AddVisitedPlacesLayer<TRange, TData, TDomain>(
         this LayeredRangeCacheBuilder<TRange, TData, TDomain> builder,
-        IReadOnlyList<IEvictionEvaluator<TRange, TData>> evaluators,
-        IEvictionExecutor<TRange, TData> executor,
+        IReadOnlyList<IEvictionPolicy<TRange, TData>> policies,
+        IEvictionSelector<TRange, TData> selector,
         VisitedPlacesCacheOptions? options = null,
         ICacheDiagnostics? diagnostics = null)
         where TRange : IComparable<TRange>
         where TDomain : IRangeDomain<TRange>
     {
-        if (evaluators is null)
+        if (policies is null)
         {
-            throw new ArgumentNullException(nameof(evaluators));
+            throw new ArgumentNullException(nameof(policies));
         }
 
-        if (evaluators.Count == 0)
+        if (policies.Count == 0)
         {
             throw new ArgumentException(
-                "At least one eviction evaluator must be provided.",
-                nameof(evaluators));
+                "At least one eviction policy must be provided.",
+                nameof(policies));
         }
 
-        if (executor is null)
+        if (selector is null)
         {
-            throw new ArgumentNullException(nameof(executor));
+            throw new ArgumentNullException(nameof(selector));
         }
 
         var domain = builder.Domain;
         var resolvedOptions = options ?? new VisitedPlacesCacheOptions();
         return builder.AddLayer(dataSource =>
             new VisitedPlacesCache<TRange, TData, TDomain>(
-                dataSource, domain, resolvedOptions, evaluators, executor, diagnostics));
+                dataSource, domain, resolvedOptions, policies, selector, diagnostics));
     }
 
     /// <summary>
@@ -100,11 +100,11 @@ public static class VisitedPlacesLayerExtensions
     /// <typeparam name="TData">The type of data being cached.</typeparam>
     /// <typeparam name="TDomain">The range domain type. Must implement <see cref="IRangeDomain{TRange}"/>.</typeparam>
     /// <param name="builder">The layered cache builder to add the layer to.</param>
-    /// <param name="evaluators">
-    /// One or more eviction evaluators. Must be non-null and non-empty.
+    /// <param name="policies">
+    /// One or more eviction policies. Must be non-null and non-empty.
     /// </param>
-    /// <param name="executor">
-    /// The eviction executor. Must be non-null.
+    /// <param name="selector">
+    /// The eviction selector. Must be non-null.
     /// </param>
     /// <param name="configure">
     /// A delegate that receives a <see cref="VisitedPlacesCacheOptionsBuilder"/> and applies
@@ -115,35 +115,35 @@ public static class VisitedPlacesLayerExtensions
     /// </param>
     /// <returns>The same builder instance, for fluent chaining.</returns>
     /// <exception cref="ArgumentNullException">
-    /// Thrown when <paramref name="evaluators"/> or <paramref name="executor"/> is <c>null</c>.
+    /// Thrown when <paramref name="policies"/> or <paramref name="selector"/> is <c>null</c>.
     /// </exception>
     /// <exception cref="ArgumentException">
-    /// Thrown when <paramref name="evaluators"/> is empty.
+    /// Thrown when <paramref name="policies"/> is empty.
     /// </exception>
     public static LayeredRangeCacheBuilder<TRange, TData, TDomain> AddVisitedPlacesLayer<TRange, TData, TDomain>(
         this LayeredRangeCacheBuilder<TRange, TData, TDomain> builder,
-        IReadOnlyList<IEvictionEvaluator<TRange, TData>> evaluators,
-        IEvictionExecutor<TRange, TData> executor,
+        IReadOnlyList<IEvictionPolicy<TRange, TData>> policies,
+        IEvictionSelector<TRange, TData> selector,
         Action<VisitedPlacesCacheOptionsBuilder> configure,
         ICacheDiagnostics? diagnostics = null)
         where TRange : IComparable<TRange>
         where TDomain : IRangeDomain<TRange>
     {
-        if (evaluators is null)
+        if (policies is null)
         {
-            throw new ArgumentNullException(nameof(evaluators));
+            throw new ArgumentNullException(nameof(policies));
         }
 
-        if (evaluators.Count == 0)
+        if (policies.Count == 0)
         {
             throw new ArgumentException(
-                "At least one eviction evaluator must be provided.",
-                nameof(evaluators));
+                "At least one eviction policy must be provided.",
+                nameof(policies));
         }
 
-        if (executor is null)
+        if (selector is null)
         {
-            throw new ArgumentNullException(nameof(executor));
+            throw new ArgumentNullException(nameof(selector));
         }
 
         if (configure is null)
@@ -158,7 +158,7 @@ public static class VisitedPlacesLayerExtensions
             configure(optionsBuilder);
             var options = optionsBuilder.Build();
             return new VisitedPlacesCache<TRange, TData, TDomain>(
-                dataSource, domain, options, evaluators, executor, diagnostics);
+                dataSource, domain, options, policies, selector, diagnostics);
         });
     }
 }
