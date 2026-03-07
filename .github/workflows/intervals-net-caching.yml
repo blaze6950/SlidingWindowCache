@@ -5,6 +5,7 @@ on:
     branches: [ master, main ]
     paths:
       - 'src/Intervals.NET.Caching/**'
+      - 'src/Intervals.NET.Caching.SlidingWindow/**'
       - 'src/Intervals.NET.Caching.WasmValidation/**'
       - 'tests/**'
       - '.github/workflows/Intervals.NET.Caching.yml'
@@ -12,19 +13,21 @@ on:
     branches: [ master, main ]
     paths:
       - 'src/Intervals.NET.Caching/**'
+      - 'src/Intervals.NET.Caching.SlidingWindow/**'
       - 'src/Intervals.NET.Caching.WasmValidation/**'
       - 'tests/**'
       - '.github/workflows/Intervals.NET.Caching.yml'
   workflow_dispatch:
-
+# todo adjust this workflof config to be SWC specific; also define another one for VPC type; think about a separate package for the core project
 env:
   DOTNET_VERSION: '8.x.x'
   SOLUTION_PATH: 'Intervals.NET.Caching.sln'
-  PROJECT_PATH: 'src/Intervals.NET.Caching/Intervals.NET.Caching.csproj'
+  CORE_PROJECT_PATH: 'src/Intervals.NET.Caching/Intervals.NET.Caching.csproj'
+  PROJECT_PATH: 'src/Intervals.NET.Caching.SlidingWindow/Intervals.NET.Caching.SlidingWindow.csproj'
   WASM_VALIDATION_PATH: 'src/Intervals.NET.Caching.WasmValidation/Intervals.NET.Caching.WasmValidation.csproj'
-  UNIT_TEST_PATH: 'tests/Intervals.NET.Caching.Unit.Tests/Intervals.NET.Caching.Unit.Tests.csproj'
-  INTEGRATION_TEST_PATH: 'tests/Intervals.NET.Caching.Integration.Tests/Intervals.NET.Caching.Integration.Tests.csproj'
-  INVARIANTS_TEST_PATH: 'tests/Intervals.NET.Caching.Invariants.Tests/Intervals.NET.Caching.Invariants.Tests.csproj'
+  UNIT_TEST_PATH: 'tests/Intervals.NET.Caching.SlidingWindow.Unit.Tests/Intervals.NET.Caching.SlidingWindow.Unit.Tests.csproj'
+  INTEGRATION_TEST_PATH: 'tests/Intervals.NET.Caching.SlidingWindow.Integration.Tests/Intervals.NET.Caching.SlidingWindow.Integration.Tests.csproj'
+  INVARIANTS_TEST_PATH: 'tests/Intervals.NET.Caching.SlidingWindow.Invariants.Tests/Intervals.NET.Caching.SlidingWindow.Invariants.Tests.csproj'
 
 jobs:
   build-and-test:
@@ -87,19 +90,25 @@ jobs:
           dotnet-version: ${{ env.DOTNET_VERSION }}
       
       - name: Restore dependencies
-        run: dotnet restore ${{ env.PROJECT_PATH }}
+        run: dotnet restore ${{ env.SOLUTION_PATH }}
       
       - name: Build Intervals.NET.Caching
-        run: dotnet build ${{ env.PROJECT_PATH }} --configuration Release --no-restore
+        run: dotnet build ${{ env.CORE_PROJECT_PATH }} --configuration Release --no-restore
       
       - name: Pack Intervals.NET.Caching
+        run: dotnet pack ${{ env.CORE_PROJECT_PATH }} --configuration Release --no-build --output ./artifacts
+      
+      - name: Build Intervals.NET.Caching.SlidingWindow
+        run: dotnet build ${{ env.PROJECT_PATH }} --configuration Release --no-restore
+      
+      - name: Pack Intervals.NET.Caching.SlidingWindow
         run: dotnet pack ${{ env.PROJECT_PATH }} --configuration Release --no-build --output ./artifacts
       
-      - name: Publish Intervals.NET.Caching to NuGet
-        run: dotnet nuget push ./artifacts/Intervals.NET.Caching.*.nupkg --api-key ${{ secrets.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json --skip-duplicate
+      - name: Publish packages to NuGet
+        run: dotnet nuget push ./artifacts/*.nupkg --api-key ${{ secrets.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json --skip-duplicate
       
       - name: Upload package artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: Intervals.NET.Caching-package
+          name: nuget-packages
           path: ./artifacts/*.nupkg

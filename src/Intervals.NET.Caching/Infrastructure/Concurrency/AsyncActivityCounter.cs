@@ -21,16 +21,16 @@ namespace Intervals.NET.Caching.Infrastructure.Concurrency;
 /// <item><description>Call <see cref="DecrementActivity"/> in finally block when work completes (processing loop)</description></item>
 /// <item><description>Await <see cref="WaitForIdleAsync"/> to wait for all active operations to complete</description></item>
 /// </list>
-/// <para><strong>Critical Activity Tracking Invariants (docs/invariants.md Section H):</strong></para>
+/// <para><strong>Critical Activity Tracking Invariants (docs/shared/invariants.md Section S.H):</strong></para>
 /// <para>
 /// This class implements two architectural invariants that create an orchestration barrier:
 /// <list type="bullet">
- /// <item><description><strong>H.1 - Increment-Before-Publish:</strong> Work MUST call IncrementActivity() BEFORE becoming visible</description></item>
-/// <item><description><strong>H.2 - Decrement-After-Completion:</strong> Work MUST call DecrementActivity() in finally block AFTER completion</description></item>
-/// <item><description><strong>H.3 - "Was Idle" Semantics:</strong> WaitForIdleAsync() uses eventual consistency model</description></item>
+///  /// <item><description><strong>S.H.1 - Increment-Before-Publish:</strong> Work MUST call IncrementActivity() BEFORE becoming visible</description></item>
+/// <item><description><strong>S.H.2 - Decrement-After-Completion:</strong> Work MUST call DecrementActivity() in finally block AFTER completion</description></item>
+/// <item><description><strong>S.H.3 - "Was Idle" Semantics:</strong> WaitForIdleAsync() uses eventual consistency model</description></item>
 /// </list>
 /// These invariants ensure idle detection never misses scheduled-but-not-yet-started work.
-/// See docs/invariants.md Section H for detailed explanation and call site verification.
+/// See docs/shared/invariants.md Section S.H for detailed explanation and call site verification.
 /// </para>
 /// <para><strong>Idle State Semantics - STATE-BASED, NOT EVENT-BASED:</strong></para>
 /// <para>

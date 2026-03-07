@@ -1,0 +1,47 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+    <PropertyGroup>
+        <TargetFramework>net8.0</TargetFramework>
+        <ImplicitUsings>enable</ImplicitUsings>
+        <Nullable>enable</Nullable>
+        
+        <!-- NuGet Package Metadata -->
+        <PackageId>Intervals.NET.Caching.SlidingWindow</PackageId>
+        <Version>0.0.1</Version>
+        <Authors>blaze6950</Authors>
+        <Product>Intervals.NET.Caching.SlidingWindow</Product>
+        <Description>A read-only, range-based, sequential-optimized sliding window cache with background rebalancing and cancellation-aware prefetching. Designed for scenarios with predictable sequential data access patterns like time-series data, paginated datasets, and streaming content.</Description>
+        <PackageLicenseExpression>MIT</PackageLicenseExpression>
+        <PackageProjectUrl>https://github.com/blaze6950/Intervals.NET.Caching</PackageProjectUrl>
+        <RepositoryUrl>https://github.com/blaze6950/Intervals.NET.Caching</RepositoryUrl>
+        <RepositoryType>git</RepositoryType>
+        <PackageTags>cache;sliding-window;range-based;async;prefetching;time-series;sequential-access;intervals;performance</PackageTags>
+        <PackageReadmeFile>README.md</PackageReadmeFile>
+        <PackageReleaseNotes>Initial release with core sliding window cache functionality, background rebalancing, and WebAssembly support.</PackageReleaseNotes>
+        <GeneratePackageOnBuild>false</GeneratePackageOnBuild>
+        <IncludeSymbols>true</IncludeSymbols>
+        <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+        <PublishRepositoryUrl>true</PublishRepositoryUrl>
+        <EmbedUntrackedSources>true</EmbedUntrackedSources>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <InternalsVisibleTo Include="Intervals.NET.Caching.SlidingWindow.Unit.Tests" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <ProjectReference Include="..\Intervals.NET.Caching\Intervals.NET.Caching.csproj" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <PackageReference Include="Intervals.NET.Data" Version="0.0.1" />
+        <PackageReference Include="Intervals.NET.Domain.Default" Version="0.0.2" />
+        <PackageReference Include="Intervals.NET.Domain.Extensions" Version="0.0.3" />
+        <PackageReference Include="Microsoft.SourceLink.GitHub" Version="10.0.103" PrivateAssets="All" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <None Include="..\..\README.md" Pack="true" PackagePath="\" />
+    </ItemGroup>
+
+</Project>

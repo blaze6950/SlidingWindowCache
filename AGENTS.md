@@ -4,7 +4,13 @@ This document provides essential information for AI coding agents working on the
 
 ## Project Overview
 
-**Intervals.NET.Caching** is a C# .NET 8.0 library implementing a read-only, range-based, sequential-optimized cache with decision-driven background rebalancing. This is a production-ready concurrent systems project with extensive architectural documentation.
+**Intervals.NET.Caching** is a C# .NET 8.0 library implementing a read-only, range-based, sequential-optimized cache with decision-driven background rebalancing. It is organized into multiple packages:
+
+- **`Intervals.NET.Caching`** — shared foundation: interfaces, DTOs, layered cache infrastructure, concurrency primitives
+- **`Intervals.NET.Caching.SlidingWindow`** — sliding window cache implementation (sequential-access optimized)
+- **`Intervals.NET.Caching.VisitedPlaces`** — scaffold only (random-access optimized, not yet implemented)
+
+This is a production-ready concurrent systems project with extensive architectural documentation.
 
 **Key Architecture Principles:**
 - Single-Writer Architecture: Only rebalance execution mutates cache state
@@ -30,10 +36,10 @@ dotnet build Intervals.NET.Caching.sln
 dotnet build Intervals.NET.Caching.sln --configuration Release
 
 # Build specific project
-dotnet build src/Intervals.NET.Caching/Intervals.NET.Caching.csproj --configuration Release
+dotnet build src/Intervals.NET.Caching.SlidingWindow/Intervals.NET.Caching.SlidingWindow.csproj --configuration Release
 
 # Pack for NuGet
-dotnet pack src/Intervals.NET.Caching/Intervals.NET.Caching.csproj --configuration Release --output ./artifacts
+dotnet pack src/Intervals.NET.Caching.SlidingWindow/Intervals.NET.Caching.SlidingWindow.csproj --configuration Release --output ./artifacts
 ```
 
 ## Test Commands
@@ -45,12 +51,12 @@ dotnet pack src/Intervals.NET.Caching/Intervals.NET.Caching.csproj --configurati
 dotnet test Intervals.NET.Caching.sln --configuration Release
 
 # Run specific test project
-dotnet test tests/Intervals.NET.Caching.Unit.Tests/Intervals.NET.Caching.Unit.Tests.csproj
-dotnet test tests/Intervals.NET.Caching.Integration.Tests/Intervals.NET.Caching.Integration.Tests.csproj
-dotnet test tests/Intervals.NET.Caching.Invariants.Tests/Intervals.NET.Caching.Invariants.Tests.csproj
+dotnet test tests/Intervals.NET.Caching.SlidingWindow.Unit.Tests/Intervals.NET.Caching.SlidingWindow.Unit.Tests.csproj
+dotnet test tests/Intervals.NET.Caching.SlidingWindow.Integration.Tests/Intervals.NET.Caching.SlidingWindow.Integration.Tests.csproj
+dotnet test tests/Intervals.NET.Caching.SlidingWindow.Invariants.Tests/Intervals.NET.Caching.SlidingWindow.Invariants.Tests.csproj
 
 # Run single test by fully qualified name
-dotnet test --filter "FullyQualifiedName=Intervals.NET.Caching.Unit.Tests.Public.Configuration.WindowCacheOptionsTests.Constructor_WithValidParameters_InitializesAllProperties"
+dotnet test --filter "FullyQualifiedName=Intervals.NET.Caching.SlidingWindow.Unit.Tests.Public.Configuration.SlidingWindowCacheOptionsTests.Constructor_WithValidParameters_InitializesAllProperties"
 
 # Run tests matching pattern
 dotnet test --filter "FullyQualifiedName~Constructor"
@@ -62,7 +68,7 @@ dotnet test --collect:"XPlat Code Coverage" --results-directory ./TestResults
 **Test Projects:**
 - **Unit Tests**: Individual component testing with Moq 4.20.70
 - **Integration Tests**: Component interaction, concurrency, data source interaction
-- **Invariants Tests**: 27 automated tests validating architectural contracts via public API
+- **Invariants Tests**: 90 automated tests validating architectural contracts via public API
 
 ## Linting & Formatting
 
@@ -77,26 +83,29 @@ dotnet test --collect:"XPlat Code Coverage" --results-directory ./TestResults
 ### Namespace Organization
 ```csharp
 // Use file-scoped namespace declarations (C# 10+)
-namespace Intervals.NET.Caching.Public;
-namespace Intervals.NET.Caching.Core.UserPath;
-namespace Intervals.NET.Caching.Infrastructure.Storage;
+namespace Intervals.NET.Caching.SlidingWindow.Public;
+namespace Intervals.NET.Caching.SlidingWindow.Core.UserPath;
+namespace Intervals.NET.Caching.SlidingWindow.Infrastructure.Storage;
 ```
 
-**Namespace Structure:**
-- `Intervals.NET.Caching.Public` - Public API surface
-- `Intervals.NET.Caching.Core` - Business logic (internal)
-- `Intervals.NET.Caching.Infrastructure` - Infrastructure concerns (internal)
+**Namespace Structure (SlidingWindow):**
+- `Intervals.NET.Caching.SlidingWindow.Public` - Public API surface
+- `Intervals.NET.Caching.SlidingWindow.Core` - Business logic (internal)
+- `Intervals.NET.Caching.SlidingWindow.Infrastructure` - Infrastructure concerns (internal)
+
+**Namespace Structure (Shared Foundation — `Intervals.NET.Caching`):**
+- `Intervals.NET.Caching` - Shared interfaces and DTOs (`IRangeCache`, `IDataSource`, `RangeResult`, etc.)
 
 ### Naming Conventions
 
 **Classes:**
 - PascalCase with descriptive role/responsibility suffix
 - Internal classes marked `internal sealed`
-- Examples: `WindowCache`, `UserRequestHandler`, `RebalanceDecisionEngine`
+- Examples: `SlidingWindowCache`, `UserRequestHandler`, `RebalanceDecisionEngine`
 
 **Interfaces:**
 - IPascalCase prefix
-- Examples: `IDataSource`, `ICacheDiagnostics`, `IWindowCache`
+- Examples: `IDataSource`, `ICacheDiagnostics`, `ISlidingWindowCache`
 
 **Generic Type Parameters:**
 - `TRange` - Range boundary type
@@ -130,9 +139,9 @@ namespace Intervals.NET.Caching.Infrastructure.Storage;
 ```csharp
 using Intervals.NET;
 using Intervals.NET.Domain.Abstractions;
-using Intervals.NET.Caching.Core.Planning;
-using Intervals.NET.Caching.Core.State;
-using Intervals.NET.Caching.Public.Instrumentation;
+using Intervals.NET.Caching.SlidingWindow.Core.Planning;
+using Intervals.NET.Caching.SlidingWindow.Core.State;
+using Intervals.NET.Caching.SlidingWindow.Public.Instrumentation;
 ```
 
 ### XML Documentation
@@ -155,7 +164,7 @@ using Intervals.NET.Caching.Public.Instrumentation;
 ```
 
 **Internal components should have detailed architectural remarks:**
-- References to invariants (see `docs/invariants.md`)
+- References to invariants (see `docs/sliding-window/invariants.md`)
 - Cross-references to related components
 - Explicit responsibilities and non-responsibilities
 - Execution context (User Thread vs Background Thread)
@@ -214,9 +223,9 @@ catch (Exception ex)
 **Threading Model - Single Logical Consumer with Internal Concurrency:**
 - **User-facing model**: One logical consumer per cache (one user, one viewport, coherent access pattern)
 - **Internal implementation**: Multiple threads operate concurrently (User thread + Intent loop + Execution loop)
-- WindowCache **IS thread-safe** for its internal concurrency (user thread + background threads)
-- WindowCache is **NOT designed for multiple users sharing one cache** (violates coherent access pattern)
-- Multiple threads from the SAME logical consumer CAN call WindowCache safely (read-only User Path)
+- SlidingWindowCache **IS thread-safe** for its internal concurrency (user thread + background threads)
+- SlidingWindowCache is **NOT designed for multiple users sharing one cache** (violates coherent access pattern)
+- Multiple threads from the SAME logical consumer CAN call SlidingWindowCache safely (read-only User Path)
 
 **Consistency Modes (three options):**
 - **Eventual consistency** (default): `GetDataAsync` — returns immediately, cache converges in background
@@ -224,7 +233,7 @@ catch (Exception ex)
 - **Strong consistency**: `GetDataAndWaitForIdleAsync` — always waits for idle regardless of `CacheInteraction`
 
 **Serialized Access Requirement for Hybrid/Strong Modes:**
-`GetDataAndWaitOnMissAsync` and `GetDataAndWaitForIdleAsync` provide their warm-cache guarantee only under **serialized (one-at-a-time) access**. Under parallel access, `WaitForIdleAsync`'s "was idle at some point" semantics (Invariant H.3) may return the old completed TCS, missing the rebalance triggered by the concurrent request. These methods remain safe (no crashes/hangs) but the guarantee degrades under parallelism.
+`GetDataAndWaitOnMissAsync` and `GetDataAndWaitForIdleAsync` provide their warm-cache guarantee only under **serialized (one-at-a-time) access**. Under parallel access, `WaitForIdleAsync`'s "was idle at some point" semantics (Invariant S.H.3) may return the old completed TCS, missing the rebalance triggered by the concurrent request. These methods remain safe (no crashes/hangs) but the guarantee degrades under parallelism.
 
 **Lock-Free Operations:**
 ```csharp
@@ -253,7 +262,7 @@ var tcs = Volatile.Read(ref _idleTcs);  // Observe TCS with acquire fence
 public void MethodName_Scenario_ExpectedBehavior()
 {
     // ARRANGE
-    var options = new WindowCacheOptions(...);
+    var options = new SlidingWindowCacheOptions(...);
     
     // ACT
     var result = options.DoSomething();
@@ -314,30 +323,30 @@ refactor: AsyncActivityCounter lock has been removed and replaced with lock-free
 
 ### Documentation Update Map
 
-| File                          | Update When                        | Focus                                   |
-|-------------------------------|------------------------------------|-----------------------------------------|
-| `README.md`                   | Public API changes, new features   | User-facing examples, configuration     |
-| `docs/invariants.md`          | Architectural invariants changed   | System constraints, concurrency rules   |
-| `docs/architecture.md`        | Concurrency mechanisms changed     | Thread safety, coordination model       |
-| `docs/components/overview.md` | New components, major refactoring  | Component catalog, dependencies         |
-| `docs/actors.md`              | Component responsibilities changed | Actor roles, explicit responsibilities  |
-| `docs/state-machine.md`       | State transitions changed          | State machine specification             |
-| `docs/storage-strategies.md`  | Storage implementation changed     | Strategy comparison, performance        |
-| `docs/scenarios.md`           | Temporal behavior changed          | Scenario walkthroughs, sequences        |
-| `docs/diagnostics.md`         | New diagnostics events             | Instrumentation guide                   |
-| `docs/glossary.md`            | Terms or semantics change          | Canonical terminology                   |
-| `benchmarks/*/README.md`      | Benchmark changes                  | Performance methodology, results        |
-| `tests/*/README.md`           | Test architecture changes          | Test suite documentation                |
-| XML comments (in code)        | All code changes                   | Component purpose, invariant references |
+| File                                          | Update When                        | Focus                                   |
+|-----------------------------------------------|------------------------------------|-----------------------------------------|
+| `README.md`                                   | Public API changes, new features   | User-facing examples, configuration     |
+| `docs/sliding-window/invariants.md`           | Architectural invariants changed   | System constraints, concurrency rules   |
+| `docs/sliding-window/architecture.md`         | Concurrency mechanisms changed     | Thread safety, coordination model       |
+| `docs/sliding-window/components/overview.md`  | New components, major refactoring  | Component catalog, dependencies         |
+| `docs/sliding-window/actors.md`               | Component responsibilities changed | Actor roles, explicit responsibilities  |
+| `docs/sliding-window/state-machine.md`        | State transitions changed          | State machine specification             |
+| `docs/sliding-window/storage-strategies.md`   | Storage implementation changed     | Strategy comparison, performance        |
+| `docs/sliding-window/scenarios.md`            | Temporal behavior changed          | Scenario walkthroughs, sequences        |
+| `docs/shared/diagnostics.md`                  | New diagnostics events             | Instrumentation guide                   |
+| `docs/shared/glossary.md`                     | Terms or semantics change          | Canonical terminology                   |
+| `benchmarks/*/README.md`                      | Benchmark changes                  | Performance methodology, results        |
+| `tests/*/README.md`                           | Test architecture changes          | Test suite documentation                |
+| XML comments (in code)                        | All code changes                   | Component purpose, invariant references |
 
 ## Architecture References
 
 **Before making changes, consult these critical documents:**
-- `docs/invariants.md` - System invariants - READ THIS FIRST
-- `docs/architecture.md` - Architecture and concurrency model
-- `docs/actors.md` - Actor responsibilities and boundaries
-- `docs/components/overview.md` - Component catalog (split by subsystem)
-- `docs/glossary.md` - Canonical terminology
+- `docs/sliding-window/invariants.md` - System invariants - READ THIS FIRST
+- `docs/sliding-window/architecture.md` - Architecture and concurrency model
+- `docs/sliding-window/actors.md` - Actor responsibilities and boundaries
+- `docs/sliding-window/components/overview.md` - Component catalog (split by subsystem)
+- `docs/shared/glossary.md` - Canonical terminology
 - `README.md` - User guide and examples
 
 **Key Invariants to NEVER violate:**
@@ -349,25 +358,41 @@ refactor: AsyncActivityCounter lock has been removed and replaced with lock-free
 
 ## File Locations
 
-**Public API:**
-- `src/Intervals.NET.Caching/Public/WindowCache.cs` - Main cache facade
-- `src/Intervals.NET.Caching/Public/IDataSource.cs` - Data source contract
-- `src/Intervals.NET.Caching/Public/Configuration/` - Configuration classes
-- `src/Intervals.NET.Caching/Public/Instrumentation/` - Diagnostics
+**Public API (Shared Foundation — `Intervals.NET.Caching`):**
+- `src/Intervals.NET.Caching/IRangeCache.cs` - Shared cache interface
+- `src/Intervals.NET.Caching/IDataSource.cs` - Data source contract
+- `src/Intervals.NET.Caching/Dto/` - Shared DTOs (`RangeResult`, `RangeChunk`, `CacheInteraction`)
+- `src/Intervals.NET.Caching/Layered/` - `LayeredRangeCache`, `LayeredRangeCacheBuilder`, `RangeCacheDataSourceAdapter`
+- `src/Intervals.NET.Caching/Extensions/` - `RangeCacheConsistencyExtensions` (strong consistency)
+
+**Public API (SlidingWindow):**
+- `src/Intervals.NET.Caching.SlidingWindow/Public/ISlidingWindowCache.cs` - SlidingWindow-specific interface
+- `src/Intervals.NET.Caching.SlidingWindow/Public/Cache/SlidingWindowCache.cs` - Main cache facade
+- `src/Intervals.NET.Caching.SlidingWindow/Public/Cache/SlidingWindowCacheBuilder.cs` - Builder (includes `Layered()`)
+- `src/Intervals.NET.Caching.SlidingWindow/Public/Configuration/` - Configuration classes
+- `src/Intervals.NET.Caching.SlidingWindow/Public/Instrumentation/` - Diagnostics
+- `src/Intervals.NET.Caching.SlidingWindow/Public/Extensions/` - `SlidingWindowCacheConsistencyExtensions`, `SlidingWindowLayerExtensions`
 
 **Core Logic:**
-- `src/Intervals.NET.Caching/Core/UserPath/` - User request handling (read-only)
-- `src/Intervals.NET.Caching/Core/Rebalance/Decision/` - Decision engine
-- `src/Intervals.NET.Caching/Core/Rebalance/Execution/` - Cache mutations (single writer)
-- `src/Intervals.NET.Caching/Core/State/` - State management
+- `src/Intervals.NET.Caching.SlidingWindow/Core/UserPath/` - User request handling (read-only)
+- `src/Intervals.NET.Caching.SlidingWindow/Core/Rebalance/Decision/` - Decision engine
+- `src/Intervals.NET.Caching.SlidingWindow/Core/Rebalance/Execution/` - Cache mutations (single writer)
+- `src/Intervals.NET.Caching.SlidingWindow/Core/State/` - State management
 
 **Infrastructure:**
-- `src/Intervals.NET.Caching/Infrastructure/Storage/` - Storage strategies
-- `src/Intervals.NET.Caching/Infrastructure/Concurrency/` - Async coordination
+- `src/Intervals.NET.Caching.SlidingWindow/Infrastructure/Storage/` - Storage strategies
+- `src/Intervals.NET.Caching.SlidingWindow/Infrastructure/Concurrency/` - Async coordination
+- `src/Intervals.NET.Caching/Infrastructure/Concurrency/AsyncActivityCounter.cs` - Shared lock-free activity counter (internal, visible to SWC via InternalsVisibleTo)
+
+**WebAssembly Validation:**
+- `src/Intervals.NET.Caching.WasmValidation/` - Validates all packages compile for `net8.0-browser`
+
+**Scaffold (not yet implemented):**
+- `src/Intervals.NET.Caching.VisitedPlaces/` - VisitedPlacesCache scaffold (random-access optimized)
 
 ## CI/CD
 
-**GitHub Actions:** `.github/workflows/Intervals.NET.Caching.yml`
+**GitHub Actions:** `.github/workflows/intervals-net-caching.yml`
 - Triggers: Push/PR to main/master, manual dispatch
 - Runs: Build, WebAssembly validation, all test suites with coverage
 - Coverage: Uploaded to Codecov

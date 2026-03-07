@@ -1,0 +1,31 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+    <PropertyGroup>
+        <TargetFramework>net8.0</TargetFramework>
+        <ImplicitUsings>enable</ImplicitUsings>
+        <Nullable>enable</Nullable>
+
+        <!-- NuGet Package Metadata -->
+        <PackageId>Intervals.NET.Caching.VisitedPlaces</PackageId>
+        <Version>0.0.1</Version>
+        <Authors>blaze6950</Authors>
+        <Product>Intervals.NET.Caching.VisitedPlaces</Product>
+        <Description>Visited places cache implementation for Intervals.NET: a random-access optimized range cache (not yet implemented — scaffold only).</Description>
+        <PackageLicenseExpression>MIT</PackageLicenseExpression>
+        <PackageProjectUrl>https://github.com/blaze6950/Intervals.NET.Caching</PackageProjectUrl>
+        <RepositoryUrl>https://github.com/blaze6950/Intervals.NET.Caching</RepositoryUrl>
+        <RepositoryType>git</RepositoryType>
+        <PackageTags>cache;range-based;async;intervals</PackageTags>
+        <GeneratePackageOnBuild>false</GeneratePackageOnBuild>
+        <IncludeSymbols>true</IncludeSymbols>
+        <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+        <PublishRepositoryUrl>true</PublishRepositoryUrl>
+        <EmbedUntrackedSources>true</EmbedUntrackedSources>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <ProjectReference Include="..\Intervals.NET.Caching\Intervals.NET.Caching.csproj" />
+        <PackageReference Include="Microsoft.SourceLink.GitHub" Version="10.0.103" PrivateAssets="All" />
+    </ItemGroup>
+
+</Project>

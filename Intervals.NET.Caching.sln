@@ -1,5 +1,9 @@
+﻿
 Microsoft Visual Studio Solution File, Format Version 12.00
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Intervals.NET.Caching", "src\Intervals.NET.Caching\Intervals.NET.Caching.csproj", "{40C9BEF3-8CFA-43CC-AFE0-7E374DF7F9A5}"
+#
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Intervals.NET.Caching", "src\Intervals.NET.Caching\Intervals.NET.Caching.csproj", "{D1E2F3A4-B5C6-4D7E-9F0A-1B2C3D4E5F6A}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Intervals.NET.Caching.SlidingWindow", "src\Intervals.NET.Caching.SlidingWindow\Intervals.NET.Caching.SlidingWindow.csproj", "{40C9BEF3-8CFA-43CC-AFE0-7E374DF7F9A5}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Intervals.NET.Caching.WasmValidation", "src\Intervals.NET.Caching.WasmValidation\Intervals.NET.Caching.WasmValidation.csproj", "{A1B2C3D4-E5F6-4A5B-8C9D-0E1F2A3B4C5D}"
 EndProject
@@ -9,50 +13,71 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "SolutionItems", "SolutionIt
 	EndProjectSection
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "docs", "docs", "{B0276F89-7127-4A8C-AD8F-C198780A1E34}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "shared", "shared", "{CE3B07FD-0EC6-4C58-BA45-C23111D5A934}"
 	ProjectSection(SolutionItems) = preProject
-		docs\scenarios.md = docs\scenarios.md
-		docs\invariants.md = docs\invariants.md
-		docs\actors.md = docs\actors.md
-		docs\state-machine.md = docs\state-machine.md
-		docs\architecture.md = docs\architecture.md
-		docs\boundary-handling.md = docs\boundary-handling.md
-		docs\storage-strategies.md = docs\storage-strategies.md
-		docs\diagnostics.md = docs\diagnostics.md
-		docs\glossary.md = docs\glossary.md
+		docs\shared\actors.md = docs\shared\actors.md
+		docs\shared\architecture.md = docs\shared\architecture.md
+		docs\shared\boundary-handling.md = docs\shared\boundary-handling.md
+		docs\shared\diagnostics.md = docs\shared\diagnostics.md
+		docs\shared\glossary.md = docs\shared\glossary.md
+		docs\shared\invariants.md = docs\shared\invariants.md
+		docs\shared\components\infrastructure.md = docs\shared\components\infrastructure.md
+	EndProjectSection
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "sliding-window", "sliding-window", "{F1A2B3C4-D5E6-4F7A-8B9C-0D1E2F3A4B5C}"
+	ProjectSection(SolutionItems) = preProject
+		docs\sliding-window\actors.md = docs\sliding-window\actors.md
+		docs\sliding-window\architecture.md = docs\sliding-window\architecture.md
+		docs\sliding-window\boundary-handling.md = docs\sliding-window\boundary-handling.md
+		docs\sliding-window\diagnostics.md = docs\sliding-window\diagnostics.md
+		docs\sliding-window\glossary.md = docs\sliding-window\glossary.md
+		docs\sliding-window\invariants.md = docs\sliding-window\invariants.md
+		docs\sliding-window\scenarios.md = docs\sliding-window\scenarios.md
+		docs\sliding-window\state-machine.md = docs\sliding-window\state-machine.md
 	EndProjectSection
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "src", "src", "{2126ACFB-75E0-4E60-A84C-463EBA8A8799}"
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "tests", "tests", "{8C504091-1383-4EEB-879E-7A3769C3DF13}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Intervals.NET.Caching.Invariants.Tests", "tests\Intervals.NET.Caching.Invariants.Tests\Intervals.NET.Caching.Invariants.Tests.csproj", "{17AB54EA-D245-4867-A047-ED55B4D94C17}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Intervals.NET.Caching.SlidingWindow.Invariants.Tests", "tests\Intervals.NET.Caching.SlidingWindow.Invariants.Tests\Intervals.NET.Caching.SlidingWindow.Invariants.Tests.csproj", "{17AB54EA-D245-4867-A047-ED55B4D94C17}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Intervals.NET.Caching.Integration.Tests", "tests\Intervals.NET.Caching.Integration.Tests\Intervals.NET.Caching.Integration.Tests.csproj", "{0023794C-FAD3-490C-96E3-448C68ED2569}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Intervals.NET.Caching.SlidingWindow.Integration.Tests", "tests\Intervals.NET.Caching.SlidingWindow.Integration.Tests\Intervals.NET.Caching.SlidingWindow.Integration.Tests.csproj", "{0023794C-FAD3-490C-96E3-448C68ED2569}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Intervals.NET.Caching.Unit.Tests", "tests\Intervals.NET.Caching.Unit.Tests\Intervals.NET.Caching.Unit.Tests.csproj", "{906F9E4F-0EFA-4FE8-8DA2-DDECE22B7306}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Intervals.NET.Caching.SlidingWindow.Unit.Tests", "tests\Intervals.NET.Caching.SlidingWindow.Unit.Tests\Intervals.NET.Caching.SlidingWindow.Unit.Tests.csproj", "{906F9E4F-0EFA-4FE8-8DA2-DDECE22B7306}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Intervals.NET.Caching.Tests.Infrastructure", "tests\Intervals.NET.Caching.Tests.Infrastructure\Intervals.NET.Caching.Tests.Infrastructure.csproj", "{C1D2E3F4-A5B6-4C7D-8E9F-0A1B2C3D4E5F}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Intervals.NET.Caching.SlidingWindow.Tests.Infrastructure", "tests\Intervals.NET.Caching.SlidingWindow.Tests.Infrastructure\Intervals.NET.Caching.SlidingWindow.Tests.Infrastructure.csproj", "{C1D2E3F4-A5B6-4C7D-8E9F-0A1B2C3D4E5F}"
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "cicd", "cicd", "{9C6688E8-071B-48F5-9B84-4779B58822CC}"
 	ProjectSection(SolutionItems) = preProject
-		.github\workflows\Intervals.NET.Caching.yml = .github\workflows\Intervals.NET.Caching.yml
+		.github\workflows\intervals-net-caching.yml = .github\workflows\intervals-net-caching.yml
 	EndProjectSection
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "benchmarks", "benchmarks", "{EB0F4813-1FA9-4C40-A975-3B8C6BBFF8D5}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Intervals.NET.Caching.Benchmarks", "benchmarks\Intervals.NET.Caching.Benchmarks\Intervals.NET.Caching.Benchmarks.csproj", "{8E83B41E-08E9-4AF4-8272-1AB2D2DEDBAB}"
+
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Intervals.NET.Caching.VisitedPlaces", "src\Intervals.NET.Caching.VisitedPlaces\Intervals.NET.Caching.VisitedPlaces.csproj", "{6EA7122A-30F7-465E-930C-51A917495CE0}"
 EndProject
-Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "components", "components", "{CE3B07FD-0EC6-4C58-BA45-C23111D5A934}"
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "components", "components", "{7E231AE8-BD26-43F7-B900-18A08B7E1C67}"
 	ProjectSection(SolutionItems) = preProject
-		docs\components\decision.md = docs\components\decision.md
-		docs\components\execution.md = docs\components\execution.md
-		docs\components\infrastructure.md = docs\components\infrastructure.md
-		docs\components\intent-management.md = docs\components\intent-management.md
-		docs\components\overview.md = docs\components\overview.md
-		docs\components\public-api.md = docs\components\public-api.md
-		docs\components\rebalance-path.md = docs\components\rebalance-path.md
-		docs\components\state-and-storage.md = docs\components\state-and-storage.md
-		docs\components\user-path.md = docs\components\user-path.md
+		docs\sliding-window\components\decision.md = docs\sliding-window\components\decision.md
+		docs\sliding-window\components\execution.md = docs\sliding-window\components\execution.md
+		docs\sliding-window\components\infrastructure.md = docs\sliding-window\components\infrastructure.md
+		docs\sliding-window\components\intent-management.md = docs\sliding-window\components\intent-management.md
+		docs\sliding-window\components\overview.md = docs\sliding-window\components\overview.md
+		docs\sliding-window\components\public-api.md = docs\sliding-window\components\public-api.md
+		docs\sliding-window\components\rebalance-path.md = docs\sliding-window\components\rebalance-path.md
+		docs\sliding-window\components\user-path.md = docs\sliding-window\components\user-path.md
+	EndProjectSection
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "visited-places", "visited-places", "{89EA1B3C-5C8D-43A8-AEBE-7AB87AF81D09}"
+	ProjectSection(SolutionItems) = preProject
+		docs\visited-places\actors.md = docs\visited-places\actors.md
+		docs\visited-places\eviction.md = docs\visited-places\eviction.md
+		docs\visited-places\invariants.md = docs\visited-places\invariants.md
+		docs\visited-places\scenarios.md = docs\visited-places\scenarios.md
+		docs\visited-places\storage-strategies.md = docs\visited-places\storage-strategies.md
 	EndProjectSection
 EndProject
 Global
@@ -61,6 +86,10 @@ Global
 		Release|Any CPU = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{D1E2F3A4-B5C6-4D7E-9F0A-1B2C3D4E5F6A}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{D1E2F3A4-B5C6-4D7E-9F0A-1B2C3D4E5F6A}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{D1E2F3A4-B5C6-4D7E-9F0A-1B2C3D4E5F6A}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{D1E2F3A4-B5C6-4D7E-9F0A-1B2C3D4E5F6A}.Release|Any CPU.Build.0 = Release|Any CPU
 		{40C9BEF3-8CFA-43CC-AFE0-7E374DF7F9A5}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
 		{40C9BEF3-8CFA-43CC-AFE0-7E374DF7F9A5}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{40C9BEF3-8CFA-43CC-AFE0-7E374DF7F9A5}.Release|Any CPU.ActiveCfg = Release|Any CPU
@@ -85,13 +114,14 @@ Global
 		{C1D2E3F4-A5B6-4C7D-8E9F-0A1B2C3D4E5F}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{C1D2E3F4-A5B6-4C7D-8E9F-0A1B2C3D4E5F}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{C1D2E3F4-A5B6-4C7D-8E9F-0A1B2C3D4E5F}.Release|Any CPU.Build.0 = Release|Any CPU
-		{8E83B41E-08E9-4AF4-8272-1AB2D2DEDBAB}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
-		{8E83B41E-08E9-4AF4-8272-1AB2D2DEDBAB}.Debug|Any CPU.Build.0 = Debug|Any CPU
-		{8E83B41E-08E9-4AF4-8272-1AB2D2DEDBAB}.Release|Any CPU.ActiveCfg = Release|Any CPU
-		{8E83B41E-08E9-4AF4-8272-1AB2D2DEDBAB}.Release|Any CPU.Build.0 = Release|Any CPU
+		{6EA7122A-30F7-465E-930C-51A917495CE0}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{6EA7122A-30F7-465E-930C-51A917495CE0}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{6EA7122A-30F7-465E-930C-51A917495CE0}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{6EA7122A-30F7-465E-930C-51A917495CE0}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(NestedProjects) = preSolution
 		{B0276F89-7127-4A8C-AD8F-C198780A1E34} = {EB667A96-0E73-48B6-ACC8-C99369A59D0D}
+		{D1E2F3A4-B5C6-4D7E-9F0A-1B2C3D4E5F6A} = {2126ACFB-75E0-4E60-A84C-463EBA8A8799}
 		{40C9BEF3-8CFA-43CC-AFE0-7E374DF7F9A5} = {2126ACFB-75E0-4E60-A84C-463EBA8A8799}
 		{A1B2C3D4-E5F6-4A5B-8C9D-0E1F2A3B4C5D} = {2126ACFB-75E0-4E60-A84C-463EBA8A8799}
 		{17AB54EA-D245-4867-A047-ED55B4D94C17} = {8C504091-1383-4EEB-879E-7A3769C3DF13}
@@ -99,7 +129,10 @@ Global
 		{906F9E4F-0EFA-4FE8-8DA2-DDECE22B7306} = {8C504091-1383-4EEB-879E-7A3769C3DF13}
 		{C1D2E3F4-A5B6-4C7D-8E9F-0A1B2C3D4E5F} = {8C504091-1383-4EEB-879E-7A3769C3DF13}
 		{9C6688E8-071B-48F5-9B84-4779B58822CC} = {EB667A96-0E73-48B6-ACC8-C99369A59D0D}
-		{8E83B41E-08E9-4AF4-8272-1AB2D2DEDBAB} = {EB0F4813-1FA9-4C40-A975-3B8C6BBFF8D5}
 		{CE3B07FD-0EC6-4C58-BA45-C23111D5A934} = {B0276F89-7127-4A8C-AD8F-C198780A1E34}
+		{F1A2B3C4-D5E6-4F7A-8B9C-0D1E2F3A4B5C} = {B0276F89-7127-4A8C-AD8F-C198780A1E34}
+		{6EA7122A-30F7-465E-930C-51A917495CE0} = {2126ACFB-75E0-4E60-A84C-463EBA8A8799}
+		{7E231AE8-BD26-43F7-B900-18A08B7E1C67} = {F1A2B3C4-D5E6-4F7A-8B9C-0D1E2F3A4B5C}
+		{89EA1B3C-5C8D-43A8-AEBE-7AB87AF81D09} = {B0276F89-7127-4A8C-AD8F-C198780A1E34}
 	EndGlobalSection
 EndGlobal

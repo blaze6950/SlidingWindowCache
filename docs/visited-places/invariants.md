@@ -1,0 +1,380 @@
+# Invariants — VisitedPlaces Cache
+
+VisitedPlaces-specific system invariants. Shared invariant groups — **S.H** (activity tracking) and **S.J** (disposal) — are documented in `docs/shared/invariants.md`.
+
+---
+
+## Understanding This Document
+
+This document lists **VisitedPlaces-specific invariants** across groups VPC.A–VPC.F.
+
+### Invariant Categories
+
+#### Behavioral Invariants
+- **Nature**: Externally observable behavior via public API
+- **Enforcement**: Automated tests (unit, integration)
+- **Verification**: Testable through public API without inspecting internal state
+
+#### Architectural Invariants
+- **Nature**: Internal structural constraints enforced by code organization
+- **Enforcement**: Component boundaries, encapsulation, ownership model
+- **Verification**: Code review, type system, access modifiers
+- **Note**: NOT directly testable via public API
+
+#### Conceptual Invariants
+- **Nature**: Design intent, guarantees, or explicit non-guarantees
+- **Enforcement**: Documentation and architectural discipline
+- **Note**: Guide future development; NOT meant to be tested directly
+
+### Invariants ≠ Test Coverage
+
+By design, this document contains more invariants than the test suite covers. Architectural invariants are enforced by code structure; conceptual invariants are documented design decisions. Full invariant documentation does not imply full test coverage.
+
+---
+
+## Testing Infrastructure: WaitForIdleAsync
+
+Tests verify behavioral invariants through the public API. To synchronize with background storage and statistics updates and assert on converged state, use `WaitForIdleAsync()`:
+
+```csharp
+await cache.GetDataAsync(range);
+await cache.WaitForIdleAsync();
+// System WAS idle — assert on converged state
+Assert.Equal(expectedCount, cache.SegmentCount);
+```
+
+`WaitForIdleAsync` completes when the system **was idle at some point** (eventual consistency semantics), not necessarily "is idle now." For formal semantics and race behavior, see `docs/shared/invariants.md` group S.H.
+
+---
+
+## VPC.A. User Path & Fast User Access Invariants
+
+### VPC.A.1 Concurrency & Writer Exclusivity
+
+**VPC.A.1** [Architectural] The User Path and Background Path **never write to cache state concurrently**.
+
+- At any point in time, at most one component has write permission to `CachedSegments`
+- User Path operations MUST be read-only with respect to cache state
+- All cache mutations (segment additions, removals, statistics updates) are performed exclusively by the Background Path (Single-Writer rule)
+
+**Rationale:** Eliminates write-write races and simplifies reasoning about segment collection consistency.
+
+**VPC.A.2** [Architectural] The User Path **always has higher priority** than the Background Path.
+
+- User requests take precedence over background storage and eviction operations
+- The Background Path must not block the User Path under any circumstance
+
+**VPC.A.3** [Behavioral] The User Path **always serves user requests** regardless of the state of background processing.
+
+**VPC.A.4** [Behavioral] The User Path **never waits for the Background Path** to complete.
+
+- `GetDataAsync` returns immediately after assembling data and publishing the event
+- No blocking on background storage, statistics updates, or eviction
+
+**VPC.A.5** [Architectural] The User Path is the **sole source of background events**.
+
+- Only the User Path publishes `BackgroundEvent`s; no other component may inject events into the background queue
+
+**VPC.A.6** [Architectural] Background storage and statistics updates are **always performed asynchronously** relative to the User Path.
+
+- User requests return immediately; background work executes in its own loop
+
+**VPC.A.7** [Architectural] The User Path performs **only the work necessary to return data to the user**.
+
+- No cache mutations, statistics updates, or eviction work on the user thread
+- All background work deferred to the Background Path
+
+**VPC.A.8** [Conceptual] The User Path may synchronously call `IDataSource.FetchAsync` in the user execution context **if needed to serve `RequestedRange`**.
+
+- *Design decision*: Prioritizes user-facing latency
+- *Rationale*: User must get data immediately; only true gaps in cached coverage justify a synchronous fetch
+
+---
+
+### VPC.A.2 User-Facing Guarantees
+
+**VPC.A.9** [Behavioral] The user always receives data **exactly corresponding to `RequestedRange`** (subject to boundary semantics).
+
+**VPC.A.9a** [Architectural] `GetDataAsync` returns `RangeResult<TRange, TData>` containing the actual range fulfilled, the corresponding data, and the cache interaction classification.
+
+- `RangeResult.Range` indicates the actual range returned (may be smaller than requested for bounded data sources)
+- `RangeResult.Data` contains `ReadOnlyMemory<TData>` for the returned range
+- `RangeResult.CacheInteraction` classifies how the request was served (`FullHit`, `PartialHit`, or `FullMiss`)
+- `Range` is nullable to signal data unavailability without exceptions
+- When `Range` is non-null, `Data.Length` MUST equal `Range.Span(domain)`
+
+**VPC.A.9b** [Architectural] `RangeResult.CacheInteraction` **accurately reflects** the cache interaction type for every request.
+
+- `FullMiss` — no segment in `CachedSegments` intersects `RequestedRange`
+- `FullHit` — the union of one or more segments fully covers `RequestedRange` with no gaps
+- `PartialHit` — some portion of `RequestedRange` is covered by cached segments, but at least one gap remains and must be fetched from `IDataSource`
+
+---
+
+### VPC.A.3 Cache Mutation Rules (User Path)
+
+**VPC.A.10** [Architectural] The User Path may read from `CachedSegments` and `IDataSource` but **does not mutate cache state**.
+
+- `CachedSegments` and `SegmentStatistics` are immutable from the User Path perspective
+- In-memory data assembly (merging reads from multiple segments) is local to the user thread; no shared state is written
+
+**VPC.A.11** [Architectural] The User Path **MUST NOT mutate cache state under any circumstance** (read-only path).
+
+- User Path never adds or removes segments
+- User Path never updates segment statistics
+- All cache mutations exclusively performed by the Background Path (Single-Writer rule)
+
+**VPC.A.12** [Architectural] Cache mutations are performed **exclusively by the Background Path** (single-writer architecture).
+
+---
+
+## VPC.B. Background Path & Event Processing Invariants
+
+### VPC.B.1 FIFO Ordering
+
+**VPC.B.1** [Architectural] The Background Path processes `BackgroundEvent`s in **strict FIFO order**.
+
+- Events are consumed in the exact order they were enqueued by the User Path
+- No supersession: a newer event does NOT skip or cancel an older one
+- Every event is processed; none are discarded silently
+
+**VPC.B.1a** [Conceptual] **Event FIFO ordering is required for statistics accuracy.**
+
+- Statistics accuracy depends on processing every access event in order (HitCount, LastAccessedAt)
+- Supersession (as in SlidingWindowCache) would silently lose hit counts, corrupting eviction decisions (e.g., LRU evicting a heavily-used segment)
+
+**VPC.B.2** [Architectural] **Every** `BackgroundEvent` published by the User Path is **eventually processed** by the Background Path.
+
+- No event is dropped, overwritten, or lost after enqueue
+
+### VPC.B.2 Event Processing Steps
+
+**VPC.B.3** [Architectural] Each `BackgroundEvent` is processed in the following **fixed sequence**:
+
+1. Update statistics for all `UsedSegments` (via Eviction Executor)
+2. Store `FetchedData` as new segment(s), if present
+3. Evaluate all Eviction Evaluators, if new data was stored in step 2
+4. Execute eviction, if any evaluator fired in step 3
+
+**VPC.B.3a** [Architectural] **Statistics update always precedes storage** in the processing sequence.
+
+- Statistics for used segments are updated before new segments are stored, ensuring consistent statistics state during eviction evaluation
+
+**VPC.B.3b** [Architectural] **Eviction evaluation only occurs after a storage step.**
+
+- Events with `FetchedData == null` (stats-only events from full cache hits) do NOT trigger eviction evaluation
+- Eviction is triggered exclusively by the addition of new segments
+
+**Rationale:** Eviction triggered by reads alone (without new storage) would cause thrashing in read-heavy caches that never exceed capacity. Capacity limits are segment-count or span-based; pure reads do not increase either.
+
+### VPC.B.3 Background Path Mutation Rules
+
+**VPC.B.4** [Architectural] The Background Path is the **ONLY component that mutates `CachedSegments` and `SegmentStatistics`**.
+
+**VPC.B.5** [Architectural] Cache state transitions are **atomic from the User Path's perspective**.
+
+- A segment is either fully present (with valid data and statistics) or absent
+- No partially-initialized segment is ever visible to User Path reads
+
+**VPC.B.6** [Architectural] The Background Path **does not serve user requests directly**; it only maintains the segment collection and statistics for future User Path reads.
+
+---
+
+## VPC.C. Segment Storage & Non-Contiguity Invariants
+
+### VPC.C.1 Non-Contiguous Storage
+
+**VPC.C.1** [Architectural] `CachedSegments` is a **collection of non-contiguous segments**. Gaps between segments are explicitly permitted.
+
+- There is no contiguity requirement in VPC (contrast with SWC's Cache Contiguity Rule)
+- A point in the domain may be absent from `CachedSegments`; this is a valid cache state
+
+**VPC.C.2** [Architectural] **Segments are never merged**, even if two segments are adjacent or overlapping.
+
+- Two adjacent segments (where one ends exactly where another begins) remain as two distinct segments
+- Merging would reset the statistics of one of the segments and complicate eviction decisions
+- Each independently-fetched sub-range occupies its own permanent entry until evicted
+
+**VPC.C.3** [Architectural] **Overlapping segments are not permitted** in `CachedSegments`.
+
+- Each point in the domain may be cached in at most one segment
+- Storing data for a range that overlaps with an existing segment is an implementation error
+
+**Rationale:** Overlapping segments would make assembly ambiguous and statistics tracking unreliable. Gap detection logic in the User Path assumes non-overlapping coverage.
+
+### VPC.C.2 Assembly
+
+**VPC.C.4** [Architectural] The User Path MUST assemble data from **all contributing segments** when their union covers `RequestedRange`.
+
+- If the union of two or more segments spans `RequestedRange` with no gaps, `CacheInteraction == FullHit` regardless of how many segments contributed
+- The assembled result is always a local, in-memory operation on the user thread
+- Assembled data is never stored back to `CachedSegments` as a merged segment
+
+**VPC.C.5** [Architectural] The User Path MUST compute **all true gaps** within `RequestedRange` before calling `IDataSource.FetchAsync`.
+
+- A true gap is a sub-range within `RequestedRange` not covered by any segment in `CachedSegments`
+- Each distinct gap is fetched independently (or as a batch call)
+- Fetching more than the gap (e.g., rounding up to a convenient boundary) is not prohibited at the `IDataSource` level, but the cache stores exactly what is returned by `IDataSource`
+
+### VPC.C.3 Segment Freshness
+
+**VPC.C.6** [Conceptual] Segments are **not invalidated or refreshed** by VPC itself.
+
+- VPC does not have a TTL-based expiration mechanism; segments are evicted by the configured Eviction Executor, not by age alone
+- Freshness is the responsibility of the caller or of a higher-layer eviction strategy
+
+---
+
+## VPC.D. Concurrency Invariants
+
+**VPC.D.1** [Architectural] The **two-thread model** is strictly enforced: User Thread and Background Storage Loop are the only execution contexts.
+
+- No other threads may access cache-internal mutable state
+
+**VPC.D.2** [Architectural] User Path read operations on `CachedSegments` are **safe under concurrent access** from multiple user threads.
+
+- Multiple user threads may simultaneously read `CachedSegments` (read-only access is concurrency-safe)
+- Only the Background Path writes; User Path threads never contend for write access
+
+**VPC.D.3** [Architectural] The Background Path operates as a **single writer in a single thread** (the Background Storage Loop).
+
+- No concurrent writes to `CachedSegments` or `SegmentStatistics` are ever possible
+- Internal storage strategy state (append buffer, stride index) is owned exclusively by the Background Path
+
+**VPC.D.4** [Architectural] `BackgroundEvent`s published by multiple concurrent User Path calls are **safely enqueued** without coordination between them.
+
+- The event queue (channel) handles concurrent producers and a single consumer safely
+- The order of events from concurrent producers is not deterministic; both orderings are valid
+
+**VPC.D.5** [Conceptual] `GetDataAndWaitForIdleAsync` (strong consistency extension) provides its warm-cache guarantee **only under serialized (one-at-a-time) access**.
+
+- Under parallel callers, `WaitForIdleAsync`'s "was idle at some point" semantics (Invariant S.H.3) may return after the old TCS completes but before the event from a concurrent request has been processed
+- The method remains safe (no crashes, no hangs) under parallel access, but the guarantee degrades
+
+---
+
+## VPC.E. Eviction Invariants
+
+### VPC.E.1 Evaluator Model
+
+**VPC.E.1** [Architectural] Eviction is governed by a **pluggable Eviction Evaluator** that determines whether eviction should run.
+
+- At least one evaluator is configured at construction time
+- Multiple evaluators may be active simultaneously
+
+**VPC.E.1a** [Architectural] Eviction is triggered when **ANY** configured Eviction Evaluator fires.
+
+- Evaluators are OR-combined: if at least one fires, eviction runs
+- All evaluators are checked after every storage step
+
+**VPC.E.2** [Architectural] The **Eviction Executor** is the sole authority for:
+
+- Determining which segments to evict (strategy: LRU, FIFO, smallest-first, etc.)
+- Performing the eviction (removing segments from `CachedSegments`)
+- Maintaining per-segment statistics (owns `SegmentStatistics`)
+
+**VPC.E.2a** [Architectural] The Eviction Executor runs **at most once per background event** regardless of how many evaluators fired.
+
+- A single Executor invocation is responsible for satisfying ALL active evaluator constraints simultaneously
+- The Executor does not run once per fired evaluator
+
+**Rationale:** Single-pass eviction is more efficient and avoids redundant iterations over `SegmentStatistics`.
+
+### VPC.E.2 Just-Stored Segment Immunity
+
+**VPC.E.3** [Architectural] The **just-stored segment is immune** from eviction in the same background event processing step in which it was stored.
+
+- When the Eviction Executor is invoked after storage, the just-stored segment is excluded from the candidate set
+- The immune segment is the exact segment added in step 2 of the current event's processing sequence
+
+**Rationale:** Without immunity, a newly-stored segment could be immediately evicted (e.g., by LRU, since its `LastAccessedAt` is the earliest among all segments). Immediate eviction of just-stored data would cause an infinite fetch-store-evict loop on every new access to an uncached range.
+
+**VPC.E.3a** [Conceptual] If the just-stored segment is the **only segment** in `CachedSegments` when eviction is triggered, the Eviction Executor is a no-op for that event.
+
+- The cache cannot evict its only segment; it will remain over-limit until the next storage event adds another eligible candidate
+- This is an expected edge case in very low-capacity configurations
+
+### VPC.E.3 Statistics Ownership
+
+**VPC.E.4** [Architectural] The Eviction Executor **owns the `SegmentStatistics` schema**.
+
+- The executor defines which statistical fields exist and are maintained
+- Not all executors use all fields (e.g., a FIFO executor needs only `CreatedAt`; LRU needs `LastAccessedAt`)
+- The Background Path updates statistics by calling into the Eviction Executor; it does not directly write statistics fields
+
+**VPC.E.4a** [Architectural] Per-segment statistics are initialized when the segment is stored:
+
+- `CreatedAt` — set to current time at storage
+- `LastAccessedAt` — set to current time at storage
+- `HitCount` — initialized to `0`
+
+**VPC.E.4b** [Architectural] Per-segment statistics are updated when the segment appears in a `BackgroundEvent`'s `UsedSegments` list:
+
+- `HitCount` — incremented
+- `LastAccessedAt` — set to current time
+
+**VPC.E.5** [Architectural] Eviction evaluation and execution are performed **exclusively by the Background Path**, never by the User Path.
+
+- No eviction logic runs on the user thread under any circumstance
+
+### VPC.E.4 Post-Eviction Consistency
+
+**VPC.E.6** [Architectural] After eviction, all remaining segments and their statistics remain **consistent and valid**.
+
+- Removed segments leave no dangling statistics entries
+- No remaining segment references a removed segment
+
+**VPC.E.7** [Conceptual] After eviction, the cache may still be above-limit in edge cases (see VPC.E.3a). This is acceptable; the next storage event will trigger another eviction pass.
+
+---
+
+## VPC.F. Data Source & I/O Invariants
+
+**VPC.F.1** [Architectural] `IDataSource.FetchAsync` is called **only for true gaps** — sub-ranges of `RequestedRange` not covered by any segment in `CachedSegments`.
+
+- User Path I/O is bounded by the uncovered gaps within `RequestedRange`
+- Background Path has no I/O responsibility (it stores data delivered by the User Path's event)
+
+**VPC.F.2** [Architectural] `IDataSource.FetchAsync` **MUST respect boundary semantics**: it may return a range smaller than requested (or null) for bounded data sources.
+
+- A non-null `RangeChunk.Range` MAY be smaller than the requested range (partial fulfillment)
+- The cache MUST use the actual returned range, not the requested range
+- `null` `RangeChunk.Range` signals no data available; no segment is stored for that gap
+
+**VPC.F.3** [Conceptual] **VPC does not prefetch** beyond `RequestedRange`.
+
+- Unlike SlidingWindowCache, VPC has no geometry-based expansion of fetches
+- Fetches are strictly demand-driven: only what is needed to serve the current user request is fetched
+
+**VPC.F.4** [Architectural] Cancellation **MUST be supported** for all `IDataSource.FetchAsync` calls on the User Path.
+
+- User Path I/O is cancellable via the `CancellationToken` passed to `GetDataAsync`
+- Background Path has no I/O calls; cancellation is only relevant on the User Path
+
+---
+
+## Summary
+
+VPC invariant groups:
+
+| Group  | Description                               | Count |
+|--------|-------------------------------------------|-------|
+| VPC.A  | User Path & Fast User Access              | 12    |
+| VPC.B  | Background Path & Event Processing        | 8     |
+| VPC.C  | Segment Storage & Non-Contiguity          | 6     |
+| VPC.D  | Concurrency                               | 5     |
+| VPC.E  | Eviction                                  | 11    |
+| VPC.F  | Data Source & I/O                         | 4     |
+
+Shared invariants (S.H, S.J) are in `docs/shared/invariants.md`.
+
+---
+
+## See Also
+
+- `docs/shared/invariants.md` — shared invariant groups S.H (activity tracking) and S.J (disposal)
+- `docs/visited-places/scenarios.md` — temporal scenario walkthroughs
+- `docs/visited-places/actors.md` — actor responsibilities and invariant ownership
+- `docs/visited-places/eviction.md` — eviction architecture (evaluator-executor model, strategy catalog)
+- `docs/visited-places/storage-strategies.md` — storage internals
+- `docs/shared/glossary.md` — shared term definitions
