@@ -9,7 +9,7 @@ namespace Intervals.NET.Caching.VisitedPlaces.Core.Background;
 /// <summary>
 /// Processes <see cref="BackgroundEvent{TRange,TData}"/> items on the Background Storage Loop
 /// (the single writer). Executes the four-step Background Path sequence per event:
-/// (1) update statistics, (2) store fetched data, (3) evaluate eviction, (4) execute eviction.
+/// (1) update metadata, (2) store fetched data, (3) evaluate eviction, (4) execute eviction.
 /// </summary>
 /// <typeparam name="TRange">The type representing range boundaries.</typeparam>
 /// <typeparam name="TData">The type of data being cached.</typeparam>
@@ -24,13 +24,15 @@ namespace Intervals.NET.Caching.VisitedPlaces.Core.Background;
 /// <para><strong>Four-step sequence per event (Invariant VPC.B.3):</strong></para>
 /// <list type="number">
 /// <item><description>
-///   Statistics update — per-segment statistics (<c>HitCount</c>, <c>LastAccessedAt</c>) are
-///   updated for segments that were read on the User Path. This is an orthogonal concern
-///   owned directly by the processor (not by any eviction component).
+///   Metadata update — the eviction selector updates its per-segment metadata for segments
+///   that were read on the User Path (e.g., LRU updates <c>LastAccessedAt</c>).
+///   Delegated entirely to <see cref="IEvictionSelector{TRange,TData}.UpdateMetadata"/>.
 /// </description></item>
 /// <item><description>
 ///   Store data — each chunk in <see cref="BackgroundEvent{TRange,TData}.FetchedChunks"/> with
 ///   a non-null Range is added to storage as a new <see cref="CachedSegment{TRange,TData}"/>.
+///   The selector's <see cref="IEvictionSelector{TRange,TData}.InitializeMetadata"/> is called
+///   immediately after each segment is stored.
 ///   Skipped when <c>FetchedChunks</c> is null (full cache hit).
 /// </description></item>
 /// <item><description>
@@ -64,6 +66,7 @@ internal sealed class BackgroundEventProcessor<TRange, TData, TDomain>
 {
     private readonly ISegmentStorage<TRange, TData> _storage;
     private readonly IReadOnlyList<IEvictionPolicy<TRange, TData>> _policies;
+    private readonly IEvictionSelector<TRange, TData> _selector;
     private readonly EvictionExecutor<TRange, TData> _executor;
     private readonly ICacheDiagnostics _diagnostics;
 
@@ -72,7 +75,7 @@ internal sealed class BackgroundEventProcessor<TRange, TData, TDomain>
     /// </summary>
     /// <param name="storage">The segment storage (single writer — only mutated here).</param>
     /// <param name="policies">Eviction policies; checked after each storage step.</param>
-    /// <param name="selector">Eviction selector; determines candidate ordering for the executor.</param>
+    /// <param name="selector">Eviction selector; determines candidate ordering and owns per-segment metadata.</param>
     /// <param name="diagnostics">Diagnostics sink; must never throw.</param>
     public BackgroundEventProcessor(
         ISegmentStorage<TRange, TData> storage,
@@ -82,6 +85,7 @@ internal sealed class BackgroundEventProcessor<TRange, TData, TDomain>
     {
         _storage = storage;
         _policies = policies;
+        _selector = selector;
         _executor = new EvictionExecutor<TRange, TData>(selector);
         _diagnostics = diagnostics;
     }
@@ -109,10 +113,9 @@ internal sealed class BackgroundEventProcessor<TRange, TData, TDomain>
         {
             var now = DateTime.UtcNow;
 
-            // Step 1: Update statistics for segments read on the User Path.
-            // This is an orthogonal concern: HitCount++ and LastAccessedAt = now for each used segment.
-            // Owned directly by the processor (not by any eviction component).
-            UpdateStatistics(backgroundEvent.UsedSegments, now);
+            // Step 1: Update selector metadata for segments read on the User Path.
+            // Delegated entirely to the selector — the processor has no knowledge of metadata structure.
+            _selector.UpdateMetadata(backgroundEvent.UsedSegments, now);
             _diagnostics.BackgroundStatisticsUpdated();
 
             // Step 2: Store freshly fetched data (null FetchedChunks means full cache hit — skip).
@@ -129,12 +132,10 @@ internal sealed class BackgroundEventProcessor<TRange, TData, TDomain>
                     }
 
                     var data = new ReadOnlyMemory<TData>(chunk.Data.ToArray());
-                    var segment = new CachedSegment<TRange, TData>(
-                        chunk.Range.Value,
-                        data,
-                        new SegmentStatistics(now));
+                    var segment = new CachedSegment<TRange, TData>(chunk.Range.Value, data);
 
                     _storage.Add(segment);
+                    _selector.InitializeMetadata(segment, now);
                     _diagnostics.BackgroundSegmentStored();
 
                     justStoredSegments.Add(segment);
@@ -188,33 +189,5 @@ internal sealed class BackgroundEventProcessor<TRange, TData, TDomain>
         }
 
         return Task.CompletedTask;
-    }
-
-    /// <summary>
-    /// Updates per-segment statistics for all segments in <paramref name="usedSegments"/>.
-    /// </summary>
-    /// <param name="usedSegments">The segments that were accessed by the User Path.</param>
-    /// <param name="now">The current timestamp to assign to <c>LastAccessedAt</c>.</param>
-    /// <remarks>
-    /// <para>
-    /// For each segment in <paramref name="usedSegments"/>:
-    /// <list type="bullet">
-    /// <item><description><c>HitCount</c> is incremented (Invariant VPC.E.4b)</description></item>
-    /// <item><description><c>LastAccessedAt</c> is set to <paramref name="now"/> (Invariant VPC.E.4b)</description></item>
-    /// </list>
-    /// </para>
-    /// <para>
-    /// This logic was previously duplicated across all three executor implementations
-    /// (<c>LruEvictionExecutor</c>, <c>FifoEvictionExecutor</c>, <c>SmallestFirstEvictionExecutor</c>).
-    /// It is an orthogonal concern that does not belong on candidate selectors.
-    /// </para>
-    /// </remarks>
-    private static void UpdateStatistics(IReadOnlyList<CachedSegment<TRange, TData>> usedSegments, DateTime now)
-    {
-        foreach (var segment in usedSegments)
-        {
-            segment.Statistics.HitCount++;
-            segment.Statistics.LastAccessedAt = now;
-        }
     }
 }

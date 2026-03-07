@@ -421,8 +421,7 @@ public sealed class LinkedListStrideIndexStorageTests
         var range = TestHelpers.CreateRange(start, end);
         var segment = new CachedSegment<int, int>(
             range,
-            new ReadOnlyMemory<int>(new int[end - start + 1]),
-            new SegmentStatistics(DateTime.UtcNow));
+            new ReadOnlyMemory<int>(new int[end - start + 1]));
         storage.Add(segment);
         return segment;
     }

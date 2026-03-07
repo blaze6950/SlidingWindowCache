@@ -103,24 +103,25 @@ There are exactly two execution contexts in VPC (compared to three in SlidingWin
 ### Background Path (Event Processor)
 
 **Responsibilities**
-- Process each `BackgroundEvent` in the fixed sequence: statistics update → storage → eviction evaluation → eviction execution.
-- Delegate statistics updates to the Eviction Executor.
+- Process each `BackgroundEvent` in the fixed sequence: metadata update → storage → eviction evaluation → eviction execution.
+- Delegate metadata updates to the configured Eviction Selector (`selector.UpdateMetadata`).
 - Delegate segment storage to the Storage Strategy.
-- Delegate eviction evaluation to all configured Eviction Evaluators.
+- Call `selector.InitializeMetadata(segment, now)` immediately after each new segment is stored.
+- Delegate eviction evaluation to all configured Eviction Policies.
 - Delegate eviction execution to the Eviction Executor.
 
 **Non-responsibilities**
 - Does not serve user requests.
 - Does not call `IDataSource` (no background I/O).
-- Does not make analytical decisions beyond "did any evaluator fire?"
+- Does not own or interpret metadata schema (delegated entirely to the selector).
 
 **Invariant ownership**
 - VPC.A.1. Sole writer of cache state
 - VPC.A.12. Sole authority for all cache mutations
 - VPC.B.3. Fixed event processing sequence
-- VPC.B.3a. Statistics update precedes storage
+- VPC.B.3a. Metadata update precedes storage
 - VPC.B.3b. Eviction evaluation only after storage
-- VPC.B.4. Only component that mutates `CachedSegments` and `SegmentStatistics`
+- VPC.B.4. Only component that mutates `CachedSegments` and segment `EvictionMetadata`
 - VPC.B.5. Cache state transitions are atomic from User Path's perspective
 - VPC.E.5. Eviction evaluation and execution performed exclusively by Background Path
 
@@ -139,7 +140,7 @@ There are exactly two execution contexts in VPC (compared to three in SlidingWin
 
 **Non-responsibilities**
 - Does not evaluate eviction conditions.
-- Does not track per-segment statistics (statistics are owned by the Eviction Executor).
+- Does not track per-segment eviction metadata (metadata is owned by the Eviction Selector).
 - Does not merge segments.
 - Does not enforce segment capacity limits.
 
@@ -155,58 +156,76 @@ There are exactly two execution contexts in VPC (compared to three in SlidingWin
 
 ---
 
-### Eviction Evaluator
+### Eviction Policy
 
 **Responsibilities**
 - Determine whether eviction should run after each storage step.
-- Expose a single predicate: "does the current `CachedSegments` state exceed my configured limit?"
+- Evaluate the current `CachedSegments` state and produce an `IEvictionPressure` object: `NoPressure` if the constraint is satisfied, or an exceeded pressure if the constraint is violated.
 
 **Non-responsibilities**
-- Does not determine which segments to evict (owned by Eviction Executor).
+- Does not determine which segments to evict (owned by Eviction Executor + Selector).
 - Does not perform eviction.
-- Does not access or modify statistics.
+- Does not estimate how many segments to remove.
+- Does not access or modify eviction metadata.
 
 **Invariant ownership**
-- VPC.E.1. Eviction governed by pluggable Eviction Evaluator
-- VPC.E.1a. Eviction triggered when ANY evaluator fires (OR-combined)
+- VPC.E.1. Eviction governed by pluggable Eviction Policy
+- VPC.E.1a. Eviction triggered when ANY policy fires (OR-combined)
 
 **Components**
-- `MaxSegmentCountEvaluator`
-- `MaxTotalSpanEvaluator`
-- *(additional evaluators as configured)*
+- `MaxSegmentCountPolicy<TRange, TData>`
+- `MaxTotalSpanPolicy<TRange, TData, TDomain>`
+- *(additional policies as configured)*
 
 ---
 
 ### Eviction Executor
 
 **Responsibilities**
-- Own the `SegmentStatistics` schema and maintain per-segment statistics.
-- Update statistics for all segments listed in `BackgroundEvent.UsedSegments`.
-- Initialize fresh statistics when a new segment is stored.
-- When invoked after an evaluator fires: select eviction candidates according to configured strategy.
-- Remove selected segments from `CachedSegments` and clean up their statistics.
-- Enforce the just-stored segment immunity rule.
+- When invoked after a policy fires: receive all segments + the just-stored segment, filter out the immune (just-stored) segment, pass eligible candidates to the configured Eviction Selector for ordering, and remove segments in selector order until all pressures are satisfied.
+- Report each removed segment via diagnostics.
 
 **Non-responsibilities**
-- Does not decide whether eviction should run (owned by Eviction Evaluator).
+- Does not decide whether eviction should run (owned by Eviction Policy).
+- Does not own or update eviction metadata (delegated entirely to the Eviction Selector).
 - Does not add new segments to `CachedSegments`.
 - Does not serve user requests.
 
 **Invariant ownership**
-- VPC.E.2. Sole authority for eviction strategy and statistics maintenance
-- VPC.E.2a. Runs at most once per background event (single pass)
+- VPC.E.2. Constraint satisfaction loop (removes in selector order until all pressures satisfied)
+- VPC.E.2a. Runs at most once per background event (single pass via CompositePressure)
 - VPC.E.3. Just-stored segment is immune from eviction
 - VPC.E.3a. No-op if just-stored segment is the only candidate
-- VPC.E.4. Owns `SegmentStatistics` schema
-- VPC.E.4a. Initializes statistics at storage time
-- VPC.E.4b. Updates statistics when segment appears in `UsedSegments`
-- VPC.E.6. Remaining segments and statistics are consistent after eviction
+- VPC.E.6. Remaining segments and their metadata are consistent after eviction
 
 **Components**
-- `LruEvictionExecutor<TRange, TData>`
-- `FifoEvictionExecutor<TRange, TData>`
-- `SmallestFirstEvictionExecutor<TRange, TData>`
-- *(additional strategies as configured)*
+- `EvictionExecutor<TRange, TData, TDomain>`
+
+---
+
+### Eviction Selector
+
+**Responsibilities**
+- Define, create, and update per-segment eviction metadata.
+- Order eviction candidates for the Eviction Executor.
+- Implement `InitializeMetadata(segment, now)` — attach selector-specific metadata to a newly-stored segment.
+- Implement `UpdateMetadata(usedSegments, now)` — update metadata for segments accessed by the User Path.
+- Implement `OrderCandidates(segments)` — return candidates in eviction priority order.
+
+**Non-responsibilities**
+- Does not decide whether eviction should run (owned by Eviction Policy).
+- Does not filter immune segments (owned by Eviction Executor).
+- Does not remove segments from storage (owned by Eviction Executor).
+
+**Invariant ownership**
+- VPC.E.4. Per-segment metadata owned by the Eviction Selector
+- VPC.E.4a. Metadata initialized at storage time via `InitializeMetadata`
+- VPC.E.4b. Metadata updated on `UsedSegments` events via `UpdateMetadata`
+
+**Components**
+- `LruEvictionSelector<TRange, TData>` — orders by `LruMetadata.LastAccessedAt` ascending
+- `FifoEvictionSelector<TRange, TData>` — orders by `FifoMetadata.CreatedAt` ascending
+- `SmallestFirstEvictionSelector<TRange, TData, TDomain>` — orders by `Range.Span(domain)` ascending; no metadata
 
 ---
 
@@ -232,8 +251,8 @@ There are exactly two execution contexts in VPC (compared to three in SlidingWin
 | Background Path (Event Processor) | Background Storage Loop                  | Background Event Loop            |
 | Segment Storage (read)            | User Thread                              | `UserRequestHandler`             |
 | Segment Storage (write)           | Background Storage Loop                  | Background Path                  |
-| Eviction Evaluator                | Background Storage Loop                  | Background Path                  |
-| Eviction Executor (stats update)  | Background Storage Loop                  | Background Path                  |
+| Eviction Policy                   | Background Storage Loop                  | Background Path                  |
+| Eviction Selector (metadata)      | Background Storage Loop                  | Background Path                  |
 | Eviction Executor (eviction)      | Background Storage Loop                  | Background Path                  |
 
 **Critical:** The user thread ends at event enqueue (after non-blocking channel write). All cache mutations — storage, statistics updates, eviction — occur exclusively in the Background Storage Loop.
@@ -242,35 +261,36 @@ There are exactly two execution contexts in VPC (compared to three in SlidingWin
 
 ## Actors vs Scenarios Reference
 
-| Scenario                                   | User Path                                                                        | Storage                              | Eviction Evaluator             | Eviction Executor                                    |
-|--------------------------------------------|----------------------------------------------------------------------------------|--------------------------------------|--------------------------------|------------------------------------------------------|
-| **U1 – Cold Cache**                        | Requests from `IDataSource`, returns data, publishes event                       | Stores new segment (background)      | Checked after storage          | Updates stats; evicts if triggered                   |
-| **U2 – Full Hit (Single Segment)**         | Reads from segment, publishes stats-only event                                   | —                                    | NOT checked (stats-only event) | Updates stats for used segment                       |
-| **U3 – Full Hit (Multi-Segment)**          | Reads from multiple segments, assembles in-memory, publishes stats-only event    | —                                    | NOT checked                    | Updates stats for all used segments                  |
-| **U4 – Partial Hit**                       | Reads intersection, requests gaps from `IDataSource`, assembles, publishes event | Stores gap segment(s) (background)   | Checked after storage          | Updates stats for used segments; evicts if triggered |
-| **U5 – Full Miss**                         | Requests full range from `IDataSource`, returns data, publishes event            | Stores new segment (background)      | Checked after storage          | No used segments; evicts if triggered                |
-| **B1 – Stats-Only Event**                  | —                                                                                | —                                    | NOT checked                    | Updates stats for used segments                      |
-| **B2 – Store, No Eviction**                | —                                                                                | Stores new segment                   | Checked; does not fire         | Initializes stats for new segment                    |
-| **B3 – Store, Eviction Triggered**         | —                                                                                | Stores new segment                   | Checked; fires                 | Initializes stats; selects and removes candidates    |
-| **E1 – Max Count Exceeded**                | —                                                                                | Added new segment (count over limit) | Fires                          | Removes LRU candidate (excluding just-stored)        |
-| **E4 – Immunity Rule**                     | —                                                                                | Added new segment                    | Fires                          | Excludes just-stored; evicts from remaining          |
-| **C1 – Concurrent Reads**                  | Both read concurrently (safe)                                                    | —                                    | —                              | —                                                    |
-| **C2 – Read During Background Processing** | Reads consistent snapshot                                                        | Mutates atomically                   | —                              | —                                                    |
+| Scenario                                   | User Path                                                                        | Storage                              | Eviction Policy                | Eviction Selector / Executor                                         |
+|--------------------------------------------|----------------------------------------------------------------------------------|--------------------------------------|--------------------------------|----------------------------------------------------------------------|
+| **U1 – Cold Cache**                        | Requests from `IDataSource`, returns data, publishes event                       | Stores new segment (background)      | Checked after storage          | Initializes metadata; evicts if policy triggered                     |
+| **U2 – Full Hit (Single Segment)**         | Reads from segment, publishes stats-only event                                   | —                                    | NOT checked (stats-only event) | Updates metadata for used segment                                    |
+| **U3 – Full Hit (Multi-Segment)**          | Reads from multiple segments, assembles in-memory, publishes stats-only event    | —                                    | NOT checked                    | Updates metadata for all used segments                               |
+| **U4 – Partial Hit**                       | Reads intersection, requests gaps from `IDataSource`, assembles, publishes event | Stores gap segment(s) (background)   | Checked after storage          | Updates metadata for used segments; initializes for new; evicts if triggered |
+| **U5 – Full Miss**                         | Requests full range from `IDataSource`, returns data, publishes event            | Stores new segment (background)      | Checked after storage          | Initializes metadata for new segment; evicts if triggered            |
+| **B1 – Stats-Only Event**                  | —                                                                                | —                                    | NOT checked                    | Updates metadata for used segments                                   |
+| **B2 – Store, No Eviction**                | —                                                                                | Stores new segment                   | Checked; does not fire         | Initializes metadata for new segment                                 |
+| **B3 – Store, Eviction Triggered**         | —                                                                                | Stores new segment                   | Checked; fires                 | Initializes metadata; selector orders candidates; executor removes   |
+| **E1 – Max Count Exceeded**                | —                                                                                | Added new segment (count over limit) | Fires                          | Executor removes LRU candidate (excluding just-stored)               |
+| **E4 – Immunity Rule**                     | —                                                                                | Added new segment                    | Fires                          | Excludes just-stored; executor evicts from remaining                 |
+| **C1 – Concurrent Reads**                  | Both read concurrently (safe)                                                    | —                                    | —                              | —                                                                    |
+| **C2 – Read During Background Processing** | Reads consistent snapshot                                                        | Mutates atomically                   | —                              | —                                                                    |
 
 ---
 
 ## Architectural Summary
 
-| Actor                 | Primary Concern                                 |
-|-----------------------|-------------------------------------------------|
-| User Path             | Speed and availability                          |
-| Event Publisher       | Reliable, non-blocking event delivery           |
-| Background Event Loop | FIFO ordering and sequential processing         |
-| Background Path       | Correct mutation sequencing                     |
-| Segment Storage       | Efficient range lookup and insertion            |
-| Eviction Evaluator    | Capacity limit enforcement                      |
-| Eviction Executor     | Strategy-based eviction and statistics accuracy |
-| Resource Management   | Lifecycle and cleanup                           |
+| Actor                 | Primary Concern                                       |
+|-----------------------|-------------------------------------------------------|
+| User Path             | Speed and availability                                |
+| Event Publisher       | Reliable, non-blocking event delivery                 |
+| Background Event Loop | FIFO ordering and sequential processing               |
+| Background Path       | Correct mutation sequencing                           |
+| Segment Storage       | Efficient range lookup and insertion                  |
+| Eviction Policy       | Capacity limit enforcement                            |
+| Eviction Selector     | Candidate ordering and per-segment metadata ownership |
+| Eviction Executor     | Constraint satisfaction loop and segment removal      |
+| Resource Management   | Lifecycle and cleanup                                 |
 
 ---
 

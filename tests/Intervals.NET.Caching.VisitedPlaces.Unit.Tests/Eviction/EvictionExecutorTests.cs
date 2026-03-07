@@ -341,28 +341,27 @@ public sealed class EvictionExecutorTests
         var range = TestHelpers.CreateRange(start, end);
         return new CachedSegment<int, int>(
             range,
-            new ReadOnlyMemory<int>(new int[end - start + 1]),
-            new SegmentStatistics(DateTime.UtcNow));
+            new ReadOnlyMemory<int>(new int[end - start + 1]));
     }
 
     private static CachedSegment<int, int> CreateSegmentWithLastAccess(int start, int end, DateTime lastAccess)
     {
         var range = TestHelpers.CreateRange(start, end);
-        var stats = new SegmentStatistics(lastAccess);
-        return new CachedSegment<int, int>(
+        var segment = new CachedSegment<int, int>(
             range,
-            new ReadOnlyMemory<int>(new int[end - start + 1]),
-            stats);
+            new ReadOnlyMemory<int>(new int[end - start + 1]));
+        segment.EvictionMetadata = new LruEvictionSelector<int, int>.LruMetadata(lastAccess);
+        return segment;
     }
 
     private static CachedSegment<int, int> CreateSegmentWithCreatedAt(int start, int end, DateTime createdAt)
     {
         var range = TestHelpers.CreateRange(start, end);
-        var stats = new SegmentStatistics(createdAt);
-        return new CachedSegment<int, int>(
+        var segment = new CachedSegment<int, int>(
             range,
-            new ReadOnlyMemory<int>(new int[end - start + 1]),
-            stats);
+            new ReadOnlyMemory<int>(new int[end - start + 1]));
+        segment.EvictionMetadata = new FifoEvictionSelector<int, int>.FifoMetadata(createdAt);
+        return segment;
     }
 
     /// <summary>
@@ -376,11 +375,11 @@ public sealed class EvictionExecutorTests
         {
             var start = i * 10;
             var range = TestHelpers.CreateRange(start, start + 5);
-            var stats = new SegmentStatistics(baseTime.AddHours(i));
-            result.Add(new CachedSegment<int, int>(
+            var segment = new CachedSegment<int, int>(
                 range,
-                new ReadOnlyMemory<int>(new int[6]),
-                stats));
+                new ReadOnlyMemory<int>(new int[6]));
+            segment.EvictionMetadata = new LruEvictionSelector<int, int>.LruMetadata(baseTime.AddHours(i));
+            result.Add(segment);
         }
         return result;
     }

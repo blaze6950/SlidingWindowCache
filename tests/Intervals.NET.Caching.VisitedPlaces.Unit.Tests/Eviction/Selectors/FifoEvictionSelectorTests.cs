@@ -1,4 +1,5 @@
 using Intervals.NET.Caching.VisitedPlaces.Core;
+using Intervals.NET.Caching.VisitedPlaces.Core.Eviction;
 using Intervals.NET.Caching.VisitedPlaces.Core.Eviction.Selectors;
 using Intervals.NET.Caching.VisitedPlaces.Tests.Infrastructure.Helpers;
 
@@ -98,11 +99,11 @@ public sealed class FifoEvictionSelectorTests
     private static CachedSegment<int, int> CreateSegment(int start, int end, DateTime createdAt)
     {
         var range = TestHelpers.CreateRange(start, end);
-        var stats = new SegmentStatistics(createdAt);
-        return new CachedSegment<int, int>(
+        var segment = new CachedSegment<int, int>(
             range,
-            new ReadOnlyMemory<int>(new int[end - start + 1]),
-            stats);
+            new ReadOnlyMemory<int>(new int[end - start + 1]));
+        segment.EvictionMetadata = new FifoEvictionSelector<int, int>.FifoMetadata(createdAt);
+        return segment;
     }
 
     #endregion

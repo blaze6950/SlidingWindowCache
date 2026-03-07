@@ -17,11 +17,12 @@ Component maps describe "what exists"; scenarios describe "what happens". Scenar
 - **RequestedRange** — A range requested by the user.
 - **CachedSegments** — The collection of non-contiguous cached segments currently stored in the cache.
 - **Segment** — A single contiguous range with its associated data, stored in `CachedSegments`.
-- **SegmentStatistics** — Per-segment metadata maintained by the Eviction Executor (`CreatedAt`, `LastAccessedAt`, `HitCount`).
+- **EvictionMetadata** — Per-segment metadata owned by the configured Eviction Selector (`IEvictionMetadata?` on each `CachedSegment`). Selector-specific: `LruMetadata { LastAccessedAt }`, `FifoMetadata { CreatedAt }`, or null for selectors that need no metadata.
 - **BackgroundEvent** — A message published by the User Path to the Background Path after every `GetDataAsync` call. Carries used segment references and any newly fetched data.
 - **IDataSource** — A range-based data source used to fetch data absent from the cache.
-- **EvictionEvaluator** — Determines whether eviction should run (e.g., too many segments, too much memory). Multiple evaluators may be active; eviction triggers when ANY fires.
-- **EvictionExecutor** — Performs eviction and owns per-segment statistics. Determines which segments to evict based on statistics and configured strategy.
+- **EvictionPolicy** — Determines whether eviction should run (e.g., too many segments, too much total span). Multiple policies may be active; eviction triggers when ANY fires. Produces an `IEvictionPressure` object representing the violated constraint.
+- **EvictionSelector** — Defines, creates, and updates per-segment eviction metadata. Determines the order in which candidates are considered for removal (LRU, FIFO, smallest-first, etc.).
+- **EvictionExecutor** — Performs eviction via a constraint satisfaction loop: filters immune segments, orders candidates via the Eviction Selector, and removes them until all pressures are satisfied.
 
 ---
 
@@ -66,7 +67,7 @@ Scenarios are grouped by path:
 3. Subrange is read from `S.Data`
 4. Data is returned to the user — `RangeResult.CacheInteraction == FullHit`
 5. A `BackgroundEvent` is published: `{ UsedSegments: [S], FetchedData: null, RequestedRange }`
-6. Background Path updates `S.Statistics` (increments `HitCount`, sets `LastAccessedAt`)
+6. Background Path calls `selector.UpdateMetadata([S], now)` — e.g., LRU selector updates `S.LruMetadata.LastAccessedAt`
 
 **Note**: No `IDataSource` call is made. No eviction is triggered on stats-only events (eviction is only evaluated after new data is stored).
 
@@ -85,7 +86,7 @@ Scenarios are grouped by path:
 4. Relevant subranges are read from each contributing segment and assembled in-memory
 5. Data is returned to the user — `RangeResult.CacheInteraction == FullHit`
 6. A `BackgroundEvent` is published: `{ UsedSegments: [S₁, S₂, ...], FetchedData: null, RequestedRange }`
-7. Background Path updates statistics for each contributing segment
+7. Background Path calls `selector.UpdateMetadata([S₁, S₂, ...], now)` for each contributing segment
 
 **Note**: Multi-segment assembly is a core VPC capability. The assembled data is never stored as a merged segment (merging is not performed). Each source segment remains independent in `CachedSegments`.
 
@@ -135,10 +136,10 @@ Scenarios are grouped by path:
 
 **Core principle**: The Background Path is the sole writer of cache state. It processes `BackgroundEvent`s in strict FIFO order. No supersession — every event is processed. Each event triggers:
 
-1. **Statistics update** — update per-segment statistics for all used segments (via Eviction Executor)
-2. **Storage** — store fetched data as new segment(s), if `FetchedData != null`
-3. **Eviction evaluation** — check all configured Eviction Evaluators, if new data was stored
-4. **Eviction execution** — if any evaluator fires, execute eviction via the Eviction Executor
+1. **Metadata update** — update per-segment eviction metadata for all used segments by delegating to the configured Eviction Selector (`selector.UpdateMetadata`)
+2. **Storage** — store fetched data as new segment(s), if `FetchedData != null`; call `selector.InitializeMetadata(segment, now)` for each new segment
+3. **Eviction evaluation** — check all configured Eviction Policies, if new data was stored
+4. **Eviction execution** — if any policy produced an exceeded pressure, execute eviction via the constraint satisfaction loop (Eviction Executor + Selector)
 
 ---
 
@@ -149,9 +150,9 @@ Scenarios are grouped by path:
 
 **Sequence**:
 1. Background Path dequeues the event
-2. Eviction Executor updates statistics for each segment in `UsedSegments`
-   - Increments `S.HitCount`
-   - Sets `S.LastAccessedAt = now`
+2. `selector.UpdateMetadata([S₁, ...], now)` — selector updates metadata for each used segment
+   - LRU: sets `LruMetadata.LastAccessedAt = now` on each
+   - FIFO / SmallestFirst: no-op
 3. No storage step (no new data)
 4. No eviction evaluation (eviction is only triggered after storage)
 
@@ -167,11 +168,11 @@ Scenarios are grouped by path:
 
 **Sequence**:
 1. Background Path dequeues the event
-2. If `UsedSegments` is non-empty: update statistics for used segments
+2. If `UsedSegments` is non-empty: `selector.UpdateMetadata(usedSegments, now)`
 3. Store `FetchedData` as a new `Segment` in `CachedSegments`
-   - New segment is initialized with `CreatedAt = now`, `LastAccessedAt = now`, `HitCount = 0`
    - Segment is added in sorted order (or appended to the strategy's append buffer)
-4. Check all Eviction Evaluators — none fire
+   - `selector.InitializeMetadata(segment, now)` — e.g., `LruMetadata { LastAccessedAt = now }`, `FifoMetadata { CreatedAt = now }`, or no-op
+4. Check all Eviction Policies — none fire
 5. Processing complete; cache now has one additional segment
 
 **Note**: The just-stored segment always has **immunity** — it is never eligible for eviction in the same processing step in which it was stored (Invariant VPC.E.3).
@@ -186,17 +187,16 @@ Scenarios are grouped by path:
 
 **Sequence**:
 1. Background Path dequeues the event
-2. If `UsedSegments` is non-empty: update statistics for used segments
-3. Store `FetchedData` as a new `Segment` in `CachedSegments` (with fresh statistics)
-4. Check all Eviction Evaluators — at least one fires
+2. If `UsedSegments` is non-empty: `selector.UpdateMetadata(usedSegments, now)`
+3. Store `FetchedData` as a new `Segment` in `CachedSegments`; `selector.InitializeMetadata(segment, now)` attaches fresh metadata
+4. Check all Eviction Policies — at least one fires
 5. Eviction Executor is invoked:
    - Evaluates all eligible segments (excluding just-stored segment — immunity rule)
-   - Selects eviction candidates according to configured strategy (LRU, FIFO, smallest-first, etc.)
-   - Removes selected segments from `CachedSegments`
-   - Cleans up associated statistics
+   - Passes eligible candidates to the Eviction Selector for ordering
+   - Removes selected segments from `CachedSegments` until all pressures are satisfied
 6. Cache returns to within-policy state
 
-**Note**: Multiple evaluators may fire simultaneously. The Eviction Executor runs once per event (not once per fired evaluator). The Executor is responsible for evicting enough to satisfy all active evaluator constraints simultaneously.
+**Note**: Multiple policies may fire simultaneously. The Eviction Executor runs once per event (not once per fired policy), using `CompositePressure` to satisfy all constraints simultaneously.
 
 ---
 
@@ -211,7 +211,7 @@ Scenarios are grouped by path:
 2. Update statistics for used segments
 3. Store each gap range as a separate new `Segment` in `CachedSegments`
    - Each stored segment is added independently; no merging with existing segments
-   - Each new segment receives its own fresh statistics (`CreatedAt`, `HitCount = 0`)
+   - `selector.InitializeMetadata(segment, now)` is called for each new segment
 4. Check all Eviction Evaluators (after all new segments are stored)
 5. If any evaluator fires: Eviction Executor selects and removes eligible segments
 
@@ -231,36 +231,36 @@ Scenarios are grouped by path:
 
 **Key difference from SWC**: There is no "latest wins" supersession. Every event is processed. E₂ cannot skip E₁, and E₃ cannot skip E₂. The Background Path provides a total ordering over all cache mutations.
 
-**Rationale**: Statistics accuracy depends on processing every access. Supersession would silently lose hit counts, causing incorrect eviction decisions (e.g., LRU evicting a heavily-used segment).
+**Rationale**: Metadata accuracy depends on processing every access. Supersession would silently lose access events, causing incorrect eviction decisions (e.g., LRU evicting a recently-used segment).
 
 ---
 
 ## III. Eviction Scenarios
 
-### E1 — Evaluator Fires: Max Segment Count Exceeded
+### E1 — Policy Fires: Max Segment Count Exceeded
 
 **Configuration**:
-- Evaluator: `MaxSegmentCountEvaluator(limit: 10)`
-- Executor strategy: LRU
+- Policy: `MaxSegmentCountPolicy(maxCount: 10)`
+- Selector strategy: LRU
 
 **Sequence**:
 1. Background Path stores a new segment, bringing total count to 11
-2. `MaxSegmentCountEvaluator` fires: `CachedSegments.Count (11) > limit (10)`
-3. Eviction Executor applies LRU strategy:
-   - Identifies the segment with the oldest `LastAccessedAt` among all eligible segments (excluding just-stored)
-   - Removes that segment and its statistics from `CachedSegments`
+2. `MaxSegmentCountPolicy` fires: `CachedSegments.Count (11) > maxCount (10)`
+3. Eviction Executor + LRU Selector:
+   - LRU Selector orders candidates ascending by `LruMetadata.LastAccessedAt`
+   - Executor removes the first candidate (least recently accessed) from `CachedSegments`
 4. Total segment count returns to 10
 
-**Post-condition**: All remaining segments are valid cache entries with up-to-date statistics.
+**Post-condition**: All remaining segments are valid cache entries with up-to-date metadata.
 
 ---
 
-### E2 — Multiple Evaluators, One Fires
+### E2 — Multiple Policies, One Fires
 
 **Configuration**:
-- Evaluator A: `MaxSegmentCountEvaluator(limit: 10)`
-- Evaluator B: `MaxTotalSpanEvaluator(limit: 1000 units)`
-- Executor strategy: FIFO
+- Policy A: `MaxSegmentCountPolicy(maxCount: 10)`
+- Policy B: `MaxTotalSpanPolicy(maxTotalSpan: 1000 units)`
+- Selector strategy: FIFO
 
 **Preconditions**:
 - `CachedSegments.Count == 9` (below count limit)
@@ -270,34 +270,35 @@ Scenarios are grouped by path:
 - New segment of span 60 units is stored → `Count = 10`, total span = 1010 units
 
 **Sequence**:
-1. `MaxSegmentCountEvaluator` checks: `10 ≤ 10` → does NOT fire
-2. `MaxTotalSpanEvaluator` checks: `1010 > 1000` → FIRES
-3. Eviction Executor applies FIFO strategy:
-   - Identifies the segment with the oldest `CreatedAt` among all eligible segments
-   - Removes it; total span drops to within limit
+1. `MaxSegmentCountPolicy` checks: `10 ≤ 10` → does NOT fire
+2. `MaxTotalSpanPolicy` checks: `1010 > 1000` → FIRES
+3. Eviction Executor + FIFO Selector:
+   - FIFO Selector orders candidates ascending by `FifoMetadata.CreatedAt`
+   - Executor removes the oldest segment; total span drops
 4. If total span still exceeds limit after first removal, Executor removes additional segments until all constraints are satisfied
 
 ---
 
-### E3 — Multiple Evaluators, Both Fire
+### E3 — Multiple Policies, Both Fire
 
 **Configuration**:
-- Evaluator A: `MaxSegmentCountEvaluator(limit: 10)`
-- Evaluator B: `MaxTotalSpanEvaluator(limit: 1000 units)`
-- Executor strategy: smallest-first
+- Policy A: `MaxSegmentCountPolicy(maxCount: 10)`
+- Policy B: `MaxTotalSpanPolicy(maxTotalSpan: 1000 units)`
+- Selector strategy: smallest-first
 
 **Action**:
 - New segment stored → `Count = 12`, total span = 1200 units (both limits exceeded)
 
 **Sequence**:
-1. Both evaluators fire
-2. Eviction Executor is invoked once
-3. Executor must satisfy BOTH constraints simultaneously:
-   - Removes smallest segments first (smallest-first strategy)
+1. Both policies fire
+2. Eviction Executor is invoked once with a `CompositePressure`
+3. Executor + SmallestFirst Selector must satisfy BOTH constraints simultaneously:
+   - SmallestFirst Selector orders candidates ascending by `Range.Span(domain)`
+   - Executor removes smallest segments first
    - Continues removing until `Count ≤ 10` AND `total span ≤ 1000`
-4. Executor performs a single pass — not one pass per fired evaluator
+4. Executor performs a single pass — not one pass per fired policy
 
-**Rationale**: Single-pass eviction is more efficient and avoids redundant iterations over `CachedSegments` statistics.
+**Rationale**: Single-pass eviction is more efficient and avoids redundant iterations over `CachedSegments`.
 
 ---
 
@@ -313,7 +314,7 @@ Scenarios are grouped by path:
 3. Executor selects the appropriate candidate from `{S₁, S₂, S₃, S₄}` per its strategy
 4. Selected candidate is removed; count returns to 4
 
-**Rationale**: Without immunity, a newly-stored segment could be immediately evicted (e.g., by LRU if its `LastAccessedAt` is `now` but it hasn't yet been counted as accessed). The just-stored segment represents data just fetched from `IDataSource`; evicting it immediately would cause an infinite fetch loop.
+**Rationale**: Without immunity, a newly-stored segment could be immediately evicted (e.g., by LRU since its `LruMetadata.LastAccessedAt` is `now` — but it is the most recently initialized, not most recently accessed by a user). The just-stored segment represents data just fetched from `IDataSource`; evicting it immediately would cause an infinite fetch loop.
 
 ---
 
@@ -323,9 +324,9 @@ Scenarios are grouped by path:
 **Trigger**: Count exceeds limit after storing `S₄`
 
 **Sequence**:
-1. `S₄` stored; immunity applies to `S₄`
-2. FIFO Executor selects `S₁` (oldest `CreatedAt = t=1`)
-3. `S₁` removed; count returns to limit
+1. `S₄` stored; `selector.InitializeMetadata(S₄, now)` attaches `FifoMetadata { CreatedAt = now }`; immunity applies to `S₄`
+2. FIFO Selector orders eligible candidates by `FifoMetadata.CreatedAt` ascending: `[S₁(t=1), S₃(t=2), S₂(t=3)]`
+3. Executor removes `S₁` (oldest `CreatedAt = t=1`); count returns to limit
 
 ---
 
@@ -335,9 +336,9 @@ Scenarios are grouped by path:
 **Trigger**: Count exceeds limit after storing `S₄`
 
 **Sequence**:
-1. `S₄` stored; immunity applies to `S₄`
-2. LRU Executor selects `S₂` (least recently used: `LastAccessedAt = t=1`)
-3. `S₂` removed; count returns to limit
+1. `S₄` stored; `selector.InitializeMetadata(S₄, now)` attaches `LruMetadata { LastAccessedAt = now }`; immunity applies to `S₄`
+2. LRU Selector orders eligible candidates by `LruMetadata.LastAccessedAt` ascending: `[S₂(t=1), S₁(t=5), S₃(t=8)]`
+3. Executor removes `S₂` (least recently used: `LastAccessedAt = t=1`); count returns to limit
 
 ---
 
@@ -396,12 +397,12 @@ Scenarios are grouped by path:
 1. User Path serves all requests independently and immediately
 2. Each request publishes its event to the background queue — NO supersession
 3. Background Path drains the queue in FIFO order: E₁, E₂, ..., Eₙ
-4. Statistics are accumulated correctly (every hit counted, every access recorded)
-5. Eviction evaluators are checked after each storage event (not batched)
+4. Eviction metadata is updated accurately (every access recorded in the correct FIFO order)
+5. Eviction policies are checked after each storage event (not batched)
 
 **Key difference from SWC**: In SWC, a burst of requests results in only the latest intent being executed (supersession). In VPC, every event is processed — statistics accuracy requires it.
 
-**Outcome**: Cache converges to an accurate statistics state reflecting all accesses in order. Eviction decisions are based on complete access history.
+**Outcome**: Cache converges to an accurate eviction metadata state reflecting all accesses in order. Eviction decisions are based on complete access history.
 
 ---
 
@@ -450,11 +451,11 @@ Use scenarios as a debugging checklist:
 
 ## Edge Cases
 
-- A cache can be non-optimal (stale statistics, suboptimal eviction candidates) between background events; eventual convergence is expected.
+- A cache can be non-optimal (stale metadata, suboptimal eviction candidates) between background events; eventual convergence is expected.
 - `WaitForIdleAsync` indicates the system was idle at some point, not that it remains idle.
 - In Scenario U3, multi-segment assembly requires that the union of segments covers `RequestedRange` with NO gaps. If even one gap exists, the scenario degrades to U4 (Partial Hit).
 - In Scenario B3, if the just-stored segment is the only segment (cache was empty before storage), eviction cannot proceed — the evaluator firing with only immune segments present is a no-op (the cache cannot evict its only segment; it will remain over-limit until the next storage event adds another eligible candidate).
-- Segments are never merged, even if two adjacent segments together span a contiguous range. Merging would reset the statistics of one of the segments and complicate eviction decisions.
+- Segments are never merged, even if two adjacent segments together span a contiguous range. Merging would reset the eviction metadata of one of the segments and complicate eviction decisions.
 
 ---
 
@@ -462,6 +463,6 @@ Use scenarios as a debugging checklist:
 
 - `docs/visited-places/actors.md` — actor responsibilities per scenario
 - `docs/visited-places/invariants.md` — formal invariants
-- `docs/visited-places/eviction.md` — eviction architecture (evaluator-executor model, strategy catalog)
+- `docs/visited-places/eviction.md` — eviction architecture (policy-pressure-selector model, strategy catalog)
 - `docs/visited-places/storage-strategies.md` — storage internals (append buffer, normalization, stride index)
 - `docs/shared/glossary.md` — shared term definitions (WaitForIdleAsync, CacheInteraction, etc.)

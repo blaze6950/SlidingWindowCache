@@ -20,6 +20,9 @@ namespace Intervals.NET.Caching.VisitedPlaces.Core.Eviction.Selectors;
 /// are retained over narrow ones. Best for workloads where wider segments are more valuable
 /// because they are more likely to be re-used.
 /// </para>
+/// <para><strong>Metadata:</strong> No metadata needed — ordering is derived entirely from
+/// <c>segment.Range.Span(domain)</c>. <see cref="CachedSegment{TRange,TData}.EvictionMetadata"/>
+/// is left <see langword="null"/> for segments managed by this selector.</para>
 /// </remarks>
 internal sealed class SmallestFirstEvictionSelector<TRange, TData, TDomain> : IEvictionSelector<TRange, TData>
     where TRange : IComparable<TRange>
@@ -46,6 +49,25 @@ internal sealed class SmallestFirstEvictionSelector<TRange, TData, TDomain> : IE
 
     /// <inheritdoc/>
     /// <remarks>
+    /// No-op — SmallestFirst requires no per-segment metadata.
+    /// </remarks>
+    public void InitializeMetadata(CachedSegment<TRange, TData> segment, DateTime now)
+    {
+        // SmallestFirst derives ordering from segment span — no metadata needed.
+    }
+
+    /// <inheritdoc/>
+    /// <remarks>
+    /// No-op — SmallestFirst ordering is based on span, which is immutable after segment creation.
+    /// Access patterns do not affect eviction priority.
+    /// </remarks>
+    public void UpdateMetadata(IReadOnlyList<CachedSegment<TRange, TData>> usedSegments, DateTime now)
+    {
+        // SmallestFirst derives ordering from segment span — no metadata to update.
+    }
+
+    /// <inheritdoc/>
+    /// <remarks>
     /// Sorts candidates ascending by <c>segment.Range.Span(domain)</c>.
     /// The narrowest segment is first in the returned list.
     /// </remarks>
@@ -53,7 +75,7 @@ internal sealed class SmallestFirstEvictionSelector<TRange, TData, TDomain> : IE
         IReadOnlyList<CachedSegment<TRange, TData>> candidates)
     {
         return candidates
-            .OrderBy(s => s.Range.Span(_domain).Value)
+            .OrderBy(s => s.Range.Span(_domain).Value) // todo: think about defining metadata for this type of selector in order to prevent calculating span for every segment inside this method. Segments are immutable, we can calculate span on metadata initialization and then just use it for this method. 
             .ToList();
     }
 }

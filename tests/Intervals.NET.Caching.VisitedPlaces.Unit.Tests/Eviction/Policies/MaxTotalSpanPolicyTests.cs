@@ -176,8 +176,7 @@ public sealed class MaxTotalSpanPolicyTests
         var len = end - start + 1;
         return new CachedSegment<int, int>(
             range,
-            new ReadOnlyMemory<int>(new int[len]),
-            new SegmentStatistics(DateTime.UtcNow));
+            new ReadOnlyMemory<int>(new int[len]));
     }
 
     #endregion

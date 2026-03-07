@@ -168,8 +168,7 @@ public sealed class MaxSegmentCountPolicyTests
             var range = TestHelpers.CreateRange(start, start + 5);
             result.Add(new CachedSegment<int, int>(
                 range,
-                new ReadOnlyMemory<int>(new int[6]),
-                new SegmentStatistics(DateTime.UtcNow)));
+                new ReadOnlyMemory<int>(new int[6])));
         }
         return result;
     }

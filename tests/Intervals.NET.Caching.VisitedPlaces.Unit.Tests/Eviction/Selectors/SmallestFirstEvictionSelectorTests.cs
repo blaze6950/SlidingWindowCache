@@ -105,8 +105,7 @@ public sealed class SmallestFirstEvictionSelectorTests
         var range = TestHelpers.CreateRange(start, end);
         return new CachedSegment<int, int>(
             range,
-            new ReadOnlyMemory<int>(new int[end - start + 1]),
-            new SegmentStatistics(DateTime.UtcNow));
+            new ReadOnlyMemory<int>(new int[end - start + 1]));
     }
 
     #endregion

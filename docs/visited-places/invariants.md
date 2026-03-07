@@ -115,7 +115,7 @@ Assert.Equal(expectedCount, cache.SegmentCount);
 
 **VPC.A.10** [Architectural] The User Path may read from `CachedSegments` and `IDataSource` but **does not mutate cache state**.
 
-- `CachedSegments` and `SegmentStatistics` are immutable from the User Path perspective
+- `CachedSegments` and segment `EvictionMetadata` are immutable from the User Path perspective
 - In-memory data assembly (merging reads from multiple segments) is local to the user thread; no shared state is written
 
 **VPC.A.11** [Architectural] The User Path **MUST NOT mutate cache state under any circumstance** (read-only path).
@@ -138,10 +138,10 @@ Assert.Equal(expectedCount, cache.SegmentCount);
 - No supersession: a newer event does NOT skip or cancel an older one
 - Every event is processed; none are discarded silently
 
-**VPC.B.1a** [Conceptual] **Event FIFO ordering is required for statistics accuracy.**
+**VPC.B.1a** [Conceptual] **Event FIFO ordering is required for metadata accuracy.**
 
-- Statistics accuracy depends on processing every access event in order (HitCount, LastAccessedAt)
-- Supersession (as in SlidingWindowCache) would silently lose hit counts, corrupting eviction decisions (e.g., LRU evicting a heavily-used segment)
+- Metadata accuracy depends on processing every access event in order (e.g., LRU `LastAccessedAt`)
+- Supersession (as in SlidingWindowCache) would silently lose access events, corrupting eviction decisions (e.g., LRU evicting a heavily-used segment)
 
 **VPC.B.2** [Architectural] **Every** `BackgroundEvent` published by the User Path is **eventually processed** by the Background Path.
 
@@ -151,14 +151,14 @@ Assert.Equal(expectedCount, cache.SegmentCount);
 
 **VPC.B.3** [Architectural] Each `BackgroundEvent` is processed in the following **fixed sequence**:
 
-1. Update statistics for all `UsedSegments` (Background Path directly)
+1. Update metadata for all `UsedSegments` by delegating to the configured Eviction Selector (`selector.UpdateMetadata`)
 2. Store `FetchedData` as new segment(s), if present
 3. Evaluate all Eviction Policies, if new data was stored in step 2
 4. Execute eviction via constraint satisfaction loop, if any policy produced an exceeded pressure in step 3
 
-**VPC.B.3a** [Architectural] **Statistics update always precedes storage** in the processing sequence.
+**VPC.B.3a** [Architectural] **Metadata update always precedes storage** in the processing sequence.
 
-- Statistics for used segments are updated before new segments are stored, ensuring consistent statistics state during eviction evaluation
+- Metadata for used segments is updated before new segments are stored, ensuring consistent metadata state during eviction evaluation
 
 **VPC.B.3b** [Architectural] **Eviction evaluation only occurs after a storage step.**
 
@@ -169,7 +169,7 @@ Assert.Equal(expectedCount, cache.SegmentCount);
 
 ### VPC.B.3 Background Path Mutation Rules
 
-**VPC.B.4** [Architectural] The Background Path is the **ONLY component that mutates `CachedSegments` and `SegmentStatistics`**.
+**VPC.B.4** [Architectural] The Background Path is the **ONLY component that mutates `CachedSegments` and segment `EvictionMetadata`**.
 
 **VPC.B.5** [Architectural] Cache state transitions are **atomic from the User Path's perspective**.
 
@@ -238,7 +238,7 @@ Assert.Equal(expectedCount, cache.SegmentCount);
 
 **VPC.D.3** [Architectural] The Background Path operates as a **single writer in a single thread** (the Background Storage Loop).
 
-- No concurrent writes to `CachedSegments` or `SegmentStatistics` are ever possible
+- No concurrent writes to `CachedSegments` or segment `EvictionMetadata` are ever possible
 - Internal storage strategy state (append buffer, stride index) is owned exclusively by the Background Path
 
 **VPC.D.4** [Architectural] `BackgroundEvent`s published by multiple concurrent User Path calls are **safely enqueued** without coordination between them.
@@ -296,24 +296,25 @@ Assert.Equal(expectedCount, cache.SegmentCount);
 - The cache cannot evict its only segment; it will remain over-limit until the next storage event adds another eligible candidate
 - This is an expected edge case in very low-capacity configurations
 
-### VPC.E.3 Statistics Ownership
+### VPC.E.3 Eviction Selector Metadata Ownership
 
-**VPC.E.4** [Architectural] The **Background Event Processor** owns `SegmentStatistics` updates.
+**VPC.E.4** [Architectural] Per-segment eviction metadata is **owned by the Eviction Selector**, not by a shared statistics record.
 
-- Statistics are updated directly by the Background Path as a private concern (step 1 of event processing)
-- Not all eviction selectors use all fields (e.g., a FIFO selector needs only `CreatedAt`; LRU needs `LastAccessedAt`)
-- Statistics fields are always maintained regardless of selector, ensuring correctness if the selector is changed
+- Each selector defines its own metadata type (nested `internal sealed class` implementing `IEvictionMetadata`) and stores it on `CachedSegment.EvictionMetadata`
+- The `BackgroundEventProcessor` delegates metadata management to the configured selector:
+  - Step 1: calls `selector.UpdateMetadata(usedSegments, now)` for each event cycle
+  - Step 2: calls `selector.InitializeMetadata(segment, now)` immediately after each segment is stored
+- Selectors that require no metadata (e.g., `SmallestFirstEvictionSelector`) implement both methods as no-ops and leave `EvictionMetadata` null
 
-**VPC.E.4a** [Architectural] Per-segment statistics are initialized when the segment is stored:
+**VPC.E.4a** [Architectural] Per-segment metadata is initialized when the segment is stored:
 
-- `CreatedAt` — set to current time at storage
-- `LastAccessedAt` — set to current time at storage
-- `HitCount` — initialized to `0`
+- `selector.InitializeMetadata(segment, now)` is called by the Background Event Processor immediately after `_storage.Add(segment)`
+- Example: `LruMetadata { LastAccessedAt = now }`, `FifoMetadata { CreatedAt = now }`
 
-**VPC.E.4b** [Architectural] Per-segment statistics are updated when the segment appears in a `BackgroundEvent`'s `UsedSegments` list:
+**VPC.E.4b** [Architectural] Per-segment metadata is updated when the segment appears in a `BackgroundEvent`'s `UsedSegments` list:
 
-- `HitCount` — incremented
-- `LastAccessedAt` — set to current time
+- `selector.UpdateMetadata(usedSegments, now)` is called by the Background Event Processor at the start of each event cycle
+- Example: `LruMetadata.LastAccessedAt = now`; FIFO and SmallestFirst selectors perform no-op updates
 
 **VPC.E.5** [Architectural] Eviction evaluation and execution are performed **exclusively by the Background Path**, never by the User Path.
 
@@ -321,9 +322,9 @@ Assert.Equal(expectedCount, cache.SegmentCount);
 
 ### VPC.E.4 Post-Eviction Consistency
 
-**VPC.E.6** [Architectural] After eviction, all remaining segments and their statistics remain **consistent and valid**.
+**VPC.E.6** [Architectural] After eviction, all remaining segments and their metadata remain **consistent and valid**.
 
-- Removed segments leave no dangling statistics entries
+- Removed segments leave no dangling metadata references
 - No remaining segment references a removed segment
 
 **VPC.E.7** [Conceptual] After eviction, the cache may still be above-limit in edge cases (see VPC.E.3a). This is acceptable; the next storage event will trigger another eviction pass.

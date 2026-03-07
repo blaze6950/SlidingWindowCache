@@ -1,4 +1,5 @@
 using Intervals.NET.Caching.VisitedPlaces.Core;
+using Intervals.NET.Caching.VisitedPlaces.Core.Eviction;
 using Intervals.NET.Caching.VisitedPlaces.Core.Eviction.Selectors;
 using Intervals.NET.Caching.VisitedPlaces.Tests.Infrastructure.Helpers;
 
@@ -98,11 +99,11 @@ public sealed class LruEvictionSelectorTests
     private static CachedSegment<int, int> CreateSegmentWithLastAccess(int start, int end, DateTime lastAccess)
     {
         var range = TestHelpers.CreateRange(start, end);
-        var stats = new SegmentStatistics(lastAccess);
-        return new CachedSegment<int, int>(
+        var segment = new CachedSegment<int, int>(
             range,
-            new ReadOnlyMemory<int>(new int[end - start + 1]),
-            stats);
+            new ReadOnlyMemory<int>(new int[end - start + 1]));
+        segment.EvictionMetadata = new LruEvictionSelector<int, int>.LruMetadata(lastAccess);
+        return segment;
     }
 
     #endregion

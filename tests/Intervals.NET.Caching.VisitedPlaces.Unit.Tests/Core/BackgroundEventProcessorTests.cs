@@ -24,12 +24,12 @@ public sealed class BackgroundEventProcessorTests
     #region ProcessEventAsync — Step 1: Statistics Update
 
     [Fact]
-    public async Task ProcessEventAsync_WithUsedSegments_UpdatesStatistics()
+    public async Task ProcessEventAsync_WithUsedSegments_UpdatesMetadata()
     {
         // ARRANGE
         var processor = CreateProcessor(maxSegmentCount: 100);
         var segment = AddToStorage(_storage, 0, 9);
-        var beforeAccess = segment.Statistics.LastAccessedAt;
+        var beforeAccess = DateTime.UtcNow;
 
         var evt = CreateEvent(
             requestedRange: TestHelpers.CreateRange(0, 9),
@@ -39,9 +39,9 @@ public sealed class BackgroundEventProcessorTests
         // ACT
         await processor.ProcessEventAsync(evt, CancellationToken.None);
 
-        // ASSERT — statistics updated (HitCount incremented, LastAccessedAt refreshed)
-        Assert.Equal(1, segment.Statistics.HitCount);
-        Assert.True(segment.Statistics.LastAccessedAt >= beforeAccess);
+        // ASSERT — LRU metadata updated (LastAccessedAt refreshed to >= beforeAccess)
+        var meta = Assert.IsType<LruEvictionSelector<int, int>.LruMetadata>(segment.EvictionMetadata);
+        Assert.True(meta.LastAccessedAt >= beforeAccess);
         Assert.Equal(1, _diagnostics.BackgroundStatisticsUpdated);
     }
 
@@ -394,8 +394,7 @@ public sealed class BackgroundEventProcessorTests
         var range = TestHelpers.CreateRange(start, end);
         var segment = new CachedSegment<int, int>(
             range,
-            new ReadOnlyMemory<int>(new int[end - start + 1]),
-            new SegmentStatistics(DateTime.UtcNow));
+            new ReadOnlyMemory<int>(new int[end - start + 1]));
         storage.Add(segment);
         return segment;
     }
@@ -409,6 +408,10 @@ public sealed class BackgroundEventProcessorTests
     /// </summary>
     private sealed class ThrowingEvictionSelector : IEvictionSelector<int, int>
     {
+        public void InitializeMetadata(CachedSegment<int, int> segment, DateTime now) { }
+
+        public void UpdateMetadata(IReadOnlyList<CachedSegment<int, int>> usedSegments, DateTime now) { }
+
         public IReadOnlyList<CachedSegment<int, int>> OrderCandidates(
             IReadOnlyList<CachedSegment<int, int>> candidates) =>
             throw new InvalidOperationException("Simulated selector failure.");

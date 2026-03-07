@@ -124,7 +124,18 @@ When only a single policy is exceeded, its pressure is used directly (no composi
 
 ### Purpose
 
-An Eviction Selector determines the **order** in which eviction candidates are considered. It does NOT decide how many to remove or whether to evict at all — those are the pressure's and policy's responsibilities.
+An Eviction Selector determines the **order** in which eviction candidates are considered, **owns the per-segment metadata** required to implement that ordering, and is responsible for creating and updating that metadata.
+
+It does NOT decide how many segments to remove or whether to evict at all — those are the pressure's and policy's responsibilities.
+
+### Metadata Ownership
+
+Each selector defines its own metadata type (a nested `internal sealed class` implementing `IEvictionMetadata`) and stores it on `CachedSegment.EvictionMetadata`. The `BackgroundEventProcessor` calls:
+
+- `selector.InitializeMetadata(segment, now)` — immediately after each segment is stored (step 2)
+- `selector.UpdateMetadata(usedSegments, now)` — at the start of each event cycle for segments accessed by the User Path (step 1)
+
+Selectors that require no metadata (e.g., `SmallestFirstEvictionSelector`) implement both methods as no-ops and leave `EvictionMetadata` null.
 
 ### Architectural Constraints
 
@@ -137,8 +148,11 @@ Selectors must NOT:
 
 #### LruEvictionSelector — Least Recently Used
 
-**Orders candidates ascending by `LastAccessedAt`** — the least recently accessed segment is first (highest eviction priority).
+**Orders candidates ascending by `LruMetadata.LastAccessedAt`** — the least recently accessed segment is first (highest eviction priority).
 
+- Metadata type: `LruEvictionSelector<TRange,TData>.LruMetadata` with field `DateTime LastAccessedAt`
+- `InitializeMetadata`: creates `LruMetadata(now)`
+- `UpdateMetadata`: sets `meta.LastAccessedAt = now` on each used segment
 - Optimizes for temporal locality: segments accessed recently are retained
 - Best for workloads where re-access probability correlates with recency
 
@@ -148,8 +162,11 @@ Selectors must NOT:
 
 #### FifoEvictionSelector — First In, First Out
 
-**Orders candidates ascending by `CreatedAt`** — the oldest segment is first.
+**Orders candidates ascending by `FifoMetadata.CreatedAt`** — the oldest segment is first.
 
+- Metadata type: `FifoEvictionSelector<TRange,TData>.FifoMetadata` with field `DateTime CreatedAt`
+- `InitializeMetadata`: creates `FifoMetadata(now)` (immutable after creation)
+- `UpdateMetadata`: no-op — FIFO ignores access patterns
 - Treats the cache as a fixed-size sliding window over time
 - Does not reflect access patterns; simpler and more predictable than LRU
 - Best for workloads where all segments have similar re-access probability
@@ -158,6 +175,9 @@ Selectors must NOT:
 
 **Orders candidates ascending by span** — the narrowest segment is first.
 
+- No metadata — ordering is derived entirely from `segment.Range.Span(domain)`
+- `InitializeMetadata`: no-op
+- `UpdateMetadata`: no-op
 - Optimizes for total domain coverage: retains large (wide) segments over small ones
 - Best for workloads where wide segments are more valuable
 - Captures `TDomain` internally for span computation
@@ -198,38 +218,57 @@ The immunity filtering is performed by the Executor, not the Selector.
 
 ---
 
-## Statistics
+## Eviction Metadata
 
-### Schema
+### Overview
 
-Every segment stored in `CachedSegments` has an associated `SegmentStatistics` record.
+Per-segment eviction metadata is **owned by the Eviction Selector**, not by a shared statistics record. Each segment carries an `IEvictionMetadata? EvictionMetadata` reference. The selector that is currently configured defines, creates, updates, and interprets this metadata.
 
-| Field            | Type       | Set at         | Updated when                                            |
-|------------------|------------|----------------|---------------------------------------------------------|
-| `CreatedAt`      | `DateTime` | Segment stored | Never (immutable)                                       |
-| `LastAccessedAt` | `DateTime` | Segment stored | Each time segment appears in `UsedSegments`             |
-| `HitCount`       | `int`      | 0 at storage   | Incremented each time segment appears in `UsedSegments` |
+Selectors that require no metadata (e.g., `SmallestFirstEvictionSelector`) leave `EvictionMetadata` null.
+
+### Selector-Specific Metadata Types
+
+| Selector                       | Metadata Class  | Fields                    | Notes                                 |
+|--------------------------------|-----------------|---------------------------|---------------------------------------|
+| `LruEvictionSelector`          | `LruMetadata`   | `DateTime LastAccessedAt` | Updated on each `UsedSegments` entry  |
+| `FifoEvictionSelector`         | `FifoMetadata`  | `DateTime CreatedAt`      | Immutable after creation              |
+| `SmallestFirstEvictionSelector`| *(none)*        | —                         | Orders by `Range.Span(domain)`; no metadata needed |
+
+Metadata classes are nested `internal sealed` classes inside their respective selector classes.
 
 ### Ownership
 
-Statistics are updated by the **Background Event Processor** directly (step 1 of event processing). This is a private concern of the Background Path, not owned by any eviction component.
+Metadata is managed exclusively by the configured selector via two methods called by the `BackgroundEventProcessor`:
 
-Not all selectors use all fields. The FIFO selector only uses `CreatedAt`; the LRU selector primarily uses `LastAccessedAt`. Statistics fields are always maintained regardless of which selector is configured, since the same segment may be served to the user before the selector is changed.
+- `InitializeMetadata(segment, now)` — called immediately after each segment is stored (step 2); selector attaches its metadata to `segment.EvictionMetadata`
+- `UpdateMetadata(usedSegments, now)` — called at the start of each event cycle for segments accessed by the User Path (step 1); selector updates its metadata on each used segment
+
+If a selector encounters metadata from a previously-configured selector (runtime selector switching), it replaces it with its own using a lazy-initialization pattern:
+
+```csharp
+if (segment.EvictionMetadata is not LruMetadata meta)
+{
+    meta = new LruMetadata(now);
+    segment.EvictionMetadata = meta;
+}
+```
 
 ### Lifecycle
 
 ```
 Segment stored (Background Path, step 2):
-  statistics.CreatedAt      = now
-  statistics.LastAccessedAt = now
-  statistics.HitCount       = 0
+  selector.InitializeMetadata(segment, now)
+    → e.g., LruMetadata { LastAccessedAt = now }
+    → e.g., FifoMetadata { CreatedAt = now }
+    → no-op for SmallestFirst
 
 Segment used (BackgroundEvent.UsedSegments, Background Path, step 1):
-  statistics.LastAccessedAt = now
-  statistics.HitCount      += 1
+  selector.UpdateMetadata(usedSegments, now)
+    → e.g., LruMetadata.LastAccessedAt = now
+    → no-op for Fifo, SmallestFirst
 
 Segment evicted (Background Path, step 4):
-  statistics record destroyed
+  segment removed from storage; metadata reference is GC'd with the segment
 ```
 
 ---
@@ -241,10 +280,11 @@ Eviction never happens in isolation — it is always the tail of a storage step 
 ```
 Background event received
   |
-Step 1: Update statistics for UsedSegments      (Background Path directly)
+Step 1: Update metadata for UsedSegments         (selector.UpdateMetadata)
   |
 Step 2: Store FetchedData as new segment(s)      (Storage Strategy)
-  |                                              <- Only if FetchedData != null
+  |      + selector.InitializeMetadata(segment)  <- Only if FetchedData != null
+  |
 Step 3: Evaluate all Eviction Policies           (Eviction Policies)
   |                                              <- Only if step 2 ran
 Step 4: Execute eviction if any policy exceeded  (Eviction Executor)
@@ -312,9 +352,9 @@ A segment may be referenced in the User Path's current in-memory assembly (i.e.,
 | VPC.E.2a — Single loop per event                   | CompositePressure aggregates all exceeded pressures; one iteration             |
 | VPC.E.3 — Just-stored immunity                     | Executor filters out just-stored segments before passing to selector           |
 | VPC.E.3a — No-op when only immune candidate        | Executor receives empty candidate set after filtering; does nothing            |
-| VPC.E.4 — Statistics maintained by Background Path | Background Event Processor updates statistics directly (private static method) |
+| VPC.E.4 — Metadata owned by Eviction Selector     | Selector owns `InitializeMetadata` / `UpdateMetadata`; `BackgroundEventProcessor` delegates  |
 | VPC.E.5 — Eviction only in Background Path         | User Path has no reference to policies, selectors, or executor                 |
-| VPC.E.6 — Consistency after eviction               | Evicted segments and their statistics are atomically removed together          |
+| VPC.E.6 — Consistency after eviction               | Evicted segments (and their metadata) are removed together; no dangling references |
 | VPC.B.3b — No eviction on stats-only events        | Steps 3-4 gated on `FetchedData != null`                                       |
 
 ---
