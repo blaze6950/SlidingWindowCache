@@ -23,8 +23,8 @@ namespace Intervals.NET.Caching.Infrastructure.Scheduling;
 /// <list type="number">
 /// <item><description>Signal <c>WorkStarted</c> diagnostic</description></item>
 /// <item><description>Snapshot debounce delay from the provider delegate ("next cycle" semantics)</description></item>
-/// <item><description>Await <c>Task.Delay(debounceDelay, cancellationToken)</c></description></item>
-/// <item><description>Explicit <c>IsCancellationRequested</c> check after debounce (Task.Delay race guard)</description></item>
+/// <item><description>Await <c>Task.Delay(debounceDelay, cancellationToken)</c> (skipped when <c>debounceDelay == TimeSpan.Zero</c>)</description></item>
+/// <item><description>Explicit <c>IsCancellationRequested</c> check after debounce (Task.Delay race guard; skipped when debounce is zero)</description></item>
 /// <item><description>Invoke the executor delegate with the work item and its cancellation token</description></item>
 /// <item><description>Catch <c>OperationCanceledException</c> → <c>WorkCancelled</c> diagnostic</description></item>
 /// <item><description>Catch all other exceptions → <c>WorkFailed</c> diagnostic</description></item>
@@ -106,8 +106,8 @@ internal abstract class WorkSchedulerBase<TWorkItem> : IWorkScheduler<TWorkItem>
     /// <item><description>Signal <c>WorkStarted</c> diagnostic</description></item>
     /// <item><description>Read cancellation token from the work item's <see cref="ISchedulableWorkItem.CancellationToken"/></description></item>
     /// <item><description>Snapshot debounce delay from provider at execution time ("next cycle" semantics)</description></item>
-    /// <item><description>Await <c>Task.Delay(debounceDelay, cancellationToken)</c></description></item>
-    /// <item><description>Explicit <c>IsCancellationRequested</c> check after debounce (Task.Delay race guard)</description></item>
+    /// <item><description>Await <c>Task.Delay(debounceDelay, cancellationToken)</c> (skipped entirely when <c>debounceDelay == TimeSpan.Zero</c>)</description></item>
+    /// <item><description>Explicit <c>IsCancellationRequested</c> check after debounce (Task.Delay race guard; skipped when debounce is zero)</description></item>
     /// <item><description>Invoke executor delegate</description></item>
     /// <item><description>Catch <c>OperationCanceledException</c> → signal <c>WorkCancelled</c></description></item>
     /// <item><description>Catch other exceptions → signal <c>WorkFailed</c></description></item>
@@ -128,18 +128,22 @@ internal abstract class WorkSchedulerBase<TWorkItem> : IWorkScheduler<TWorkItem>
         try
         {
             // Step 1: Apply debounce delay — allows superseded work items to be cancelled.
-            // ConfigureAwait(false) ensures continuation on thread pool.
-            await Task.Delay(debounceDelay, cancellationToken)
-                .ConfigureAwait(false);
-
-            // Step 2: Check cancellation after debounce.
-            // NOTE: Task.Delay can complete normally just as cancellation is signalled (a race),
-            // so we may reach here with cancellation requested but no exception thrown.
-            // This explicit check provides a clean diagnostic path (WorkCancelled) for that case.
-            if (cancellationToken.IsCancellationRequested)
+            // Skipped entirely when debounce is zero (e.g. VPC event processing) to avoid
+            // unnecessary task allocation. ConfigureAwait(false) ensures continuation on thread pool.
+            if (debounceDelay > TimeSpan.Zero)
             {
-                Diagnostics.WorkCancelled();
-                return;
+                await Task.Delay(debounceDelay, cancellationToken)
+                    .ConfigureAwait(false);
+
+                // Step 2: Check cancellation after debounce.
+                // NOTE: Task.Delay can complete normally just as cancellation is signalled (a race),
+                // so we may reach here with cancellation requested but no exception thrown.
+                // This explicit check provides a clean diagnostic path (WorkCancelled) for that case.
+                if (cancellationToken.IsCancellationRequested)
+                {
+                    Diagnostics.WorkCancelled();
+                    return;
+                }
             }
 
             // Step 3: Execute the work item.

@@ -1,7 +1,7 @@
+using Intervals.NET.Caching.Extensions;
 using Intervals.NET.Domain.Abstractions;
 using Intervals.NET.Domain.Default.Numeric;
 using Moq;
-using Intervals.NET.Caching.SlidingWindow.Infrastructure.Extensions;
 
 namespace Intervals.NET.Caching.SlidingWindow.Unit.Tests.Infrastructure.Extensions;
 

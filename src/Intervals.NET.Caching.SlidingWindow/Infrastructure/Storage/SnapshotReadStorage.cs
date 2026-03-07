@@ -1,7 +1,7 @@
+using Intervals.NET.Caching.Extensions;
 using Intervals.NET.Data;
 using Intervals.NET.Data.Extensions;
 using Intervals.NET.Domain.Abstractions;
-using Intervals.NET.Caching.SlidingWindow.Infrastructure.Extensions;
 
 namespace Intervals.NET.Caching.SlidingWindow.Infrastructure.Storage;
 

@@ -10,12 +10,12 @@
         <Version>0.0.1</Version>
         <Authors>blaze6950</Authors>
         <Product>Intervals.NET.Caching.VisitedPlaces</Product>
-        <Description>Visited places cache implementation for Intervals.NET: a random-access optimized range cache (not yet implemented — scaffold only).</Description>
+        <Description>Visited places cache implementation for Intervals.NET: a random-access optimized range cache with non-contiguous segment storage, pluggable eviction, and FIFO background processing.</Description>
         <PackageLicenseExpression>MIT</PackageLicenseExpression>
         <PackageProjectUrl>https://github.com/blaze6950/Intervals.NET.Caching</PackageProjectUrl>
         <RepositoryUrl>https://github.com/blaze6950/Intervals.NET.Caching</RepositoryUrl>
         <RepositoryType>git</RepositoryType>
-        <PackageTags>cache;range-based;async;intervals</PackageTags>
+        <PackageTags>cache;visited-places;range-based;async;eviction;random-access;intervals</PackageTags>
         <GeneratePackageOnBuild>false</GeneratePackageOnBuild>
         <IncludeSymbols>true</IncludeSymbols>
         <SymbolPackageFormat>snupkg</SymbolPackageFormat>
@@ -24,8 +24,20 @@
     </PropertyGroup>
 
     <ItemGroup>
+        <InternalsVisibleTo Include="Intervals.NET.Caching.VisitedPlaces.Tests.Infrastructure" />
+        <InternalsVisibleTo Include="Intervals.NET.Caching.VisitedPlaces.Unit.Tests" />
+    </ItemGroup>
+
+    <ItemGroup>
         <ProjectReference Include="..\Intervals.NET.Caching\Intervals.NET.Caching.csproj" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <PackageReference Include="Intervals.NET.Data" Version="0.0.1" />
+        <PackageReference Include="Intervals.NET.Domain.Default" Version="0.0.2" />
+        <PackageReference Include="Intervals.NET.Domain.Extensions" Version="0.0.3" />
         <PackageReference Include="Microsoft.SourceLink.GitHub" Version="10.0.103" PrivateAssets="All" />
     </ItemGroup>
 
 </Project>
+

@@ -1,6 +1,5 @@
 using Intervals.NET.Domain.Default.Numeric;
 using Moq;
-using Intervals.NET.Caching;
 using Intervals.NET.Caching.Dto;
 using Intervals.NET.Caching.Extensions;
 using Intervals.NET.Caching.SlidingWindow.Public;
@@ -921,7 +920,7 @@ public sealed class WindowCacheConsistencyExtensionsTests
     {
         // ARRANGE — verify the property is publicly readable
         var range = CreateRange(1, 10);
-        var data = new ReadOnlyMemory<int>(new[] { 1, 2, 3 });
+        var data = new ReadOnlyMemory<int>([1, 2, 3]);
         var result = new RangeResult<int, int>(range, data, CacheInteraction.PartialHit);
 
         // ASSERT
@@ -936,7 +935,7 @@ public sealed class WindowCacheConsistencyExtensionsTests
     {
         // ARRANGE
         var range = CreateRange(0, 1);
-        var data = new ReadOnlyMemory<int>(new[] { 0, 1 });
+        var data = new ReadOnlyMemory<int>([0, 1]);
         var result = new RangeResult<int, int>(range, data, interaction);
 
         // ASSERT

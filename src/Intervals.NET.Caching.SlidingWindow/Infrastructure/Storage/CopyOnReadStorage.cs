@@ -1,8 +1,8 @@
+using Intervals.NET.Caching.Extensions;
 using Intervals.NET.Data;
 using Intervals.NET.Data.Extensions;
 using Intervals.NET.Domain.Abstractions;
 using Intervals.NET.Extensions;
-using Intervals.NET.Caching.SlidingWindow.Infrastructure.Extensions;
 
 namespace Intervals.NET.Caching.SlidingWindow.Infrastructure.Storage;
 
@@ -40,7 +40,7 @@ namespace Intervals.NET.Caching.SlidingWindow.Infrastructure.Storage;
 /// <para>
 /// This ensures that active storage is never observed mid-swap by a concurrent <c>Read()</c> or
 /// <c>ToRangeData()</c> call, preventing data races when range data is derived from the same storage
-    /// (e.g., during cache expansion per Invariant SWC.A.12).
+/// (e.g., during cache expansion per Invariant SWC.A.12).
 /// </para>
 /// <para><strong>Synchronization:</strong></para>
 /// <para>
@@ -66,7 +66,7 @@ namespace Intervals.NET.Caching.SlidingWindow.Infrastructure.Storage;
 /// </description></item>
 /// </list>
 /// <para>
-    /// See Invariant SWC.A.4 for the conditional compliance note regarding this lock.
+/// See Invariant SWC.A.4 for the conditional compliance note regarding this lock.
 /// </para>
 /// <para><strong>Memory Behavior:</strong></para>
 /// <list type="bullet">

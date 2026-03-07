@@ -1,5 +1,4 @@
 using Intervals.NET.Domain.Abstractions;
-using Intervals.NET.Caching;
 using Intervals.NET.Caching.Layered;
 using Intervals.NET.Caching.SlidingWindow.Public.Cache;
 using Intervals.NET.Caching.SlidingWindow.Public.Configuration;

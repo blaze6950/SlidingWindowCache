@@ -2,7 +2,6 @@ using Intervals.NET.Data;
 using Intervals.NET.Data.Extensions;
 using Intervals.NET.Domain.Abstractions;
 using Intervals.NET.Extensions;
-using Intervals.NET.Caching;
 using Intervals.NET.Caching.Dto;
 using Intervals.NET.Caching.SlidingWindow.Public.Instrumentation;
 

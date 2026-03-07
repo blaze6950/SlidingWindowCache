@@ -1,5 +1,4 @@
 using Intervals.NET.Caching.Infrastructure.Scheduling;
-using Intervals.NET.Domain.Abstractions;
 using Intervals.NET.Caching.SlidingWindow.Public.Instrumentation;
 
 namespace Intervals.NET.Caching.SlidingWindow.Infrastructure.Adapters;

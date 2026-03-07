@@ -1,6 +1,5 @@
 using Intervals.NET.Domain.Default.Numeric;
 using Moq;
-using Intervals.NET.Caching;
 using Intervals.NET.Caching.Dto;
 using Intervals.NET.Caching.Infrastructure;
 using Intervals.NET.Caching.Layered;

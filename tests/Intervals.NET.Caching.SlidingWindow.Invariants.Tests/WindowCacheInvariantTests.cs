@@ -1,7 +1,6 @@
 using Intervals.NET.Domain.Default.Numeric;
 using Intervals.NET.Domain.Extensions.Fixed;
 using Intervals.NET.Extensions;
-using Intervals.NET.Caching;
 using Intervals.NET.Caching.Extensions;
 using Intervals.NET.Caching.SlidingWindow.Tests.Infrastructure.Helpers;
 using Intervals.NET.Caching.SlidingWindow.Public.Cache;

@@ -1,6 +1,6 @@
 using Intervals.NET.Domain.Abstractions;
 
-namespace Intervals.NET.Caching.SlidingWindow.Infrastructure.Extensions;
+namespace Intervals.NET.Caching.Extensions;
 
 /// <summary>
 /// Provides domain-agnostic extension methods that work with any IRangeDomain type.

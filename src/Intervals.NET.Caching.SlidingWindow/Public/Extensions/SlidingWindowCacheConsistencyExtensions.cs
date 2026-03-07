@@ -1,5 +1,4 @@
 using Intervals.NET.Domain.Abstractions;
-using Intervals.NET.Caching;
 using Intervals.NET.Caching.Dto;
 
 namespace Intervals.NET.Caching.SlidingWindow.Public.Extensions;
@@ -52,7 +51,7 @@ namespace Intervals.NET.Caching.SlidingWindow.Public.Extensions;
 /// However, the consistency guarantee may degrade:
 /// <list type="bullet">
 /// <item><description>
-    /// Due to the <c>AsyncActivityCounter</c>'s "was idle at some point" semantics (Invariant S.H.3),
+/// Due to the <c>AsyncActivityCounter</c>'s "was idle at some point" semantics (Invariant S.H.3),
 /// a thread that calls <c>WaitForIdleAsync</c> during the window between
 /// <c>Interlocked.Increment</c> (counter 0→1) and the subsequent <c>Volatile.Write</c> of the
 /// new <c>TaskCompletionSource</c> will observe the previous (already-completed) TCS and return

@@ -1,4 +1,3 @@
-using Intervals.NET.Caching;
 using Intervals.NET.Caching.Dto;
 
 namespace Intervals.NET.Caching.SlidingWindow.Tests.Infrastructure.DataSources;

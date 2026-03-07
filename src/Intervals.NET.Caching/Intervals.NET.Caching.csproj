@@ -34,6 +34,8 @@
         <InternalsVisibleTo Include="Intervals.NET.Caching.SlidingWindow" />
         <InternalsVisibleTo Include="Intervals.NET.Caching.SlidingWindow.Unit.Tests" />
         <InternalsVisibleTo Include="Intervals.NET.Caching.Unit.Tests" />
+        <InternalsVisibleTo Include="Intervals.NET.Caching.VisitedPlaces" />
+        <InternalsVisibleTo Include="Intervals.NET.Caching.VisitedPlaces.Unit.Tests" />
     </ItemGroup>
 
 </Project>

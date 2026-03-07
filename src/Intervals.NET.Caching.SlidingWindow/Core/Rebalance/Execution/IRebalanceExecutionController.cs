@@ -1,4 +1,3 @@
-using Intervals.NET;
 using Intervals.NET.Domain.Abstractions;
 using Intervals.NET.Caching.SlidingWindow.Core.Rebalance.Intent;
 using Intervals.NET.Caching.SlidingWindow.Public.Cache;

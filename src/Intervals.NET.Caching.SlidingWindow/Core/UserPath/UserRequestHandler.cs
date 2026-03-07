@@ -5,7 +5,6 @@ using Intervals.NET.Extensions;
 using Intervals.NET.Caching.SlidingWindow.Core.Rebalance.Execution;
 using Intervals.NET.Caching.SlidingWindow.Core.Rebalance.Intent;
 using Intervals.NET.Caching.SlidingWindow.Core.State;
-using Intervals.NET.Caching;
 using Intervals.NET.Caching.Dto;
 using Intervals.NET.Caching.SlidingWindow.Public.Instrumentation;
 
@@ -24,7 +23,7 @@ namespace Intervals.NET.Caching.SlidingWindow.Core.UserPath;
 /// <para>
 /// Every user access that results in assembled data publishes a rebalance intent.
 /// Requests where IDataSource returns null for the requested range (physical boundary misses)
-    /// do not publish an intent, as there is no delivered data to embed (see Invariant SWC.C.8e).
+/// do not publish an intent, as there is no delivered data to embed (see Invariant SWC.C.8e).
 /// The UserRequestHandler NEVER invokes decision logic.
 /// </para>
 /// <para><strong>Responsibilities:</strong></para>

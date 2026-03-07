@@ -1,5 +1,4 @@
 using Intervals.NET.Domain.Default.Numeric;
-using Intervals.NET.Caching;
 using Intervals.NET.Caching.Layered;
 using Intervals.NET.Caching.SlidingWindow.Public;
 using Intervals.NET.Caching.SlidingWindow.Public.Cache;

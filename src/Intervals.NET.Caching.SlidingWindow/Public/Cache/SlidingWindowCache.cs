@@ -1,5 +1,4 @@
 using Intervals.NET.Domain.Abstractions;
-using Intervals.NET.Caching;
 using Intervals.NET.Caching.Dto;
 using Intervals.NET.Caching.Infrastructure.Concurrency;
 using Intervals.NET.Caching.Infrastructure.Scheduling;

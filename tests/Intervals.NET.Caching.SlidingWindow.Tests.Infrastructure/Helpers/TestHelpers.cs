@@ -1,7 +1,6 @@
 using Intervals.NET.Domain.Default.Numeric;
 using Intervals.NET.Domain.Extensions.Fixed;
 using Moq;
-using Intervals.NET.Caching;
 using Intervals.NET.Caching.Dto;
 using Intervals.NET.Caching.SlidingWindow.Public.Cache;
 using Intervals.NET.Caching.SlidingWindow.Public.Configuration;
