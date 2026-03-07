@@ -27,6 +27,7 @@ namespace Intervals.NET.Caching.VisitedPlaces.Infrastructure.Storage;
 internal sealed class SnapshotAppendBufferStorage<TRange, TData> : ISegmentStorage<TRange, TData>
     where TRange : IComparable<TRange>
 {
+    // todo: this value must be set in configuration, not hardcoded.
     private const int AppendBufferSize = 8;
 
     // Sorted snapshot — published atomically via Volatile.Write on normalization.
