@@ -1287,7 +1287,7 @@ public sealed class WindowCacheInvariantTests : IAsyncDisposable
     /// <summary>
     /// Tests Invariants G.1, G.2, G.3: Execution context separation between User Path and Rebalance operations.
     /// G.1: User Path operates in user execution context (request completes quickly).
-    /// G.2: Rebalance Decision/Execution Path execute outside user context (Task.Run).
+    /// G.2: Rebalance Decision/Execution Path execute outside user context (Task.Yield() in ChainExecutionAsync / channel loop).
     /// G.3: Rebalance Execution performs I/O only in background context (not blocking user).
     /// Verifies user requests complete quickly without blocking on background operations, proving rebalance
     /// work is properly scheduled on background threads. Critical for maintaining responsive user-facing latency.

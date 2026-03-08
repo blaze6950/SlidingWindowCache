@@ -159,7 +159,6 @@ internal sealed class CacheNormalizationExecutor<TRange, TData, TDomain>
             // Swallow: the background loop must survive individual request failures.
         }
 
-        // todo: check how this actually sync method works with the task based scheduler. I afraid that it can be executed on the user path, because there is no any awaiting of the not completed task inside, so there is no freeing the thread.
         return Task.CompletedTask;
     }
 }

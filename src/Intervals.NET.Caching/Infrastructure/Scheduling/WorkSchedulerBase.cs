@@ -51,9 +51,11 @@ namespace Intervals.NET.Caching.Infrastructure.Scheduling;
 internal abstract class WorkSchedulerBase<TWorkItem> : IWorkScheduler<TWorkItem>
     where TWorkItem : class, ISchedulableWorkItem
 {
+    // todo: I afraid that having this Func is a code smell and bad practice
     /// <summary>Delegate that executes the actual work for a given work item.</summary>
     private protected readonly Func<TWorkItem, CancellationToken, Task> Executor;
 
+    // todo: I afraid that having this Func is a code smell and bad practice
     /// <summary>Returns the current debounce delay; snapshotted at the start of each execution ("next cycle" semantics).</summary>
     private protected readonly Func<TimeSpan> DebounceProvider;
 

@@ -143,6 +143,22 @@ Volatile.Write(ref _currentExecutionTask, newTask);
 
 The `Volatile.Write` is safe here because `PublishWorkItemAsync` is called from the single-writer intent processing loop only — no lock is needed.
 
+**`ChainExecutionAsync` — ThreadPool guarantee via `Task.Yield()`:**
+
+`ChainExecutionAsync` follows three ordered steps:
+
+```
+1. await Task.Yield()          — immediate ThreadPool context switch (very first statement)
+2. await previousTask          — sequential ordering (wait for previous to finish)
+3. await ExecuteWorkItemCoreAsync() — run work item on ThreadPool thread
+```
+
+`Task.Yield()` is the very first statement. Because `PublishWorkItemAsync` calls `ChainExecutionAsync` fire-and-forget (not awaited), the async state machine starts executing synchronously on the caller's thread until the first genuine yield point. By placing `Task.Yield()` first, the caller's thread is freed immediately and the entire method body — including `await previousTask`, its exception handler, and `ExecuteWorkItemCoreAsync` — runs on the ThreadPool.
+
+Sequential ordering is fully preserved: `await previousTask` (step 2) still blocks execution of the current work item until the previous one completes — it just does so on a ThreadPool thread rather than the caller's thread.
+
+Without `Task.Yield()`, a synchronous executor (e.g. returning `Task.CompletedTask` immediately) would run inline on the caller's thread, violating the fire-and-forget contract and invariants VPC.A.4, VPC.A.6, VPC.A.7.
+
 **Characteristics:**
 
 | Property        | Value                          |

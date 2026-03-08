@@ -457,7 +457,7 @@ New data merged with existing via range union. Existing data enumerated and pres
 Activity counter incremented **before** semaphore signal, channel write, or volatile write (strict ordering discipline at all publication sites).
 
 - `src/Intervals.NET.Caching.SlidingWindow/Core/Rebalance/Intent/IntentController.cs` — increment before `semaphore.Release`
-- `src/Intervals.NET.Caching.SlidingWindow/Infrastructure/Execution/` — increment before channel write or `Task.Run`
+- `src/Intervals.NET.Caching.SlidingWindow/Infrastructure/Execution/` — increment before `Volatile.Write` (task chain step) or channel write
 
 ### Activity Counter Cleanup
 **Invariant**: S.H.2

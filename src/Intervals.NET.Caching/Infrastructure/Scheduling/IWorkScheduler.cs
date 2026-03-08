@@ -42,7 +42,10 @@ namespace Intervals.NET.Caching.Infrastructure.Scheduling;
 /// <para><strong>Execution Context:</strong></para>
 /// <para>
 /// All implementations execute work on background threads (ThreadPool). The caller's
-/// (user-facing) path is never blocked.
+/// (user-facing) path is never blocked. The task-based implementation enforces this via
+/// <c>await Task.Yield()</c> as the very first statement of <c>ChainExecutionAsync</c>,
+/// which immediately frees the caller's thread so the entire method body — including
+/// <c>await previousTask</c> and the executor — runs on the ThreadPool.
 /// </para>
 /// </remarks>
 internal interface IWorkScheduler<TWorkItem> : IAsyncDisposable

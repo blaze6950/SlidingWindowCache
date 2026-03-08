@@ -12,6 +12,8 @@ namespace Intervals.NET.Caching.WasmValidation;
 /// Minimal IDataSource implementation for WebAssembly compilation validation.
 /// This is NOT a demo or test - it exists purely to ensure the library compiles for net8.0-browser.
 /// </summary>
+/// TODO: add wasm validation for VPC; think about splitting wasm validation into separate projects, to make CICD more granular without redundant work;
+/// TODO: also, perform the deep analysis of the source code, to reveal any WASM incompatibilities.
 internal sealed class SimpleDataSource : IDataSource<int, int>
 {
     public Task<RangeChunk<int, int>> FetchAsync(Range<int> range, CancellationToken cancellationToken)

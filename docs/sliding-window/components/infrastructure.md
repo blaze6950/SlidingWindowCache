@@ -95,6 +95,7 @@ The Sliding Window Cache follows a **single consumer model** (see `docs/sliding-
 │ PHASE 3: BACKGROUND EXECUTION (Strategy-Specific)                    │
 ├──────────────────────────────────────────────────────────────────────┤
 │ TASK-BASED: ChainExecutionAsync()  (chained async method)            │
+│   • await Task.Yield()  (force ThreadPool context switch — 1st stmt) │
 │   • await previousTask  (serial ordering)                            │
 │   • await ExecuteWorkItemCoreAsync()                                 │
 │ OR CHANNEL-BASED: ProcessWorkItemsAsync()  (infinite loop)           │
@@ -123,7 +124,7 @@ The Sliding Window Cache follows a **single consumer model** (see `docs/sliding-
 
 - **User Thread Boundary**: Ends at `PublishIntent()` return. Everything before: synchronous, blocking user request. `PublishIntent()`: atomic ops only (microseconds), returns immediately.
 - **Background Thread #1**: Intent processing loop. Single dedicated thread via semaphore wait. Processes intents sequentially (one at a time). CPU-only decision logic (microseconds). No I/O.
-- **Background Execution**: Strategy-specific serialization. Task-based: chained async methods on ThreadPool. Channel-based: single dedicated loop via channel reader. Both: sequential (one at a time). I/O operations. SOLE writer to cache state.
+- **Background Execution**: Strategy-specific serialization. Task-based: chained async methods with `Task.Yield()` forcing ThreadPool dispatch before each execution. Channel-based: single dedicated loop via channel reader. Both: sequential (one at a time). I/O operations. SOLE writer to cache state.
 
 ---
 

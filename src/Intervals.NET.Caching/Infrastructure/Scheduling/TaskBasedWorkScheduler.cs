@@ -25,7 +25,10 @@ namespace Intervals.NET.Caching.Infrastructure.Scheduling;
 /// <para>
 /// The task chain reference uses volatile write for visibility (single-writer context —
 /// only the intent processing loop calls <see cref="PublishWorkItemAsync"/>).
-/// No locks are needed. Actual execution happens asynchronously on the ThreadPool.
+/// No locks are needed. Actual execution always happens asynchronously on the ThreadPool —
+/// guaranteed by <c>await Task.Yield()</c> at the very beginning of <see cref="ChainExecutionAsync"/>,
+/// which immediately frees the caller's thread so the entire method body (including
+/// <c>await previousTask</c> and the executor) runs on the ThreadPool.
 /// </para>
 /// <para><strong>Single-Writer Guarantee:</strong></para>
 /// <para>
@@ -119,7 +122,8 @@ internal sealed class TaskBasedWorkScheduler<TWorkItem> : WorkSchedulerBase<TWor
     /// <para>
     /// Chains the new work item to the current execution task using volatile write for visibility.
     /// The chaining operation is lock-free (single-writer context).
-    /// Returns immediately after chaining — actual execution happens asynchronously on the ThreadPool.
+    /// Returns immediately after chaining — actual execution always happens asynchronously on the
+    /// ThreadPool, guaranteed by <c>await Task.Yield()</c> in <see cref="ChainExecutionAsync"/>.
     /// </para>
     /// <para><strong>Activity Counter:</strong></para>
     /// <para>
@@ -153,12 +157,26 @@ internal sealed class TaskBasedWorkScheduler<TWorkItem> : WorkSchedulerBase<TWor
 
     /// <summary>
     /// Chains a new work item to await the previous task's completion before executing.
-    /// Ensures sequential execution (single-writer guarantee).
+    /// Ensures sequential execution (single-writer guarantee) and unconditional ThreadPool dispatch.
     /// </summary>
     /// <param name="previousTask">The previous execution task to await.</param>
     /// <param name="workItem">The work item to execute after the previous task completes.</param>
     /// <returns>A Task representing the chained execution operation.</returns>
     /// <remarks>
+    /// <para><strong>ThreadPool Guarantee — <c>await Task.Yield()</c>:</strong></para>
+    /// <para>
+    /// <c>await Task.Yield()</c> is the very first statement. Because <see cref="PublishWorkItemAsync"/>
+    /// calls this method fire-and-forget (not awaited), the async state machine starts executing
+    /// synchronously on the caller's thread until the first genuine yield point. By placing
+    /// <c>Task.Yield()</c> first, the caller's thread is freed immediately and the entire method
+    /// body — including <c>await previousTask</c>, its exception handler, and
+    /// <c>ExecuteWorkItemCoreAsync</c> — runs on the ThreadPool.
+    /// </para>
+    /// <para>
+    /// Sequential ordering is fully preserved: <c>await previousTask</c> still blocks execution
+    /// of the current work item until the previous one completes — it just does so on a
+    /// ThreadPool thread rather than the caller's thread.
+    /// </para>
     /// <para><strong>Exception Handling:</strong></para>
     /// <para>
     /// Exceptions from the previous task are captured and reported via diagnostics.
@@ -169,9 +187,17 @@ internal sealed class TaskBasedWorkScheduler<TWorkItem> : WorkSchedulerBase<TWor
     /// </remarks>
     private async Task ChainExecutionAsync(Task previousTask, TWorkItem workItem)
     {
+        // Immediately yield to the ThreadPool so the entire method body runs on a background thread.
+        // This frees the caller's thread at once and guarantees background-thread execution even when:
+        //   (a) the executor is fully synchronous (returns Task.CompletedTask immediately), or
+        //   (b) previousTask is already completed (await below would otherwise return synchronously).
+        // Sequential ordering is preserved: await previousTask still blocks the current work item
+        // until the previous one finishes — it just does so on a ThreadPool thread, not the caller's.
+        await Task.Yield();
+
         try
         {
-            // Await previous task completion (enforces sequential execution)
+            // Await previous task completion (enforces sequential execution).
             await previousTask.ConfigureAwait(false);
         }
         catch (Exception ex)

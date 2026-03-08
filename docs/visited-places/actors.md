@@ -128,7 +128,7 @@ There are exactly two execution contexts in VPC (compared to three in SlidingWin
 - VPC.E.5. Eviction evaluation and execution performed exclusively by Background Path
 
 **Components**
-- `BackgroundEventProcessor<TRange, TData, TDomain>`
+- `CacheNormalizationExecutor<TRange, TData, TDomain>`
 
 ---
 
@@ -185,14 +185,14 @@ There are exactly two execution contexts in VPC (compared to three in SlidingWin
 ### Eviction Engine
 
 **Responsibilities**
-- Serve as the **single eviction facade** for `BackgroundEventProcessor` — the processor depends only on the engine.
+- Serve as the **single eviction facade** for `CacheNormalizationExecutor` — the processor depends only on the engine.
 - Delegate selector metadata operations (`UpdateMetadata`, `InitializeSegment`) to the configured `IEvictionSelector`.
 - Delegate segment lifecycle notifications (`InitializeSegment`, `OnSegmentsRemoved`) to the internal `EvictionPolicyEvaluator`.
 - Evaluate all policies and execute the constraint satisfaction loop via `EvaluateAndExecute`; return the list of segments to remove.
 - Fire eviction-specific diagnostics (`EvictionEvaluated`, `EvictionTriggered`, `EvictionExecuted`).
 
 **Non-responsibilities**
-- Does not perform storage mutations (`storage.Add` / `storage.Remove` remain in `BackgroundEventProcessor`).
+- Does not perform storage mutations (`storage.Add` / `storage.Remove` remain in `CacheNormalizationExecutor`).
 - Does not serve user requests.
 - Does not expose `EvictionPolicyEvaluator`, `EvictionExecutor`, or `IEvictionSelector` to the processor.
 
@@ -212,7 +212,7 @@ There are exactly two execution contexts in VPC (compared to three in SlidingWin
 
 ### Eviction Executor *(internal component of Eviction Engine)*
 
-The Eviction Executor is an **internal implementation detail of `EvictionEngine`**, not a top-level actor. It is not visible to `BackgroundEventProcessor` or `VisitedPlacesCache`.
+The Eviction Executor is an **internal implementation detail of `EvictionEngine`**, not a top-level actor. It is not visible to `CacheNormalizationExecutor` or `VisitedPlacesCache`.
 
 **Responsibilities**
 - Execute the constraint satisfaction loop: build the immune set, repeatedly call `selector.TrySelectCandidate`, accumulate `toRemove`, call `pressure.Reduce` per candidate, until `IsExceeded = false` or no eligible candidates remain.
@@ -242,7 +242,7 @@ The Eviction Executor is an **internal implementation detail of `EvictionEngine`
 **Non-responsibilities**
 - Does not decide whether eviction should run (owned by Eviction Policy).
 - Does not pre-filter or remove immune segments from a separate collection (skips them during sampling).
-- Does not remove segments from storage (owned by `BackgroundEventProcessor`).
+- Does not remove segments from storage (owned by `CacheNormalizationExecutor`).
 - Does not sort or scan the entire segment collection (O(SampleSize) only).
 
 **Invariant ownership**

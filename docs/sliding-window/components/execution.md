@@ -36,7 +36,7 @@ The generic work schedulers live in `Intervals.NET.Caching` and have **zero coup
 
 ### TaskBasedWorkScheduler (default)
 
-- Uses **async task chaining**: each `PublishWorkItemAsync` call creates a new `async Task` that first `await`s the previous task, then runs `ExecuteWorkItemCoreAsync` after the debounce delay. No `Task.Run` is used — the async state machine naturally schedules continuations on the ThreadPool via `ConfigureAwait(false)`.
+- Uses **async task chaining**: each `PublishWorkItemAsync` call creates a new `async Task` that first `await`s the previous task, then unconditionally yields to the ThreadPool via `await Task.Yield()`, then runs `ExecuteWorkItemCoreAsync` after the debounce delay. No `Task.Run` is used — `Task.Yield()` in `ChainExecutionAsync` is the explicit mechanism that guarantees ThreadPool execution regardless of whether the previous task completed synchronously or the executor itself is synchronous.
 - On each new work item: a new task is chained onto the tail of the previous one; the caller (`IntentController`) creates a per-request `CancellationTokenSource` so any in-progress debounce delay can be cancelled when superseded.
 - The chaining approach is lock-free: `_currentExecutionTask` is updated via `Volatile.Write` after each chain step.
 - Selected when `SlidingWindowCacheOptions.RebalanceQueueCapacity` is `null`
