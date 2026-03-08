@@ -29,7 +29,7 @@ namespace Intervals.NET.Caching.VisitedPlaces.Core.UserPath;
 /// <item><description>Compute coverage gaps within the requested range</description></item>
 /// <item><description>Fetch gap data from <c>IDataSource</c> (User Path — inline, synchronous w.r.t. the request)</description></item>
 /// <item><description>Assemble and return a <see cref="RangeResult{TRange,TData}"/></description></item>
-    /// <item><description>Publish a <see cref="CacheNormalizationRequest{TRange,TData}"/> (fire-and-forget)</description></item>
+/// <item><description>Publish a <see cref="CacheNormalizationRequest{TRange,TData}"/> (fire-and-forget)</description></item>
 /// </list>
 /// </remarks>
 internal sealed class UserRequestHandler<TRange, TData, TDomain>
@@ -78,7 +78,7 @@ internal sealed class UserRequestHandler<TRange, TData, TDomain>
     /// <item><description>Determine scenario: FullHit (no gaps), FullMiss (no segments hit), or PartialHit (some gaps)</description></item>
     /// <item><description>Fetch gap data from IDataSource (FullMiss / PartialHit)</description></item>
     /// <item><description>Assemble result data from segments and/or fetched chunks</description></item>
-        /// <item><description>Increment activity counter (S.H.1), publish CacheNormalizationRequest (fire-and-forget)</description></item>
+    /// <item><description>Increment activity counter (S.H.1), publish CacheNormalizationRequest (fire-and-forget)</description></item>
     /// <item><description>Return RangeResult immediately</description></item>
     /// </list>
     /// </remarks>
@@ -141,7 +141,7 @@ internal sealed class UserRequestHandler<TRange, TData, TDomain>
             var chunks = await _dataSource.FetchAsync(gaps, cancellationToken)
                 .ConfigureAwait(false);
 
-            fetchedChunks = [..chunks];
+            fetchedChunks = [.. chunks];
 
             // Fire one diagnostic event per gap fetched.
             for (var i = 0; i < gaps.Count; i++)

@@ -24,10 +24,10 @@ namespace Intervals.NET.Caching.VisitedPlaces.Core.Eviction;
 ///   Constructs a <see cref="CompositePressure{TRange,TData}"/> when multiple policies fire
 ///   simultaneously, or returns the single exceeded pressure directly when only one fires.
 /// </description></item>
-    /// <item><description>
-    ///   Returns <see cref="NoPressure{TRange,TData}.Instance"/> when no policy constraint is
-    ///   violated (<see cref="IEvictionPressure{TRange,TData}.IsExceeded"/> is <see langword="false"/>).
-    /// </description></item>
+/// <item><description>
+///   Returns <see cref="NoPressure{TRange,TData}.Instance"/> when no policy constraint is
+///   violated (<see cref="IEvictionPressure{TRange,TData}.IsExceeded"/> is <see langword="false"/>).
+/// </description></item>
 /// </list>
 /// <para><strong>Execution Context:</strong> Background Path (single writer thread)</para>
 /// <para><strong>Design:</strong></para>
