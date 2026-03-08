@@ -148,27 +148,22 @@ internal sealed class BackgroundEventProcessor<TRange, TData, TDomain>
                 // Step 3: Evaluate — query all policies and collect exceeded pressures.
                 var allSegments = _storage.GetAllSegments();
 
-                var exceededPressures = new List<IEvictionPressure<TRange, TData>>();
-                foreach (var policy in _policies)
-                {
-                    var pressure = policy.Evaluate(allSegments);
-                    if (pressure.IsExceeded)
-                    {
-                        exceededPressures.Add(pressure);
-                    }
-                }
+                var exceededPressures = _policies
+                    .Select(policy => policy.Evaluate(allSegments))
+                    .Where(pressure => pressure.IsExceeded)
+                    .ToArray();
 
                 _diagnostics.EvictionEvaluated();
 
                 // Step 4: Execute eviction if any policy produced an exceeded pressure (Invariant VPC.E.2a).
-                if (exceededPressures.Count > 0)
+                if (exceededPressures.Length > 0)
                 {
                     _diagnostics.EvictionTriggered();
 
                     // Build composite pressure for multi-policy satisfaction.
-                    IEvictionPressure<TRange, TData> compositePressure = exceededPressures.Count == 1
+                    var compositePressure = exceededPressures.Length == 1
                         ? exceededPressures[0]
-                        : new CompositePressure<TRange, TData>(exceededPressures.ToArray());
+                        : new CompositePressure<TRange, TData>(exceededPressures);
 
                     var toRemove = _executor.Execute(compositePressure, allSegments, justStoredSegments);
                     foreach (var segment in toRemove)
