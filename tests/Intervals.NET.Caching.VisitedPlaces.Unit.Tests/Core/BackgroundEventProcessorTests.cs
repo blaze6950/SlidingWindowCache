@@ -404,7 +404,8 @@ public sealed class BackgroundEventProcessorTests
     #region Test Doubles
 
     /// <summary>
-    /// An eviction selector that throws on <see cref="OrderCandidates"/> to test exception handling.
+    /// An eviction selector that throws on <see cref="IEvictionSelector{TRange,TData}.TrySelectCandidate"/>
+    /// to test exception handling.
     /// </summary>
     private sealed class ThrowingEvictionSelector : IEvictionSelector<int, int>
     {
@@ -412,8 +413,10 @@ public sealed class BackgroundEventProcessorTests
 
         public void UpdateMetadata(IReadOnlyList<CachedSegment<int, int>> usedSegments, DateTime now) { }
 
-        public IReadOnlyList<CachedSegment<int, int>> OrderCandidates(
-            IReadOnlyList<CachedSegment<int, int>> candidates) =>
+        public bool TrySelectCandidate(
+            IReadOnlyList<CachedSegment<int, int>> segments,
+            IReadOnlySet<CachedSegment<int, int>> immuneSegments,
+            out CachedSegment<int, int> candidate) =>
             throw new InvalidOperationException("Simulated selector failure.");
     }
 

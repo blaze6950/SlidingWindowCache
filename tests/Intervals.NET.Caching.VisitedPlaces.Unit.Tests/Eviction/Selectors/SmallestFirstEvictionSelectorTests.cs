@@ -1,5 +1,6 @@
 using Intervals.NET.Domain.Default.Numeric;
 using Intervals.NET.Caching.VisitedPlaces.Core;
+using Intervals.NET.Caching.VisitedPlaces.Core.Eviction;
 using Intervals.NET.Caching.VisitedPlaces.Core.Eviction.Selectors;
 using Intervals.NET.Caching.VisitedPlaces.Tests.Infrastructure.Helpers;
 
@@ -7,10 +8,15 @@ namespace Intervals.NET.Caching.VisitedPlaces.Unit.Tests.Eviction.Selectors;
 
 /// <summary>
 /// Unit tests for <see cref="SmallestFirstEvictionSelector{TRange,TData,TDomain}"/>.
-/// Validates that candidates are ordered ascending by span (smallest span first).
+/// Validates that <see cref="IEvictionSelector{TRange,TData}.TrySelectCandidate"/> returns the
+/// segment with the smallest span from the sample.
+/// All datasets are small (≤ SampleSize = 32), so sampling is exhaustive and deterministic.
 /// </summary>
 public sealed class SmallestFirstEvictionSelectorTests
 {
+    private static readonly IReadOnlySet<CachedSegment<int, int>> NoImmune =
+        new HashSet<CachedSegment<int, int>>();
+
     private readonly IntegerFixedStepDomain _domain = TestHelpers.CreateIntDomain();
 
     #region Constructor Tests
@@ -65,10 +71,44 @@ public sealed class SmallestFirstEvictionSelectorTests
 
     #endregion
 
-    #region OrderCandidates Tests
+    #region TrySelectCandidate — Returns Smallest-Span Candidate
 
     [Fact]
-    public void OrderCandidates_ReturnsSmallestSpanFirst()
+    public void TrySelectCandidate_ReturnsTrueAndSelectsSmallestSpan()
+    {
+        // ARRANGE
+        var selector = new SmallestFirstEvictionSelector<int, int, IntegerFixedStepDomain>(_domain);
+
+        var small = CreateSegment(selector, 0, 2);    // span 3
+        var large = CreateSegment(selector, 20, 29);  // span 10
+
+        // ACT
+        var result = selector.TrySelectCandidate([small, large], NoImmune, out var candidate);
+
+        // ASSERT — smallest span is selected
+        Assert.True(result);
+        Assert.Same(small, candidate);
+    }
+
+    [Fact]
+    public void TrySelectCandidate_WithReversedInput_StillSelectsSmallestSpan()
+    {
+        // ARRANGE
+        var selector = new SmallestFirstEvictionSelector<int, int, IntegerFixedStepDomain>(_domain);
+
+        var small = CreateSegment(selector, 0, 2);    // span 3
+        var large = CreateSegment(selector, 20, 29);  // span 10
+
+        // ACT
+        var result = selector.TrySelectCandidate([large, small], NoImmune, out var candidate);
+
+        // ASSERT — regardless of input order, smallest is found
+        Assert.True(result);
+        Assert.Same(small, candidate);
+    }
+
+    [Fact]
+    public void TrySelectCandidate_WithMultipleCandidates_SelectsSmallestSpan()
     {
         // ARRANGE
         var selector = new SmallestFirstEvictionSelector<int, int, IntegerFixedStepDomain>(_domain);
@@ -78,75 +118,95 @@ public sealed class SmallestFirstEvictionSelectorTests
         var large = CreateSegment(selector, 20, 29);  // span 10
 
         // ACT
-        var ordered = selector.OrderCandidates([large, small, medium]);
+        var result = selector.TrySelectCandidate([large, small, medium], NoImmune, out var candidate);
 
-        // ASSERT — ascending by span
-        Assert.Same(small, ordered[0]);
-        Assert.Same(medium, ordered[1]);
-        Assert.Same(large, ordered[2]);
+        // ASSERT — smallest span wins
+        Assert.True(result);
+        Assert.Same(small, candidate);
     }
 
     [Fact]
-    public void OrderCandidates_WithAlreadySortedInput_PreservesOrder()
-    {
-        // ARRANGE
-        var selector = new SmallestFirstEvictionSelector<int, int, IntegerFixedStepDomain>(_domain);
-
-        var small = CreateSegment(selector, 0, 2);    // span 3
-        var medium = CreateSegment(selector, 10, 15); // span 6
-        var large = CreateSegment(selector, 20, 29);  // span 10
-
-        // ACT
-        var ordered = selector.OrderCandidates([small, medium, large]);
-
-        // ASSERT
-        Assert.Same(small, ordered[0]);
-        Assert.Same(medium, ordered[1]);
-        Assert.Same(large, ordered[2]);
-    }
-
-    [Fact]
-    public void OrderCandidates_WithSingleCandidate_ReturnsSingleElement()
+    public void TrySelectCandidate_WithSingleCandidate_ReturnsThatCandidate()
     {
         // ARRANGE
         var selector = new SmallestFirstEvictionSelector<int, int, IntegerFixedStepDomain>(_domain);
         var seg = CreateSegment(selector, 0, 5);
 
         // ACT
-        var ordered = selector.OrderCandidates([seg]);
+        var result = selector.TrySelectCandidate([seg], NoImmune, out var candidate);
 
         // ASSERT
-        Assert.Single(ordered);
-        Assert.Same(seg, ordered[0]);
+        Assert.True(result);
+        Assert.Same(seg, candidate);
     }
 
     [Fact]
-    public void OrderCandidates_WithEmptyList_ReturnsEmptyList()
+    public void TrySelectCandidate_WithEmptyList_ReturnsFalse()
     {
         // ARRANGE
         var selector = new SmallestFirstEvictionSelector<int, int, IntegerFixedStepDomain>(_domain);
 
         // ACT
-        var ordered = selector.OrderCandidates([]);
+        var result = selector.TrySelectCandidate(
+            new List<CachedSegment<int, int>>(), NoImmune, out _);
 
         // ASSERT
-        Assert.Empty(ordered);
+        Assert.False(result);
     }
 
     [Fact]
-    public void OrderCandidates_WithNoMetadata_FallsBackToLiveSpanComputation()
+    public void TrySelectCandidate_WithNoMetadata_FallsBackToLiveSpanComputation()
     {
         // ARRANGE — segments without InitializeMetadata called (metadata = null)
         var selector = new SmallestFirstEvictionSelector<int, int, IntegerFixedStepDomain>(_domain);
         var small = CreateSegmentRaw(0, 2);    // span 3
         var large = CreateSegmentRaw(20, 29);  // span 10
 
-        // ACT
-        var ordered = selector.OrderCandidates([large, small]);
+        // ACT — fallback path uses live Range.Span(domain) computation
+        var result = selector.TrySelectCandidate([large, small], NoImmune, out var candidate);
 
-        // ASSERT — fallback path still produces correct ordering
-        Assert.Same(small, ordered[0]);
-        Assert.Same(large, ordered[1]);
+        // ASSERT — fallback still selects the smallest span
+        Assert.True(result);
+        Assert.Same(small, candidate);
+    }
+
+    #endregion
+
+    #region TrySelectCandidate — Immunity
+
+    [Fact]
+    public void TrySelectCandidate_WhenSmallestIsImmune_SelectsNextSmallest()
+    {
+        // ARRANGE
+        var selector = new SmallestFirstEvictionSelector<int, int, IntegerFixedStepDomain>(_domain);
+
+        var small = CreateSegment(selector, 0, 2);    // span 3 — immune
+        var medium = CreateSegment(selector, 10, 15); // span 6
+        var large = CreateSegment(selector, 20, 29);  // span 10
+
+        var immune = new HashSet<CachedSegment<int, int>> { small };
+
+        // ACT
+        var result = selector.TrySelectCandidate([small, medium, large], immune, out var candidate);
+
+        // ASSERT — small is immune, so medium (next smallest) is selected
+        Assert.True(result);
+        Assert.Same(medium, candidate);
+    }
+
+    [Fact]
+    public void TrySelectCandidate_WhenAllCandidatesAreImmune_ReturnsFalse()
+    {
+        // ARRANGE
+        var selector = new SmallestFirstEvictionSelector<int, int, IntegerFixedStepDomain>(_domain);
+        var seg = CreateSegment(selector, 0, 5);
+        var immune = new HashSet<CachedSegment<int, int>> { seg };
+
+        // ACT
+        var result = selector.TrySelectCandidate([seg], immune, out _);
+
+        // ASSERT
+        Assert.False(result);
     }
 
     #endregion

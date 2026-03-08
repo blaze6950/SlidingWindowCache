@@ -10,8 +10,8 @@ namespace Intervals.NET.Caching.VisitedPlaces.Unit.Tests.Eviction;
 
 /// <summary>
 /// Unit tests for <see cref="EvictionExecutor{TRange,TData}"/>.
-/// Validates the constraint satisfaction loop: immunity filtering, selector ordering,
-/// and pressure-driven termination.
+/// Validates the constraint satisfaction loop: immunity handling, sampling-based candidate
+/// selection, and pressure-driven termination.
 /// </summary>
 public sealed class EvictionExecutorTests
 {
@@ -76,7 +76,7 @@ public sealed class EvictionExecutorTests
 
     #endregion
 
-    #region Execute — Selector Ordering Respected
+    #region Execute — Selector Strategy Respected
 
     [Fact]
     public void Execute_WithLruSelector_RemovesLeastRecentlyUsedFirst()
@@ -287,8 +287,8 @@ public sealed class EvictionExecutorTests
         // but the executor used LRU order. The new model tracks actual span removal.
         var baseTime = DateTime.UtcNow;
 
-        // LRU order will evict oldest-accessed first (small, medium, large)
-        // But the span constraint needs sufficient total span removed
+        // LRU strategy will prefer oldest-accessed segments.
+        // Span constraint needs sufficient total span removed.
         var small = CreateSegmentWithLastAccess(0, 2, baseTime.AddHours(-3));    // span 3, oldest
         var medium = CreateSegmentWithLastAccess(10, 15, baseTime.AddHours(-2)); // span 6
         var large = CreateSegmentWithLastAccess(20, 29, baseTime.AddHours(-1));  // span 10, newest
@@ -296,8 +296,7 @@ public sealed class EvictionExecutorTests
         var segments = new List<CachedSegment<int, int>> { small, medium, large };
 
         // Total span = 3+6+10 = 19, max = 10 → need to reduce by > 9
-        // LRU order: small(3) then medium(6) = total removed 9 → 19-9=10 <= 10 → satisfied after 2
-        // Old greedy estimate (largest-first): large(10) alone covers 9 → estimate=1, but LRU removes small first!
+        // LRU sampling: small(3) then medium(6) = total removed 9 → 19-9=10 <= 10 → satisfied after 2
         var pressure = new MaxTotalSpanPolicy<int, int, IntegerFixedStepDomain>.TotalSpanPressure(
             currentTotalSpan: 19, maxTotalSpan: 10, domain: _domain);
 
@@ -306,11 +305,12 @@ public sealed class EvictionExecutorTests
         // ACT
         var toRemove = executor.Execute(pressure, segments, justStoredSegments: []);
 
-        // ASSERT — correctly removes 2 segments (small + medium) to satisfy constraint
+        // ASSERT — correctly removes 2 segments (small + medium) to satisfy constraint.
+        // Sampling with SampleSize=32 over 3 distinct-time segments reliably finds the LRU worst.
         Assert.Equal(2, toRemove.Count);
-        Assert.Same(small, toRemove[0]);   // LRU: oldest accessed first
-        Assert.Same(medium, toRemove[1]);
-        Assert.False(pressure.IsExceeded); // Constraint actually satisfied!
+        Assert.Contains(small, toRemove);    // oldest accessed — always selected by LRU sampling
+        Assert.Contains(medium, toRemove);   // next oldest — selected after small is immune
+        Assert.False(pressure.IsExceeded);   // Constraint actually satisfied!
     }
 
     #endregion
