@@ -1,5 +1,3 @@
-using Intervals.NET.Caching;
-
 namespace Intervals.NET.Caching.VisitedPlaces.Public.Instrumentation;
 
 /// <summary>

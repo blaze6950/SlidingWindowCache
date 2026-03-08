@@ -186,7 +186,7 @@ internal sealed class UserRequestHandler<TRange, TData, TDomain>
     /// Computes the gaps in <paramref name="requestedRange"/> not covered by
     /// <paramref name="hittingSegments"/>.
     /// </summary>
-    private static List<Range<TRange>> ComputeGaps(
+    private static IReadOnlyList<Range<TRange>> ComputeGaps(
         Range<TRange> requestedRange,
         IReadOnlyList<CachedSegment<TRange, TData>> hittingSegments)
     {
@@ -195,24 +195,23 @@ internal sealed class UserRequestHandler<TRange, TData, TDomain>
             return [requestedRange];
         }
 
-        // Use iterative .Except() from Intervals.NET.Extensions to compute uncovered sub-ranges.
         IEnumerable<Range<TRange>> remaining = [requestedRange];
 
+        // Iteratively subtract each hitting segment's range from the remaining uncovered ranges.
+        // The complexity is O(n*m) where n is the number of hitting segments
+        // and m is the number of remaining ranges at each step,
+        // but in practice m should be small (often 1) due to the nature of typical cache hits.
         foreach (var seg in hittingSegments)
         {
             var segRange = seg.Range;
             remaining = remaining.SelectMany(r =>
             {
                 var intersection = r.Intersect(segRange);
-                if (!intersection.HasValue)
-                {
-                    return (IEnumerable<Range<TRange>>)[r];
-                }
-                return r.Except(intersection.Value);
+                return intersection.HasValue ? r.Except(intersection.Value) : [r];
             });
         }
 
-        return remaining.ToList();
+        return [..remaining];
     }
 
     /// <summary>
@@ -228,7 +227,8 @@ internal sealed class UserRequestHandler<TRange, TData, TDomain>
         var pieces = new List<ReadOnlyMemory<TData>>();
         var totalLength = 0;
 
-        var sorted = segments.OrderBy(s => s.Range.Start.Value).ToList();
+        // todo avoid materialization - utilize IEnumerable
+        var sorted = segments.OrderBy(s => s.Range.Start.Value).ToArray();
 
         foreach (var seg in sorted)
         {
@@ -291,7 +291,8 @@ internal sealed class UserRequestHandler<TRange, TData, TDomain>
             // Slice the chunk data to the intersection within the chunk's range.
             var offsetInChunk = (int)ComputeSpan(chunk.Range.Value.Start.Value, intersection.Value.Start.Value, domain);
             var sliceLength = (int)intersection.Value.Span(domain).Value;
-            var slicedChunkData = chunkData.Slice(offsetInChunk, Math.Min(sliceLength, chunkData.Length - offsetInChunk));
+            var slicedChunkData =
+                chunkData.Slice(offsetInChunk, Math.Min(sliceLength, chunkData.Length - offsetInChunk));
             pieces.Add((intersection.Value.Start.Value, slicedChunkData));
         }
 
@@ -304,7 +305,7 @@ internal sealed class UserRequestHandler<TRange, TData, TDomain>
         pieces.Sort(static (a, b) => a.Start.CompareTo(b.Start));
 
         var totalLength = pieces.Sum(p => p.Data.Length);
-        var assembled = ConcatenateMemory(pieces.Select(p => p.Data).ToList(), totalLength);
+        var assembled = ConcatenateMemory(pieces.Select(p => p.Data).ToArray(), totalLength);
 
         // Determine actual range: from requestedRange.Start to requestedRange.End
         // (bounded by what we actually assembled — use requestedRange as approximation).

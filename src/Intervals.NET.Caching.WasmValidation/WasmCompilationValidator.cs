@@ -36,7 +36,7 @@ internal sealed class SimpleDataSource : IDataSource<int, int>
             var start = r.Start.Value;
             var end = r.End.Value;
             return new RangeChunk<int, int>(r, Enumerable.Range(start, end - start + 1).ToArray());
-        }).ToList();
+        }).ToArray();
         return Task.FromResult<IEnumerable<RangeChunk<int, int>>>(chunks);
     }
 }

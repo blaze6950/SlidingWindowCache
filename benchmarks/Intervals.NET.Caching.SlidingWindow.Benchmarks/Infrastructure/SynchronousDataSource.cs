@@ -23,7 +23,7 @@ public sealed class SynchronousDataSource : IDataSource<int, int>
     /// Data generation: Returns the integer value at each position in the range.
     /// </summary>
     public Task<RangeChunk<int, int>> FetchAsync(Range<int> range, CancellationToken cancellationToken) =>
-        Task.FromResult(new RangeChunk<int, int>(range, GenerateDataForRange(range).ToList()));
+        Task.FromResult(new RangeChunk<int, int>(range, GenerateDataForRange(range).ToArray()));
 
     /// <summary>
     /// Fetches data for multiple ranges with zero latency.
@@ -35,7 +35,7 @@ public sealed class SynchronousDataSource : IDataSource<int, int>
         // Synchronous generation for all chunks
         var chunks = ranges.Select(range => new RangeChunk<int, int>(
             range,
-            GenerateDataForRange(range).ToList()
+            GenerateDataForRange(range).ToArray()
         ));
 
         return Task.FromResult(chunks);

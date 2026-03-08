@@ -1,5 +1,4 @@
 using System.Diagnostics;
-using Intervals.NET.Caching;
 
 namespace Intervals.NET.Caching.SlidingWindow.Public.Instrumentation;
 

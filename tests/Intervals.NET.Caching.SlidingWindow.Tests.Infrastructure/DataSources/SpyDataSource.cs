@@ -37,7 +37,7 @@ public sealed class SpyDataSource : IDataSource<int, int>
         _batchFetchCalls
             .SelectMany(b => b)
             .Concat(_singleFetchCalls)
-            .ToList();
+            .ToArray();
 
     /// <summary>
     /// Gets unique ranges requested (eliminates duplicates).
@@ -46,7 +46,7 @@ public sealed class SpyDataSource : IDataSource<int, int>
     public IReadOnlyCollection<Range<int>> GetUniqueRequestedRanges() =>
         GetAllRequestedRanges()
             .Distinct()
-            .ToList();
+            .ToArray();
 
     /// <summary>
     /// Verifies that the requested range covers at least the specified boundaries.
