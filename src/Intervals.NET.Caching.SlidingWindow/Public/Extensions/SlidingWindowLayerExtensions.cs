@@ -49,10 +49,7 @@ public static class SlidingWindowLayerExtensions
         where TRange : IComparable<TRange>
         where TDomain : IRangeDomain<TRange>
     {
-        if (options is null)
-        {
-            throw new ArgumentNullException(nameof(options));
-        }
+        ArgumentNullException.ThrowIfNull(options);
 
         var domain = builder.Domain;
         return builder.AddLayer(dataSource =>
@@ -85,10 +82,7 @@ public static class SlidingWindowLayerExtensions
         where TRange : IComparable<TRange>
         where TDomain : IRangeDomain<TRange>
     {
-        if (configure is null)
-        {
-            throw new ArgumentNullException(nameof(configure));
-        }
+        ArgumentNullException.ThrowIfNull(configure);
 
         var domain = builder.Domain;
         return builder.AddLayer(dataSource =>

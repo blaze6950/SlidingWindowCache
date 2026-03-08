@@ -68,10 +68,7 @@ public static class VisitedPlacesLayerExtensions
         where TRange : IComparable<TRange>
         where TDomain : IRangeDomain<TRange>
     {
-        if (policies is null)
-        {
-            throw new ArgumentNullException(nameof(policies));
-        }
+        ArgumentNullException.ThrowIfNull(policies);
 
         if (policies.Count == 0)
         {
@@ -80,10 +77,7 @@ public static class VisitedPlacesLayerExtensions
                 nameof(policies));
         }
 
-        if (selector is null)
-        {
-            throw new ArgumentNullException(nameof(selector));
-        }
+        ArgumentNullException.ThrowIfNull(selector);
 
         var domain = builder.Domain;
         var resolvedOptions = options ?? new VisitedPlacesCacheOptions<TRange, TData>();
@@ -129,10 +123,7 @@ public static class VisitedPlacesLayerExtensions
         where TRange : IComparable<TRange>
         where TDomain : IRangeDomain<TRange>
     {
-        if (policies is null)
-        {
-            throw new ArgumentNullException(nameof(policies));
-        }
+        ArgumentNullException.ThrowIfNull(policies);
 
         if (policies.Count == 0)
         {
@@ -141,15 +132,9 @@ public static class VisitedPlacesLayerExtensions
                 nameof(policies));
         }
 
-        if (selector is null)
-        {
-            throw new ArgumentNullException(nameof(selector));
-        }
+        ArgumentNullException.ThrowIfNull(selector);
 
-        if (configure is null)
-        {
-            throw new ArgumentNullException(nameof(configure));
-        }
+        ArgumentNullException.ThrowIfNull(configure);
 
         var domain = builder.Domain;
         return builder.AddLayer(dataSource =>

@@ -64,10 +64,7 @@ public static class SlidingWindowCacheBuilder
         where TRange : IComparable<TRange>
         where TDomain : IRangeDomain<TRange>
     {
-        if (dataSource is null)
-        {
-            throw new ArgumentNullException(nameof(dataSource));
-        }
+        ArgumentNullException.ThrowIfNull(dataSource);
 
         if (domain is null)
         {
@@ -96,10 +93,7 @@ public static class SlidingWindowCacheBuilder
         where TRange : IComparable<TRange>
         where TDomain : IRangeDomain<TRange>
     {
-        if (dataSource is null)
-        {
-            throw new ArgumentNullException(nameof(dataSource));
-        }
+        ArgumentNullException.ThrowIfNull(dataSource);
 
         if (domain is null)
         {

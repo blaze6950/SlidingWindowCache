@@ -303,11 +303,13 @@ public sealed class BackgroundEventProcessorTests
     {
         // ARRANGE — use a throwing selector to simulate a fault during eviction
         var throwingSelector = new ThrowingEvictionSelector();
+        var policyEvaluator = new EvictionPolicyEvaluator<int, int>(
+            [new MaxSegmentCountPolicy<int, int>(1)]);
         var processor = new BackgroundEventProcessor<int, int, IntegerFixedStepDomain>(
             _storage,
-            policies: [new MaxSegmentCountPolicy<int, int>(1)],
-            selector: throwingSelector,
-            diagnostics: _diagnostics);
+            policyEvaluator,
+            throwingSelector,
+            _diagnostics);
 
         // Pre-populate so eviction is triggered (count > 1 after storing)
         AddToStorage(_storage, 0, 9);
@@ -333,11 +335,13 @@ public sealed class BackgroundEventProcessorTests
     {
         // ARRANGE — use a throwing storage to simulate a storage fault
         var throwingStorage = new ThrowingSegmentStorage();
+        var policyEvaluator = new EvictionPolicyEvaluator<int, int>(
+            [new MaxSegmentCountPolicy<int, int>(100)]);
         var processor = new BackgroundEventProcessor<int, int, IntegerFixedStepDomain>(
             throwingStorage,
-            policies: [new MaxSegmentCountPolicy<int, int>(100)],
-            selector: new LruEvictionSelector<int, int>(),
-            diagnostics: _diagnostics);
+            policyEvaluator,
+            new LruEvictionSelector<int, int>(),
+            _diagnostics);
 
         var chunk = CreateChunk(0, 9);
         var evt = CreateEvent(
@@ -362,13 +366,13 @@ public sealed class BackgroundEventProcessorTests
     private BackgroundEventProcessor<int, int, IntegerFixedStepDomain> CreateProcessor(
         int maxSegmentCount)
     {
-        IReadOnlyList<IEvictionPolicy<int, int>> policies =
-            [new MaxSegmentCountPolicy<int, int>(maxSegmentCount)];
+        var policyEvaluator = new EvictionPolicyEvaluator<int, int>(
+            [new MaxSegmentCountPolicy<int, int>(maxSegmentCount)]);
         IEvictionSelector<int, int> selector = new LruEvictionSelector<int, int>();
 
         return new BackgroundEventProcessor<int, int, IntegerFixedStepDomain>(
             _storage,
-            policies,
+            policyEvaluator,
             selector,
             _diagnostics);
     }

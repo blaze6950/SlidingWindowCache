@@ -1,6 +1,5 @@
 using Intervals.NET.Domain.Abstractions;
 using Intervals.NET.Caching.VisitedPlaces.Core.Eviction;
-using Intervals.NET.Caching.VisitedPlaces.Core.Eviction.Pressure;
 using Intervals.NET.Caching.VisitedPlaces.Infrastructure.Storage;
 using Intervals.NET.Caching.VisitedPlaces.Public.Instrumentation;
 
@@ -32,20 +31,22 @@ namespace Intervals.NET.Caching.VisitedPlaces.Core.Background;
 ///   Store data — each chunk in <see cref="BackgroundEvent{TRange,TData}.FetchedChunks"/> with
 ///   a non-null Range is added to storage as a new <see cref="CachedSegment{TRange,TData}"/>.
 ///   The selector's <see cref="IEvictionSelector{TRange,TData}.InitializeMetadata"/> is called
-///   immediately after each segment is stored.
+///   immediately after each segment is stored, followed by
+///   <see cref="EvictionPolicyEvaluator{TRange,TData}.OnSegmentAdded"/> to update stateful
+///   policy state.
 ///   Skipped when <c>FetchedChunks</c> is null (full cache hit).
 /// </description></item>
 /// <item><description>
-///   Evaluate eviction — all <see cref="IEvictionPolicy{TRange,TData}"/> instances are queried.
-///   Each returns an <see cref="IEvictionPressure{TRange,TData}"/>. Pressures with
-///   <c>IsExceeded = true</c> are collected into a <see cref="CompositePressure{TRange,TData}"/>.
-///   Only runs when step 2 stored at least one segment.
+///   Evaluate eviction — <see cref="EvictionPolicyEvaluator{TRange,TData}.Evaluate"/> is called.
+///   It queries all policies and returns a combined pressure (or <see langword="null"/> when no
+///   constraint is violated). Only runs when step 2 stored at least one segment.
 /// </description></item>
 /// <item><description>
 ///   Execute eviction — <see cref="EvictionExecutor{TRange,TData}.Execute"/> is called
-///   with the composite pressure; it removes segments in selector order until all pressures
+///   with the combined pressure; it removes segments in selector order until all pressures
 ///   are satisfied (Invariant VPC.E.2a). The processor then removes the returned segments
-///   from storage.
+///   from storage and notifies the evaluator via
+///   <see cref="EvictionPolicyEvaluator{TRange,TData}.OnSegmentRemoved"/> for each one.
 /// </description></item>
 /// </list>
 /// <para><strong>Activity counter (Invariant S.H.1):</strong></para>
@@ -65,7 +66,7 @@ internal sealed class BackgroundEventProcessor<TRange, TData, TDomain>
     where TDomain : IRangeDomain<TRange>
 {
     private readonly ISegmentStorage<TRange, TData> _storage;
-    private readonly IReadOnlyList<IEvictionPolicy<TRange, TData>> _policies;
+    private readonly EvictionPolicyEvaluator<TRange, TData> _policyEvaluator;
     private readonly IEvictionSelector<TRange, TData> _selector;
     private readonly EvictionExecutor<TRange, TData> _executor;
     private readonly ICacheDiagnostics _diagnostics;
@@ -74,17 +75,20 @@ internal sealed class BackgroundEventProcessor<TRange, TData, TDomain>
     /// Initializes a new <see cref="BackgroundEventProcessor{TRange,TData,TDomain}"/>.
     /// </summary>
     /// <param name="storage">The segment storage (single writer — only mutated here).</param>
-    /// <param name="policies">Eviction policies; checked after each storage step.</param>
+    /// <param name="policyEvaluator">
+    /// The eviction policy evaluator; encapsulates multi-policy evaluation, stateful policy
+    /// lifecycle notifications, and composite pressure construction.
+    /// </param>
     /// <param name="selector">Eviction selector; determines candidate ordering and owns per-segment metadata.</param>
     /// <param name="diagnostics">Diagnostics sink; must never throw.</param>
     public BackgroundEventProcessor(
         ISegmentStorage<TRange, TData> storage,
-        IReadOnlyList<IEvictionPolicy<TRange, TData>> policies,
+        EvictionPolicyEvaluator<TRange, TData> policyEvaluator,
         IEvictionSelector<TRange, TData> selector,
         ICacheDiagnostics diagnostics)
     {
         _storage = storage;
-        _policies = policies;
+        _policyEvaluator = policyEvaluator;
         _selector = selector;
         _executor = new EvictionExecutor<TRange, TData>(selector);
         _diagnostics = diagnostics;
@@ -136,6 +140,7 @@ internal sealed class BackgroundEventProcessor<TRange, TData, TDomain>
 
                     _storage.Add(segment);
                     _selector.InitializeMetadata(segment, now);
+                    _policyEvaluator.OnSegmentAdded(segment);
                     _diagnostics.BackgroundSegmentStored();
 
                     justStoredSegments.Add(segment);
@@ -145,30 +150,22 @@ internal sealed class BackgroundEventProcessor<TRange, TData, TDomain>
             // Steps 3 & 4: Evaluate and execute eviction only when new data was stored.
             if (justStoredSegments.Count > 0)
             {
-                // Step 3: Evaluate — query all policies and collect exceeded pressures.
+                // Step 3: Evaluate — query all policies via the evaluator.
                 var allSegments = _storage.GetAllSegments();
-
-                var exceededPressures = _policies
-                    .Select(policy => policy.Evaluate(allSegments))
-                    .Where(pressure => pressure.IsExceeded)
-                    .ToArray();
+                var pressure = _policyEvaluator.Evaluate(allSegments);
 
                 _diagnostics.EvictionEvaluated();
 
-                // Step 4: Execute eviction if any policy produced an exceeded pressure (Invariant VPC.E.2a).
-                if (exceededPressures.Length > 0)
+                // Step 4: Execute eviction if any policy constraint is exceeded (Invariant VPC.E.2a).
+                if (pressure.IsExceeded)
                 {
                     _diagnostics.EvictionTriggered();
 
-                    // Build composite pressure for multi-policy satisfaction.
-                    var compositePressure = exceededPressures.Length == 1
-                        ? exceededPressures[0]
-                        : new CompositePressure<TRange, TData>(exceededPressures);
-
-                    var toRemove = _executor.Execute(compositePressure, allSegments, justStoredSegments);
+                    var toRemove = _executor.Execute(pressure, allSegments, justStoredSegments);
                     foreach (var segment in toRemove)
                     {
                         _storage.Remove(segment);
+                        _policyEvaluator.OnSegmentRemoved(segment);
                     }
 
                     _diagnostics.EvictionExecuted();

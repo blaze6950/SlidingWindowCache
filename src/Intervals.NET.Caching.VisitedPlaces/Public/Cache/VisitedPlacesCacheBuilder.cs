@@ -68,10 +68,7 @@ public static class VisitedPlacesCacheBuilder
         where TRange : IComparable<TRange>
         where TDomain : IRangeDomain<TRange>
     {
-        if (dataSource is null)
-        {
-            throw new ArgumentNullException(nameof(dataSource));
-        }
+        ArgumentNullException.ThrowIfNull(dataSource);
 
         if (domain is null)
         {
@@ -100,10 +97,7 @@ public static class VisitedPlacesCacheBuilder
         where TRange : IComparable<TRange>
         where TDomain : IRangeDomain<TRange>
     {
-        if (dataSource is null)
-        {
-            throw new ArgumentNullException(nameof(dataSource));
-        }
+        ArgumentNullException.ThrowIfNull(dataSource);
 
         if (domain is null)
         {
@@ -237,10 +231,7 @@ public sealed class VisitedPlacesCacheBuilder<TRange, TData, TDomain>
         IReadOnlyList<IEvictionPolicy<TRange, TData>> policies,
         IEvictionSelector<TRange, TData> selector)
     {
-        if (policies is null)
-        {
-            throw new ArgumentNullException(nameof(policies));
-        }
+        ArgumentNullException.ThrowIfNull(policies);
 
         if (policies.Count == 0)
         {

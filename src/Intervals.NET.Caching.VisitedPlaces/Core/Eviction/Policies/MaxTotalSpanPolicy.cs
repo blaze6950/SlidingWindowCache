@@ -5,7 +5,7 @@ using Intervals.NET.Domain.Abstractions;
 namespace Intervals.NET.Caching.VisitedPlaces.Core.Eviction.Policies;
 
 /// <summary>
-/// An <see cref="IEvictionPolicy{TRange,TData}"/> that fires when the sum of all cached
+/// An <see cref="IStatefulEvictionPolicy{TRange,TData}"/> that fires when the sum of all cached
 /// segment spans (total domain coverage) exceeds a configured maximum.
 /// </summary>
 /// <typeparam name="TRange">The type representing range boundaries.</typeparam>
@@ -13,30 +13,50 @@ namespace Intervals.NET.Caching.VisitedPlaces.Core.Eviction.Policies;
 /// <typeparam name="TDomain">The range domain type used to compute spans.</typeparam>
 /// <remarks>
 /// <para><strong>Firing Condition:</strong>
-/// <c>sum(segment.Range.Span(domain) for segment in allSegments) &gt; MaxTotalSpan</c></para>
+/// <c>_totalSpan &gt; MaxTotalSpan</c></para>
 /// <para><strong>Pressure Produced:</strong> <see cref="TotalSpanPressure"/>
-/// with the computed total span, the configured maximum, and the domain for per-segment span
-/// computation during <see cref="IEvictionPressure{TRange,TData}.Reduce"/>.</para>
+/// with the current running total span, the configured maximum, and the domain for per-segment
+/// span computation during <see cref="IEvictionPressure{TRange,TData}.Reduce"/>.</para>
 /// <para>
 /// This policy limits the total cached domain coverage regardless of how many segments it is
 /// split into. More meaningful than segment count when segments vary significantly in span.
 /// </para>
-/// <para><strong>Key improvement over <c>MaxTotalSpanEvaluator</c>:</strong></para>
+/// <para><strong>O(1) Evaluate via incremental state:</strong></para>
 /// <para>
-/// The old evaluator had to estimate removal counts using a greedy algorithm (sort by span
-/// descending, count until excess is covered). This estimate could mismatch the actual executor
-/// order (LRU, FIFO, etc.), leading to under-eviction. The new design avoids this entirely:
-/// the pressure object tracks actual span reduction as segments are removed, regardless of order.
+/// Rather than recomputing the total span from scratch on every
+/// <see cref="Evaluate"/> call (O(N) iteration), this policy maintains a running
+/// <c>_totalSpan</c> counter that is updated incrementally:
+/// </para>
+/// <list type="bullet">
+/// <item><description>
+///   <see cref="OnSegmentAdded"/> adds the segment's span to <c>_totalSpan</c>.
+/// </description></item>
+/// <item><description>
+///   <see cref="OnSegmentRemoved"/> subtracts the segment's span from <c>_totalSpan</c>.
+/// </description></item>
+/// </list>
+/// <para>
+/// Both lifecycle hooks are called by <see cref="EvictionPolicyEvaluator{TRange,TData}"/>
+/// on the Background Path (single writer), so <c>_totalSpan</c> is always current when
+/// <see cref="Evaluate"/> is called. <c>Evaluate</c> simply reads <c>_totalSpan</c> and
+/// compares it against <c>MaxTotalSpan</c> — O(1).
+/// </para>
+/// <para><strong>Key improvement over the old stateless design:</strong></para>
+/// <para>
+/// The old implementation iterated <c>allSegments</c> in every <c>Evaluate</c> call and called
+/// <c>Span(domain)</c> for each segment (O(N)). With incremental state this is reduced to O(1),
+/// matching the complexity of <see cref="MaxSegmentCountPolicy{TRange,TData}"/>.
 /// </para>
 /// <para><strong>Span Computation:</strong> Uses <typeparamref name="TDomain"/> to compute each
-/// segment's span at evaluation time. The domain is captured at construction and passed to the
-/// pressure object for use during <see cref="IEvictionPressure{TRange,TData}.Reduce"/>.</para>
+/// segment's span in the lifecycle hooks. The domain is captured at construction and also passed
+/// to the pressure object for use during <see cref="IEvictionPressure{TRange,TData}.Reduce"/>.</para>
 /// </remarks>
-internal sealed class MaxTotalSpanPolicy<TRange, TData, TDomain> : IEvictionPolicy<TRange, TData>
+internal sealed class MaxTotalSpanPolicy<TRange, TData, TDomain> : IStatefulEvictionPolicy<TRange, TData>
     where TRange : IComparable<TRange>
     where TDomain : IRangeDomain<TRange>
 {
     private readonly TDomain _domain;
+    private long _totalSpan;
 
     /// <summary>
     /// The maximum total span allowed across all cached segments before eviction is triggered.
@@ -76,16 +96,41 @@ internal sealed class MaxTotalSpanPolicy<TRange, TData, TDomain> : IEvictionPoli
     }
 
     /// <inheritdoc/>
+    /// <remarks>
+    /// Adds <c>segment.Range.Span(domain).Value</c> to the running total.
+    /// Called by <see cref="EvictionPolicyEvaluator{TRange,TData}"/> immediately after each
+    /// segment is added to storage. Background Path only.
+    /// </remarks>
+    public void OnSegmentAdded(CachedSegment<TRange, TData> segment)
+    {
+        _totalSpan += segment.Range.Span(_domain).Value;
+    }
+
+    /// <inheritdoc/>
+    /// <remarks>
+    /// Subtracts <c>segment.Range.Span(domain).Value</c> from the running total.
+    /// Called by <see cref="EvictionPolicyEvaluator{TRange,TData}"/> immediately after each
+    /// segment is removed from storage. Background Path only.
+    /// </remarks>
+    public void OnSegmentRemoved(CachedSegment<TRange, TData> segment)
+    {
+        _totalSpan -= segment.Range.Span(_domain).Value;
+    }
+
+    /// <inheritdoc/>
+    /// <remarks>
+    /// O(1): compares the cached <c>_totalSpan</c> against <c>MaxTotalSpan</c>.
+    /// The <paramref name="allSegments"/> parameter is not used; the running total maintained
+    /// via <see cref="OnSegmentAdded"/> and <see cref="OnSegmentRemoved"/> is always current.
+    /// </remarks>
     public IEvictionPressure<TRange, TData> Evaluate(IReadOnlyList<CachedSegment<TRange, TData>> allSegments)
     {
-        var totalSpan = allSegments.Sum(s => s.Range.Span(_domain).Value);
-
-        if (totalSpan <= MaxTotalSpan)
+        if (_totalSpan <= MaxTotalSpan)
         {
             return NoPressure<TRange, TData>.Instance;
         }
 
-        return new TotalSpanPressure(totalSpan, MaxTotalSpan, _domain);
+        return new TotalSpanPressure(_totalSpan, MaxTotalSpan, _domain);
     }
 
     /// <summary>
@@ -96,11 +141,15 @@ internal sealed class MaxTotalSpanPolicy<TRange, TData, TDomain> : IEvictionPoli
     /// <remarks>
     /// <para><strong>Constraint:</strong> <c>currentTotalSpan &gt; maxTotalSpan</c></para>
     /// <para><strong>Reduce behavior:</strong> Subtracts the removed segment's span from <c>currentTotalSpan</c>.
-    /// This is the key improvement over the old <c>MaxTotalSpanEvaluator</c> which had to estimate
-    /// removal counts using a greedy algorithm that could mismatch the actual executor order.</para>
+    /// This is order-independent: any segment removal correctly reduces the tracked total regardless
+    /// of which selector strategy is used.</para>
     /// <para><strong>TDomain capture:</strong> The <typeparamref name="TDomain"/> is captured internally
     /// so that the <see cref="IEvictionPressure{TRange,TData}"/> interface stays generic only on
     /// <c>&lt;TRange, TData&gt;</c>.</para>
+    /// <para><strong>Snapshot semantics:</strong> The <c>currentTotalSpan</c> passed to the constructor
+    /// is a snapshot of the policy's running total at the moment <see cref="Evaluate"/> was called.
+    /// Subsequent <see cref="OnSegmentAdded"/>/<see cref="OnSegmentRemoved"/> calls on the policy
+    /// do not affect an already-created pressure object.</para>
     /// </remarks>
     internal sealed class TotalSpanPressure : IEvictionPressure<TRange, TData>
     {
@@ -111,7 +160,7 @@ internal sealed class MaxTotalSpanPolicy<TRange, TData, TDomain> : IEvictionPoli
         /// <summary>
         /// Initializes a new <see cref="TotalSpanPressure"/>.
         /// </summary>
-        /// <param name="currentTotalSpan">The current total span across all segments.</param>
+        /// <param name="currentTotalSpan">The current total span across all segments (snapshot).</param>
         /// <param name="maxTotalSpan">The maximum allowed total span.</param>
         /// <param name="domain">The range domain used to compute individual segment spans during <see cref="Reduce"/>.</param>
         internal TotalSpanPressure(long currentTotalSpan, int maxTotalSpan, TDomain domain)

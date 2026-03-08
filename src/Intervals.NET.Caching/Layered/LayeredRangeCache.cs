@@ -63,10 +63,7 @@ public sealed class LayeredRangeCache<TRange, TData, TDomain>
     /// <exception cref="ArgumentException">Thrown when <paramref name="layers"/> is empty.</exception>
     internal LayeredRangeCache(IReadOnlyList<IRangeCache<TRange, TData, TDomain>> layers)
     {
-        if (layers == null)
-        {
-            throw new ArgumentNullException(nameof(layers));
-        }
+        ArgumentNullException.ThrowIfNull(layers);
 
         if (layers.Count == 0)
         {
