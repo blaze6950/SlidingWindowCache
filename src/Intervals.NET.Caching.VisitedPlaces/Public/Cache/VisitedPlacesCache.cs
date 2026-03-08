@@ -62,6 +62,10 @@ public sealed class VisitedPlacesCache<TRange, TData, TDomain>
     /// <summary>
     /// Initializes a new instance of <see cref="VisitedPlacesCache{TRange,TData,TDomain}"/>.
     /// </summary>
+    /// <remarks>
+    /// This constructor is <see langword="internal"/>. Use <see cref="VisitedPlacesCacheBuilder"/>
+    /// to create instances via the fluent builder API, which is the intended public entry point.
+    /// </remarks>
     /// <param name="dataSource">The data source from which to fetch missing data.</param>
     /// <param name="domain">The domain defining range characteristics (used by domain-aware eviction policies).</param>
     /// <param name="options">Configuration options (storage strategy, scheduler type/capacity).</param>
@@ -76,12 +80,12 @@ public sealed class VisitedPlacesCache<TRange, TData, TDomain>
     /// Thrown when <paramref name="dataSource"/>, <paramref name="options"/>,
     /// <paramref name="policies"/>, or <paramref name="selector"/> is <see langword="null"/>.
     /// </exception>
-    public VisitedPlacesCache(
+    internal VisitedPlacesCache(
         IDataSource<TRange, TData> dataSource,
         TDomain domain,
         VisitedPlacesCacheOptions<TRange, TData> options,
-        IReadOnlyList<IEvictionPolicy<TRange, TData>> policies, // todo: I guess this can be set not as a separate cache parameter in ctor, but as a one of the configg values in options.
-        IEvictionSelector<TRange, TData> selector, // todo: I guess this can be set not as a separate cache parameter in ctor, but as a one of the configg values in options.
+        IReadOnlyList<IEvictionPolicy<TRange, TData>> policies,
+        IEvictionSelector<TRange, TData> selector,
         ICacheDiagnostics? cacheDiagnostics = null)
     {
         // Fall back to no-op diagnostics so internal actors never receive null.
