@@ -5,6 +5,7 @@ using Intervals.NET.Caching.Extensions;
 using Intervals.NET.Caching.Infrastructure.Scheduling;
 using Intervals.NET.Caching.VisitedPlaces.Infrastructure.Storage;
 using Intervals.NET.Caching.VisitedPlaces.Public.Instrumentation;
+using Intervals.NET.Data.Extensions;
 
 namespace Intervals.NET.Caching.VisitedPlaces.Core.UserPath;
 
@@ -217,7 +218,6 @@ internal sealed class UserRequestHandler<TRange, TData, TDomain>
     /// <summary>
     /// Assembles result data for a full-hit scenario from the hitting segments.
     /// </summary>
-    /// TODO: refactor this method to avoid temp list allocations - utilize IEnumerable where possible and do not materialize the whole list of pieces in memory before concatenation, but rather concatenate on the fly while enumerating segments
     private static ReadOnlyMemory<TData> AssembleFromSegments(
         Range<TRange> requestedRange,
         IReadOnlyList<CachedSegment<TRange, TData>> segments,
@@ -275,23 +275,18 @@ internal sealed class UserRequestHandler<TRange, TData, TDomain>
 
         foreach (var chunk in fetchedChunks)
         {
-            if (!chunk.Range.HasValue)
-            {
-                continue;
-            }
-
-            var intersection = chunk.Range.Value.Intersect(requestedRange);
+            var intersection = chunk.Range?.Intersect(requestedRange);
             if (!intersection.HasValue)
             {
                 continue;
             }
 
-            var chunkData = MaterialiseData(chunk.Data);
-            // Slice the chunk data to the intersection within the chunk's range.
-            var offsetInChunk = (int)ComputeSpan(chunk.Range.Value.Start.Value, intersection.Value.Start.Value, domain);
-            var sliceLength = (int)intersection.Value.Span(domain).Value;
-            var slicedChunkData =
-                chunkData.Slice(offsetInChunk, Math.Min(sliceLength, chunkData.Length - offsetInChunk));
+            // Wrap as lazy RangeData, slice in domain space, then materialize only the needed portion.
+            // This avoids allocating a full-size backing array and immediately narrowing it —
+            // the materialized array is exactly the size of the intersection.
+            var rangeData = chunk.Data.ToRangeData(chunk.Range!.Value, domain);
+            var sliced = rangeData[intersection.Value];
+            var slicedChunkData = MaterialiseData(sliced.Data);
             pieces.Add((intersection.Value.Start.Value, slicedChunkData));
         }
 
