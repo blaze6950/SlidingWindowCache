@@ -56,7 +56,12 @@ internal sealed class CacheNormalizationRequest<TRange, TData> : ISchedulableWor
     /// Each non-null <see cref="RangeChunk{TRange,TData}.Range"/> entry is stored as a new segment
     /// in Background Path step 2.
     /// </summary>
-    public IReadOnlyList<RangeChunk<TRange, TData>>? FetchedChunks { get; }
+    /// <remarks>
+    /// Typed as <see cref="IEnumerable{T}"/> rather than <see cref="IReadOnlyList{T}"/> because the
+    /// executor only needs a single forward pass (<c>foreach</c>). This allows the User Path to pass
+    /// the materialized chunks array directly without an extra wrapper allocation.
+    /// </remarks>
+    public IEnumerable<RangeChunk<TRange, TData>>? FetchedChunks { get; }
 
     /// <summary>
     /// Initializes a new <see cref="CacheNormalizationRequest{TRange,TData}"/>.
@@ -67,7 +72,7 @@ internal sealed class CacheNormalizationRequest<TRange, TData> : ISchedulableWor
     internal CacheNormalizationRequest(
         Range<TRange> requestedRange,
         IReadOnlyList<CachedSegment<TRange, TData>> usedSegments,
-        IReadOnlyList<RangeChunk<TRange, TData>>? fetchedChunks)
+        IEnumerable<RangeChunk<TRange, TData>>? fetchedChunks)
     {
         RequestedRange = requestedRange;
         UsedSegments = usedSegments;
