@@ -14,7 +14,7 @@ using Intervals.NET.Caching.SlidingWindow.Tests.Infrastructure.DataSources;
 namespace Intervals.NET.Caching.SlidingWindow.Unit.Tests.Infrastructure.Concurrency;
 
 /// <summary>
-/// Unit tests for TaskBasedWorkScheduler used as a rebalance execution scheduler.
+/// Unit tests for UnboundedSerialWorkScheduler used as a rebalance execution scheduler.
 /// Validates chain resilience when previous task is faulted.
 /// </summary>
 public sealed class TaskBasedRebalanceExecutionControllerTests
@@ -48,7 +48,7 @@ public sealed class TaskBasedRebalanceExecutionControllerTests
                 request.DesiredNoRebalanceRange,
                 ct);
 
-        var scheduler = new TaskBasedWorkScheduler<ExecutionRequest<int, int, IntegerFixedStepDomain>>(
+        var scheduler = new UnboundedSerialWorkScheduler<ExecutionRequest<int, int, IntegerFixedStepDomain>>(
             executorDelegate,
             () => TimeSpan.Zero,
             schedulerDiagnostics,
@@ -60,7 +60,7 @@ public sealed class TaskBasedRebalanceExecutionControllerTests
         var rangeData = data.ToRangeData(requestedRange, domain);
         var intent = new Intent<int, int, IntegerFixedStepDomain>(requestedRange, rangeData);
 
-        var currentTaskField = typeof(TaskBasedWorkScheduler<ExecutionRequest<int, int, IntegerFixedStepDomain>>)
+        var currentTaskField = typeof(UnboundedSerialWorkScheduler<ExecutionRequest<int, int, IntegerFixedStepDomain>>)
             .GetField("_currentExecutionTask", BindingFlags.Instance | BindingFlags.NonPublic);
         Assert.NotNull(currentTaskField);
 

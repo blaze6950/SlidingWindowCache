@@ -5,7 +5,7 @@ namespace Intervals.NET.Caching.VisitedPlaces.Infrastructure.Adapters;
 
 /// <summary>
 /// Bridges <see cref="IVisitedPlacesCacheDiagnostics"/> to <see cref="IWorkSchedulerDiagnostics"/> for use
-/// by <see cref="ChannelBasedWorkScheduler{TWorkItem}"/> in VisitedPlacesCache.
+/// by <see cref="BoundedSerialWorkScheduler{TWorkItem}"/> in VisitedPlacesCache.
 /// </summary>
 /// <remarks>
 /// <para><strong>Purpose:</strong></para>

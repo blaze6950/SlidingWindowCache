@@ -24,29 +24,41 @@ namespace Intervals.NET.Caching.VisitedPlaces.Core.Ttl;
 /// </para>
 /// <para><strong>Cancellation:</strong></para>
 /// <para>
-/// The <see cref="CancellationToken"/> is cancelled by the scheduler on disposal (cache teardown).
-/// This causes the executor's <c>Task.Delay</c> to throw <see cref="OperationCanceledException"/>,
-/// cleanly aborting pending TTL expirations without removing segments.
+/// The <see cref="CancellationToken"/> is a shared disposal token passed in at construction
+/// time — owned by <c>VisitedPlacesCache</c> and cancelled during <c>DisposeAsync</c>.
+/// All in-flight TTL work items share the same token, so a single cancellation signal
+/// simultaneously aborts every pending <c>Task.Delay</c> across the entire cache instance,
+/// with zero per-item allocation overhead.
 /// </para>
-/// <para>Alignment: Invariant VPC.T.1 (TTL expirations are idempotent).</para>
+/// <para>
+/// <see cref="Cancel"/> and <see cref="Dispose"/> are intentional no-ops: the token is
+/// owned and cancelled by the cache, not by any individual work item or the scheduler's
+/// last-item cancellation mechanism.
+/// </para>
+/// <para>Alignment: Invariant VPC.T.1 (TTL expirations are idempotent), VPC.T.3 (delays cancelled on disposal).</para>
 /// </remarks>
 internal sealed class TtlExpirationWorkItem<TRange, TData> : ISchedulableWorkItem
     where TRange : IComparable<TRange>
 {
-    // todo: cts is redundant here and just adds allocation cost here on every new added segment.
-    private readonly CancellationTokenSource _cts = new();
+    private readonly CancellationToken _cancellationToken;
 
     /// <summary>
     /// Initializes a new <see cref="TtlExpirationWorkItem{TRange,TData}"/>.
     /// </summary>
     /// <param name="segment">The segment to expire.</param>
     /// <param name="expiresAt">The absolute UTC time at which the segment expires.</param>
+    /// <param name="cancellationToken">
+    /// Shared disposal cancellation token owned by <c>VisitedPlacesCache</c>.
+    /// Cancelled during <c>DisposeAsync</c> to abort all pending TTL delays simultaneously.
+    /// </param>
     public TtlExpirationWorkItem(
         CachedSegment<TRange, TData> segment,
-        DateTimeOffset expiresAt)
+        DateTimeOffset expiresAt,
+        CancellationToken cancellationToken)
     {
         Segment = segment;
         ExpiresAt = expiresAt;
+        _cancellationToken = cancellationToken;
     }
 
     /// <summary>The segment that will be removed when this work item is executed.</summary>
@@ -56,24 +68,19 @@ internal sealed class TtlExpirationWorkItem<TRange, TData> : ISchedulableWorkIte
     public DateTimeOffset ExpiresAt { get; }
 
     /// <inheritdoc/>
-    public CancellationToken CancellationToken => _cts.Token;
+    public CancellationToken CancellationToken => _cancellationToken;
 
     /// <inheritdoc/>
-    public void Cancel()
-    {
-        try
-        {
-            _cts.Cancel();
-        }
-        catch (ObjectDisposedException)
-        {
-            // Safe to ignore — already disposed.
-        }
-    }
+    /// <remarks>
+    /// No-op: cancellation is controlled by the shared disposal token owned by
+    /// <c>VisitedPlacesCache</c>, not by per-item cancellation.
+    /// </remarks>
+    public void Cancel() { }
 
     /// <inheritdoc/>
-    public void Dispose()
-    {
-        _cts.Dispose();
-    }
+    /// <remarks>
+    /// No-op: no per-item resources to release. The shared cancellation token is
+    /// owned and disposed by <c>VisitedPlacesCache</c>.
+    /// </remarks>
+    public void Dispose() { }
 }

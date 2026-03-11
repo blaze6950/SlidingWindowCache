@@ -4,7 +4,7 @@
 
 This document covers the SlidingWindow-specific infrastructure wiring: the thread safety model, component execution contexts, the complete three-phase flow diagram, and the `SlidingWindowWorkSchedulerDiagnostics` adapter.
 
-For cache-agnostic infrastructure components (`AsyncActivityCounter`, `IWorkScheduler`, `WorkSchedulerBase`, `TaskBasedWorkScheduler`, `ChannelBasedWorkScheduler`), see [`docs/shared/components/infrastructure.md`](../../shared/components/infrastructure.md).
+For cache-agnostic infrastructure components (`AsyncActivityCounter`, `IWorkScheduler`, `WorkSchedulerBase`, `UnboundedSerialWorkScheduler`, `BoundedSerialWorkScheduler`), see [`docs/shared/components/infrastructure.md`](../../shared/components/infrastructure.md).
 
 ---
 
@@ -34,9 +34,9 @@ The Sliding Window Cache follows a **single consumer model** (see `docs/sliding-
 | `ProportionalRangePlanner`                 | 🔄 Background  | Invoked by `DecisionEngine`                                |
 | `NoRebalanceRangePlanner`                  | 🔄 Background  | Invoked by `DecisionEngine`                                |
 | `NoRebalanceSatisfactionPolicy`            | 🔄 Background  | Invoked by `DecisionEngine`                                |
-| `IWorkScheduler.PublishWorkItemAsync()`    | 🔄 Background  | Task-based: sync; channel-based: async await               |
-| `TaskBasedWorkScheduler.ChainExecutionAsync()` | 🔄 Background | Task chain execution (sequential)                        |
-| `ChannelBasedWorkScheduler.ProcessWorkItemsAsync()` | 🔄 Background | Channel loop execution                              |
+| `IWorkScheduler.PublishWorkItemAsync()`    | 🔄 Background  | Unbounded serial: sync; bounded serial: async await          |
+| `UnboundedSerialWorkScheduler.ChainExecutionAsync()` | 🔄 Background | Task chain execution (sequential)                  |
+| `BoundedSerialWorkScheduler.ProcessWorkItemsAsync()` | 🔄 Background | Channel loop execution                             |
 | `RebalanceExecutor`                        | 🔄 Background  | ThreadPool, async, I/O                                     |
 | `CacheDataExtensionService`                | Both ⚡🔄       | User Thread OR Background                                  |
 | `CacheState`                               | Both ⚡🔄       | Shared mutable (no locks; single-writer)                   |
@@ -87,18 +87,18 @@ The Sliding Window Cache follows a **single consumer model** (see `docs/sliding-
 │ If execute:                                                          │
 │   • lastWorkItem?.Cancel()                                           │
 │   • IWorkScheduler.PublishWorkItemAsync()                            │
-│     └─ Task-based: Volatile.Write (synchronous)                      │
-│     └─ Channel-based: await WriteAsync()                             │
+│     └─ Unbounded serial: Volatile.Write (synchronous)               │
+│     └─ Bounded serial: await WriteAsync()                           │
 └──────────────────────────────────────────────────────────────────────┘
                                ↓ (strategy-specific)
 ┌──────────────────────────────────────────────────────────────────────┐
 │ PHASE 3: BACKGROUND EXECUTION (Strategy-Specific)                    │
 ├──────────────────────────────────────────────────────────────────────┤
-│ TASK-BASED: ChainExecutionAsync()  (chained async method)            │
+│ UNBOUNDED SERIAL: ChainExecutionAsync()  (chained async method)      │
 │   • await Task.Yield()  (force ThreadPool context switch — 1st stmt) │
 │   • await previousTask  (serial ordering)                            │
 │   • await ExecuteWorkItemCoreAsync()                                 │
-│ OR CHANNEL-BASED: ProcessWorkItemsAsync()  (infinite loop)           │
+│ OR BOUNDED SERIAL: ProcessWorkItemsAsync()  (infinite loop)          │
 │   • await foreach (channel read)  (sequential processing)            │
 │           ↓                                                          │
 │ ExecuteWorkItemCoreAsync()  (both strategies)                        │
@@ -124,7 +124,7 @@ The Sliding Window Cache follows a **single consumer model** (see `docs/sliding-
 
 - **User Thread Boundary**: Ends at `PublishIntent()` return. Everything before: synchronous, blocking user request. `PublishIntent()`: atomic ops only (microseconds), returns immediately.
 - **Background Thread #1**: Intent processing loop. Single dedicated thread via semaphore wait. Processes intents sequentially (one at a time). CPU-only decision logic (microseconds). No I/O.
-- **Background Execution**: Strategy-specific serialization. Task-based: chained async methods with `Task.Yield()` forcing ThreadPool dispatch before each execution. Channel-based: single dedicated loop via channel reader. Both: sequential (one at a time). I/O operations. SOLE writer to cache state.
+- **Background Execution**: Strategy-specific serialization. Unbounded serial: chained async methods with `Task.Yield()` forcing ThreadPool dispatch before each execution. Bounded serial: single dedicated loop via channel reader. Both: sequential (one at a time). I/O operations. SOLE writer to cache state.
 
 ---
 

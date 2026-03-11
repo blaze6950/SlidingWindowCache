@@ -8,8 +8,8 @@ namespace Intervals.NET.Caching.Infrastructure.Scheduling;
 /// <para>
 /// This interface is the <c>TWorkItem</c> constraint for
 /// <see cref="IWorkScheduler{TWorkItem}"/>, <see cref="WorkSchedulerBase{TWorkItem}"/>,
-/// <see cref="TaskBasedWorkScheduler{TWorkItem}"/>, and
-/// <see cref="ChannelBasedWorkScheduler{TWorkItem}"/>.
+/// <see cref="UnboundedSerialWorkScheduler{TWorkItem}"/>, and
+/// <see cref="BoundedSerialWorkScheduler{TWorkItem}"/>.
 /// It combines the two operations that the scheduler must perform on a work item
 /// beyond passing it to the executor:
 /// </para>

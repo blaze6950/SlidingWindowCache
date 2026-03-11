@@ -5,8 +5,8 @@ namespace Intervals.NET.Caching.SlidingWindow.Infrastructure.Adapters;
 
 /// <summary>
 /// Bridges <see cref="ISlidingWindowCacheDiagnostics"/> to <see cref="IWorkSchedulerDiagnostics"/> for use by
-/// <see cref="TaskBasedWorkScheduler{TWorkItem}"/> and
-/// <see cref="ChannelBasedWorkScheduler{TWorkItem}"/>.
+/// <see cref="UnboundedSerialWorkScheduler{TWorkItem}"/> and
+/// <see cref="BoundedSerialWorkScheduler{TWorkItem}"/>.
 /// </summary>
 /// <remarks>
 /// <para><strong>Purpose:</strong></para>

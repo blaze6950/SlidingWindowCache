@@ -139,8 +139,8 @@ This document is the canonical actor catalog for `SlidingWindowCache`. For the s
 - Does not determine rebalance necessity (DecisionEngine already validated).
 
 **Components**
-- `TaskBasedWorkScheduler<ExecutionRequest<TRange, TData, TDomain>>` (default; in `Intervals.NET.Caching`)
-- `ChannelBasedWorkScheduler<ExecutionRequest<TRange, TData, TDomain>>` (bounded; in `Intervals.NET.Caching`)
+- `UnboundedSerialWorkScheduler<ExecutionRequest<TRange, TData, TDomain>>` (default; in `Intervals.NET.Caching`)
+- `BoundedSerialWorkScheduler<ExecutionRequest<TRange, TData, TDomain>>` (bounded; in `Intervals.NET.Caching`)
 
 ---
 
@@ -215,8 +215,8 @@ This document is the canonical actor catalog for `SlidingWindowCache`. For the s
 | `RebalanceDecisionEngine` | Background Loop #1 (intent processing) | `IntentController.ProcessIntentsAsync` |
 | `CacheGeometryPolicy` (both components) | Background Loop #1 (intent processing) | `RebalanceDecisionEngine` |
 | `IWorkScheduler.PublishWorkItemAsync` | Background Loop #1 (intent processing) | `IntentController.ProcessIntentsAsync` |
-| `TaskBasedWorkScheduler` | Background (ThreadPool task chain) | Via interface (default strategy) |
-| `ChannelBasedWorkScheduler` | Background Loop #2 (channel reader) | Via interface (optional strategy) |
+| `UnboundedSerialWorkScheduler` | Background (ThreadPool task chain) | Via interface (default strategy) |
+| `BoundedSerialWorkScheduler` | Background Loop #2 (channel reader) | Via interface (optional strategy) |
 | `RebalanceExecutor` | Background Execution (both strategies) | `IWorkScheduler` implementations |
 | `CacheState` | Both (User: reads; Background execution: writes) | Both paths (single-writer) |
 

@@ -14,7 +14,7 @@ namespace Intervals.NET.Caching.VisitedPlaces.Core.Ttl;
 /// <remarks>
 /// <para><strong>Execution Context:</strong> TTL background loop (independent of the Background Storage Loop).
 /// Multiple TTL work items execute concurrently — one per stored segment — when
-/// <see cref="FireAndForgetWorkScheduler{TWorkItem}"/> is used as the scheduler.</para>
+/// <see cref="ConcurrentWorkScheduler{TWorkItem}"/> is used as the scheduler.</para>
 /// <para><strong>Algorithm per work item:</strong></para>
 /// <list type="number">
 /// <item><description>

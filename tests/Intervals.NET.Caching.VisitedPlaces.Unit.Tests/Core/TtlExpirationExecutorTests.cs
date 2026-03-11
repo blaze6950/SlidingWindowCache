@@ -28,7 +28,8 @@ public sealed class TtlExpirationExecutorTests
         var (executor, segment) = CreateExecutorWithSegment(0, 9);
         var workItem = new TtlExpirationWorkItem<int, int>(
             segment,
-            expiresAt: DateTimeOffset.UtcNow - TimeSpan.FromSeconds(1));
+            expiresAt: DateTimeOffset.UtcNow - TimeSpan.FromSeconds(1),
+            CancellationToken.None);
 
         // ACT
         await executor.ExecuteAsync(workItem, CancellationToken.None);
@@ -46,7 +47,8 @@ public sealed class TtlExpirationExecutorTests
         var (executor, segment) = CreateExecutorWithSegment(0, 9);
         var workItem = new TtlExpirationWorkItem<int, int>(
             segment,
-            expiresAt: DateTimeOffset.UtcNow);
+            expiresAt: DateTimeOffset.UtcNow,
+            CancellationToken.None);
 
         // ACT
         await executor.ExecuteAsync(workItem, CancellationToken.None);
@@ -67,7 +69,8 @@ public sealed class TtlExpirationExecutorTests
         var (executor, segment) = CreateExecutorWithSegment(0, 9);
         var workItem = new TtlExpirationWorkItem<int, int>(
             segment,
-            expiresAt: DateTimeOffset.UtcNow + TimeSpan.FromMilliseconds(80));
+            expiresAt: DateTimeOffset.UtcNow + TimeSpan.FromMilliseconds(80),
+            CancellationToken.None);
 
         // ACT
         var before = DateTimeOffset.UtcNow;
@@ -95,7 +98,8 @@ public sealed class TtlExpirationExecutorTests
 
         var workItem = new TtlExpirationWorkItem<int, int>(
             segment,
-            expiresAt: DateTimeOffset.UtcNow - TimeSpan.FromSeconds(1));
+            expiresAt: DateTimeOffset.UtcNow - TimeSpan.FromSeconds(1),
+            CancellationToken.None);
 
         // ACT
         await executor.ExecuteAsync(workItem, CancellationToken.None);
@@ -117,7 +121,8 @@ public sealed class TtlExpirationExecutorTests
         using var cts = new CancellationTokenSource();
         var workItem = new TtlExpirationWorkItem<int, int>(
             segment,
-            expiresAt: DateTimeOffset.UtcNow + TimeSpan.FromSeconds(30));
+            expiresAt: DateTimeOffset.UtcNow + TimeSpan.FromSeconds(30),
+            CancellationToken.None);
 
         // ACT — cancel before the delay completes
         var executeTask = executor.ExecuteAsync(workItem, cts.Token);
@@ -145,7 +150,8 @@ public sealed class TtlExpirationExecutorTests
 
         var workItem = new TtlExpirationWorkItem<int, int>(
             segment,
-            expiresAt: DateTimeOffset.UtcNow + TimeSpan.FromSeconds(30));
+            expiresAt: DateTimeOffset.UtcNow + TimeSpan.FromSeconds(30),
+            CancellationToken.None);
 
         // ACT
         var ex = await Record.ExceptionAsync(() =>

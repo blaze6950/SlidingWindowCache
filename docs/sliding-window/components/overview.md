@@ -33,7 +33,7 @@ The system is easier to reason about when components are grouped by:
 - User Path: assembles requested data and publishes intent
 - Intent loop: observes latest intent and runs analytical validation
 - Execution: performs debounced, cancellable rebalance work and mutates cache state
-- Work scheduler (shared): `WorkSchedulerBase<TWorkItem>` — cache-agnostic abstract base; holds shared execution pipeline (debounce → cancellation → executor delegate → diagnostics → cleanup); concrete subclasses are `TaskBasedWorkScheduler<TWorkItem>` (default, task-chaining) and `ChannelBasedWorkScheduler<TWorkItem>` (bounded channel with backpressure)
+- Work scheduler (shared): `WorkSchedulerBase<TWorkItem>` — cache-agnostic abstract base; holds shared execution pipeline (debounce → cancellation → executor delegate → diagnostics → cleanup); concrete subclasses are `UnboundedSerialWorkScheduler<TWorkItem>` (default, task-chaining) and `BoundedSerialWorkScheduler<TWorkItem>` (bounded channel with backpressure)
 
 ### Component Index
 
@@ -61,8 +61,8 @@ The system is easier to reason about when components are grouped by:
     ├── 🟦 CacheState<TRange, TData, TDomain>              ⚠️ Shared Mutable
     ├── 🟦 IntentController<TRange, TData, TDomain>
     │   └── uses → 🟧 IWorkScheduler<ExecutionRequest<TRange, TData, TDomain>>
-    │       ├── implements → 🟦 TaskBasedWorkScheduler<TWorkItem> (default, task-chaining)
-    │       └── implements → 🟦 ChannelBasedWorkScheduler<TWorkItem> (optional, bounded channel)
+    │       ├── implements → 🟦 UnboundedSerialWorkScheduler<TWorkItem> (default, task-chaining)
+    │       └── implements → 🟦 BoundedSerialWorkScheduler<TWorkItem> (optional, bounded channel)
     ├── 🟦 RebalanceDecisionEngine<TRange, TDomain>
     │   ├── owns → 🟦 NoRebalanceSatisfactionPolicy<TRange>
     │   └── owns → 🟦 ProportionalRangePlanner<TRange, TDomain>
@@ -80,12 +80,12 @@ The system is easier to reason about when components are grouped by:
 │              DisposeAsync() (idempotent guard + cancel + DisposeAsyncCore)
 │  Abstract: PublishWorkItemAsync(...), DisposeAsyncCore()
 │
-├── implements → 🟦 TaskBasedWorkScheduler<TWorkItem> (default)
+├── implements → 🟦 UnboundedSerialWorkScheduler<TWorkItem> (default)
 │                  Adds: lock-free task chain (_currentExecutionTask)
 │                  Overrides: PublishWorkItemAsync → chains new task
 │                             DisposeAsyncCore → awaits task chain
 │
-└── implements → 🟦 ChannelBasedWorkScheduler<TWorkItem> (optional)
+└── implements → 🟦 BoundedSerialWorkScheduler<TWorkItem> (optional)
                    Adds: BoundedChannel<TWorkItem>, background loop task
                    Overrides: PublishWorkItemAsync → writes to channel
                               DisposeAsyncCore → completes channel + awaits loop
@@ -224,8 +224,8 @@ The system is easier to reason about when components are grouped by:
 │ IWorkScheduler<ExecutionRequest<...>>  [EXECUTION SERIALIZATION]           │
 │                                                                            │
 │ Strategies:                                                                │
-│  • Task chaining (lock-free) — TaskBasedWorkScheduler                     │
-│  • Channel<ExecutionRequest> (bounded) — ChannelBasedWorkScheduler        │
+│  • Task chaining (lock-free) — UnboundedSerialWorkScheduler              │
+│  • Channel<ExecutionRequest> (bounded) — BoundedSerialWorkScheduler      │
 │                                                                            │
 │ Execution flow:                                                            │
 │  1. Debounce delay (cancellable)                                           │
@@ -262,8 +262,8 @@ The system is easier to reason about when components are grouped by:
 │                                                                            │
 │ Written by:  SlidingWindowCache.UpdateRuntimeOptions (Volatile.Write)      │
 │ Read by:     ProportionalRangePlanner, NoRebalanceRangePlanner,            │
-│              TaskBasedWorkScheduler (via debounce provider delegate),      │
-│              ChannelBasedWorkScheduler (via debounce provider delegate)    │
+│              UnboundedSerialWorkScheduler (via debounce provider delegate),
+│              BoundedSerialWorkScheduler (via debounce provider delegate)    │
 └────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -310,8 +310,8 @@ Only `UserRequestHandler` has access to `IntentController.PublishIntent`. Its sc
 `UserRequestHandler` publishes intent and returns immediately (fire-and-forget). `IWorkScheduler<ExecutionRequest<...>>` schedules execution via task chaining or channels. User thread and ThreadPool thread contexts are separated.
 
 - `src/Intervals.NET.Caching.SlidingWindow/Core/Rebalance/Intent/IntentController.cs` — `ProcessIntentsAsync` runs on background thread
-- `src/Intervals.NET.Caching/Infrastructure/Scheduling/TaskBasedWorkScheduler.cs` — task-chaining serialization
-- `src/Intervals.NET.Caching/Infrastructure/Scheduling/ChannelBasedWorkScheduler.cs` — channel-based background execution
+- `src/Intervals.NET.Caching/Infrastructure/Scheduling/UnboundedSerialWorkScheduler.cs` — task-chaining serialization
+- `src/Intervals.NET.Caching/Infrastructure/Scheduling/BoundedSerialWorkScheduler.cs` — channel-based background execution
 
 ### Atomic Cache Updates
 **Invariants**: SWC.B.2, SWC.B.3

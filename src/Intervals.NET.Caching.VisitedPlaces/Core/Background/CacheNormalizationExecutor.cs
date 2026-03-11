@@ -75,6 +75,7 @@ internal sealed class CacheNormalizationExecutor<TRange, TData, TDomain>
     private readonly IVisitedPlacesCacheDiagnostics _diagnostics;
     private readonly IWorkScheduler<TtlExpirationWorkItem<TRange, TData>>? _ttlScheduler;
     private readonly TimeSpan? _segmentTtl;
+    private readonly CancellationToken _ttlCancellationToken;
 
     /// <summary>
     /// Initializes a new <see cref="CacheNormalizationExecutor{TRange,TData,TDomain}"/>.
@@ -92,18 +93,26 @@ internal sealed class CacheNormalizationExecutor<TRange, TData, TDomain>
     /// <param name="segmentTtl">
     /// The time-to-live per segment. Must be non-null when <paramref name="ttlScheduler"/> is non-null.
     /// </param>
+    /// <param name="ttlCancellationToken">
+    /// Shared disposal cancellation token owned by <c>VisitedPlacesCache</c>. Passed into each
+    /// <see cref="TtlExpirationWorkItem{TRange,TData}"/> at creation time so that a single
+    /// cancellation signal aborts all pending TTL delays simultaneously on disposal.
+    /// Ignored (default) when <paramref name="ttlScheduler"/> is <see langword="null"/>.
+    /// </param>
     public CacheNormalizationExecutor(
         ISegmentStorage<TRange, TData> storage,
         EvictionEngine<TRange, TData> evictionEngine,
         IVisitedPlacesCacheDiagnostics diagnostics,
         IWorkScheduler<TtlExpirationWorkItem<TRange, TData>>? ttlScheduler = null,
-        TimeSpan? segmentTtl = null)
+        TimeSpan? segmentTtl = null,
+        CancellationToken ttlCancellationToken = default)
     {
         _storage = storage;
         _evictionEngine = evictionEngine;
         _diagnostics = diagnostics;
         _ttlScheduler = ttlScheduler;
         _segmentTtl = segmentTtl;
+        _ttlCancellationToken = ttlCancellationToken;
     }
 
     /// <summary>
@@ -165,7 +174,8 @@ internal sealed class CacheNormalizationExecutor<TRange, TData, TDomain>
                     {
                         var workItem = new TtlExpirationWorkItem<TRange, TData>(
                             segment,
-                            expiresAt: DateTimeOffset.UtcNow + _segmentTtl.Value);
+                            expiresAt: DateTimeOffset.UtcNow + _segmentTtl.Value,
+                            _ttlCancellationToken);
 
                         await _ttlScheduler.PublishWorkItemAsync(workItem, CancellationToken.None)
                             .ConfigureAwait(false);

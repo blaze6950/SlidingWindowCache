@@ -163,8 +163,8 @@ public sealed class SlidingWindowCache<TRange, TData, TDomain>
 
         if (rebalanceQueueCapacity == null)
         {
-            // Unbounded strategy: Task-based serialization (default, recommended for most scenarios)
-            return new TaskBasedWorkScheduler<ExecutionRequest<TRange, TData, TDomain>>(
+            // Unbounded strategy: serial task-chaining (default, recommended for most scenarios)
+            return new UnboundedSerialWorkScheduler<ExecutionRequest<TRange, TData, TDomain>>(
                 executorDelegate,
                 debounceProvider,
                 schedulerDiagnostics,
@@ -172,8 +172,8 @@ public sealed class SlidingWindowCache<TRange, TData, TDomain>
             );
         }
 
-        // Bounded strategy: Channel-based serialization with backpressure support
-        return new ChannelBasedWorkScheduler<ExecutionRequest<TRange, TData, TDomain>>(
+        // Bounded strategy: serial channel-based with backpressure support
+        return new BoundedSerialWorkScheduler<ExecutionRequest<TRange, TData, TDomain>>(
             executorDelegate,
             debounceProvider,
             schedulerDiagnostics,

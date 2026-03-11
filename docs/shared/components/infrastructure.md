@@ -129,7 +129,7 @@ The `finally` block in step 8 is the canonical S.H.2 call site for scheduler-own
 3. Delegate to `DisposeAsyncCore()` (strategy-specific teardown)
 4. Dispose last work item resources
 
-### TaskBasedWorkScheduler\<TWorkItem\>
+### UnboundedSerialWorkScheduler\<TWorkItem\>
 
 **Serialization mechanism:** Lock-free task chaining. Each new work item is chained to await the previous execution's `Task` before starting its own.
 
@@ -173,7 +173,7 @@ Without `Task.Yield()`, a synchronous executor (e.g. returning `Task.CompletedTa
 
 **Disposal teardown:** `DisposeAsyncCore` reads the current task chain via `Volatile.Read` and awaits it.
 
-### ChannelBasedWorkScheduler\<TWorkItem\>
+### BoundedSerialWorkScheduler\<TWorkItem\>
 
 **Serialization mechanism:** Bounded `Channel<TWorkItem>` with a single-reader execution loop.
 
@@ -210,16 +210,16 @@ await foreach (var item in _workChannel.Reader.ReadAllAsync())
 
 ---
 
-## Comparison: TaskBased vs ChannelBased
+## Comparison: UnboundedSerial vs BoundedSerial
 
-| Concern         | TaskBasedWorkScheduler     | ChannelBasedWorkScheduler            |
-|-----------------|----------------------------|--------------------------------------|
-| Serialization   | Task continuation chaining | Bounded channel + single reader loop |
-| Caller blocking | Never                      | Only when channel full               |
-| Memory          | O(1) task reference        | O(capacity)                          |
-| Backpressure    | None                       | Yes                                  |
-| Complexity      | Lower                      | Slightly higher                      |
-| Default         | Yes                        | No                                   |
+| Concern         | UnboundedSerialWorkScheduler | BoundedSerialWorkScheduler           |
+|-----------------|------------------------------|--------------------------------------|
+| Serialization   | Task continuation chaining   | Bounded channel + single reader loop |
+| Caller blocking | Never                        | Only when channel full               |
+| Memory          | O(1) task reference          | O(capacity)                          |
+| Backpressure    | None                         | Yes                                  |
+| Complexity      | Lower                        | Slightly higher                      |
+| Default         | Yes                          | No                                   |
 
 Both provide the same single-writer serialization guarantee and the same `ExecuteWorkItemCoreAsync` pipeline. The choice is purely about flow control characteristics.
 

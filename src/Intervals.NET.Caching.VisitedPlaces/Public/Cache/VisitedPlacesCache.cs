@@ -27,8 +27,8 @@ namespace Intervals.NET.Caching.VisitedPlaces.Public.Cache;
 /// <list type="bullet">
 /// <item><description><strong>UserRequestHandler</strong> — User Path (read-only, fires events)</description></item>
 /// <item><description><strong>CacheNormalizationExecutor</strong> — Background Storage Loop (single writer for Add)</description></item>
-/// <item><description><strong>TaskBasedWorkScheduler / ChannelBasedWorkScheduler</strong> — serializes background events, manages activity</description></item>
-/// <item><description><strong>FireAndForgetWorkScheduler</strong> — TTL expiration path (concurrent, fire-and-forget)</description></item>
+/// <item><description><strong>UnboundedSerialWorkScheduler / BoundedSerialWorkScheduler</strong> — serializes background events, manages activity</description></item>
+/// <item><description><strong>ConcurrentWorkScheduler</strong> — TTL expiration path (concurrent, fire-and-forget)</description></item>
 /// </list>
 /// <para><strong>Threading Model:</strong></para>
 /// <para>
@@ -57,7 +57,9 @@ public sealed class VisitedPlacesCache<TRange, TData, TDomain>
 {
     private readonly UserRequestHandler<TRange, TData, TDomain> _userRequestHandler;
     private readonly AsyncActivityCounter _activityCounter;
+    private readonly AsyncActivityCounter? _ttlActivityCounter;
     private readonly IWorkScheduler<TtlExpirationWorkItem<TRange, TData>>? _ttlScheduler;
+    private readonly CancellationTokenSource? _ttlDisposalCts;
 
     // Disposal state: 0 = active, 1 = disposing, 2 = disposed (three-state for idempotency)
     private int _disposeState;
@@ -108,20 +110,27 @@ public sealed class VisitedPlacesCache<TRange, TData, TDomain>
         var evictionEngine = new EvictionEngine<TRange, TData>(policies, selector, cacheDiagnostics);
 
         // TTL scheduler: constructed only when SegmentTtl is configured.
-        // Uses FireAndForgetWorkScheduler — each TTL work item awaits Task.Delay independently
+        // Uses ConcurrentWorkScheduler — each TTL work item awaits Task.Delay independently
         // on the ThreadPool, so items do not serialize behind each other's delays.
         // Thread safety is provided by CachedSegment.MarkAsRemoved() (Interlocked.CompareExchange)
         // and EvictionEngine.OnSegmentsRemoved (Interlocked.Add in MaxTotalSpanPolicy).
+        //
+        // _ttlDisposalCts is cancelled during DisposeAsync to simultaneously abort all pending
+        // Task.Delay calls across every in-flight TTL work item (zero per-item allocation).
+        // _ttlActivityCounter tracks in-flight TTL items separately from the main activity counter
+        // so that WaitForIdleAsync does not wait for long-running TTL delays; DisposeAsync awaits
+        // it after cancellation to confirm all TTL work has drained before returning.
         IWorkScheduler<TtlExpirationWorkItem<TRange, TData>>? ttlScheduler = null;
         if (options.SegmentTtl.HasValue)
         {
-            var ttlActivityCounter = new AsyncActivityCounter();
+            _ttlDisposalCts = new CancellationTokenSource();
+            _ttlActivityCounter = new AsyncActivityCounter();
             var ttlExecutor = new TtlExpirationExecutor<TRange, TData>(storage, evictionEngine, cacheDiagnostics);
-            ttlScheduler = new FireAndForgetWorkScheduler<TtlExpirationWorkItem<TRange, TData>>(
+            ttlScheduler = new ConcurrentWorkScheduler<TtlExpirationWorkItem<TRange, TData>>(
                 executor: (workItem, ct) => ttlExecutor.ExecuteAsync(workItem, ct),
                 debounceProvider: static () => TimeSpan.Zero,
                 diagnostics: NoOpWorkSchedulerDiagnostics.Instance,
-                activityCounter: ttlActivityCounter);
+                activityCounter: _ttlActivityCounter);
         }
 
         _ttlScheduler = ttlScheduler;
@@ -132,22 +141,23 @@ public sealed class VisitedPlacesCache<TRange, TData, TDomain>
             evictionEngine,
             cacheDiagnostics,
             ttlScheduler,
-            options.SegmentTtl);
+            options.SegmentTtl,
+            _ttlDisposalCts?.Token ?? CancellationToken.None);
 
         // Diagnostics adapter: maps IWorkSchedulerDiagnostics → IVisitedPlacesCacheDiagnostics.
         var schedulerDiagnostics = new VisitedPlacesWorkSchedulerDiagnostics(cacheDiagnostics);
 
         // Scheduler: serializes background events without delay (debounce = zero).
-        // When EventChannelCapacity is null, use unbounded TaskBasedWorkScheduler (default).
-        // When EventChannelCapacity is set, use bounded ChannelBasedWorkScheduler with backpressure.
+        // When EventChannelCapacity is null, use unbounded serial scheduler (default).
+        // When EventChannelCapacity is set, use bounded serial scheduler with backpressure.
         IWorkScheduler<CacheNormalizationRequest<TRange, TData>> scheduler = options.EventChannelCapacity is { } capacity
-            ? new ChannelBasedWorkScheduler<CacheNormalizationRequest<TRange, TData>>(
+            ? new BoundedSerialWorkScheduler<CacheNormalizationRequest<TRange, TData>>(
                 executor: (evt, ct) => executor.ExecuteAsync(evt, ct),
                 debounceProvider: static () => TimeSpan.Zero,
                 diagnostics: schedulerDiagnostics,
                 activityCounter: _activityCounter,
                 capacity: capacity)
-            : new TaskBasedWorkScheduler<CacheNormalizationRequest<TRange, TData>>(
+            : new UnboundedSerialWorkScheduler<CacheNormalizationRequest<TRange, TData>>(
                 executor: (evt, ct) => executor.ExecuteAsync(evt, ct),
                 debounceProvider: static () => TimeSpan.Zero,
                 diagnostics: schedulerDiagnostics,
@@ -221,9 +231,18 @@ public sealed class VisitedPlacesCache<TRange, TData, TDomain>
     /// <list type="number">
     /// <item><description>Transition state 0→1</description></item>
     /// <item><description>Dispose <see cref="UserRequestHandler{TRange,TData,TDomain}"/> (cascades to normalization scheduler)</description></item>
-    /// <item><description>Dispose TTL scheduler (if TTL is enabled) — cancels the last-published TTL work item</description></item>
+    /// <item><description>Cancel <c>_ttlDisposalCts</c> — simultaneously aborts all pending <c>Task.Delay</c> calls across every in-flight TTL work item (if TTL is enabled)</description></item>
+    /// <item><description>Dispose TTL scheduler (if TTL is enabled) — stops accepting new items</description></item>
+    /// <item><description>Await <c>_ttlActivityCounter.WaitForIdleAsync()</c> — drains all in-flight TTL work items after cancellation (if TTL is enabled)</description></item>
+    /// <item><description>Dispose <c>_ttlDisposalCts</c> (if TTL is enabled)</description></item>
     /// <item><description>Transition state →2</description></item>
     /// </list>
+    /// <para>
+    /// Awaiting <c>_ttlActivityCounter</c> after cancellation guarantees that no TTL work item
+    /// outlives the cache instance (Invariant VPC.T.3). TTL work items respond to cancellation by
+    /// swallowing <see cref="OperationCanceledException"/> and decrementing the counter, so
+    /// <c>WaitForIdleAsync</c> completes quickly after the token is cancelled.
+    /// </para>
     /// </remarks>
     public async ValueTask DisposeAsync()
     {
@@ -239,11 +258,21 @@ public sealed class VisitedPlacesCache<TRange, TData, TDomain>
             {
                 await _userRequestHandler.DisposeAsync().ConfigureAwait(false);
 
-                // Dispose TTL scheduler (cancels the last-published TTL work item's CancellationToken,
-                // which causes any pending Task.Delay to throw OperationCanceledException).
                 if (_ttlScheduler != null)
                 {
+                    // Cancel the shared disposal token — simultaneously aborts all pending
+                    // Task.Delay calls across every in-flight TTL work item.
+                    _ttlDisposalCts!.Cancel();
+
+                    // Stop accepting new TTL work items.
                     await _ttlScheduler.DisposeAsync().ConfigureAwait(false);
+
+                    // Drain all in-flight TTL work items. Each item responds to cancellation
+                    // by swallowing OperationCanceledException and decrementing the counter,
+                    // so this completes quickly after the token has been cancelled above.
+                    await _ttlActivityCounter!.WaitForIdleAsync().ConfigureAwait(false);
+
+                    _ttlDisposalCts.Dispose();
                 }
 
                 tcs.TrySetResult();

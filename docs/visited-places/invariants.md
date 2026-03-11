@@ -354,7 +354,7 @@ Assert.Equal(expectedCount, cache.SegmentCount);
 - If `MarkAsRemoved()` returns `false` (another caller already set the flag), the TTL actor skips `storage.Remove` entirely.
 - This ensures that concurrent eviction and TTL expiration cannot produce a double-remove or corrupt storage state.
 
-**VPC.T.2** [Architectural] The TTL actor **never blocks the User Path**: it runs fire-and-forget on the thread pool via a dedicated `FireAndForgetWorkScheduler`.
+**VPC.T.2** [Architectural] The TTL actor **never blocks the User Path**: it runs fire-and-forget on the thread pool via a dedicated `ConcurrentWorkScheduler`.
 
 - `TtlExpirationExecutor` awaits `Task.Delay(ttl - elapsed)` independently on the thread pool; each TTL work item runs concurrently with others.
 - The User Path and the Background Storage Loop are never touched by TTL work items.
@@ -363,7 +363,7 @@ Assert.Equal(expectedCount, cache.SegmentCount);
 **VPC.T.3** [Conceptual] Pending TTL delays are **cancelled on disposal**.
 
 - When `VisitedPlacesCache.DisposeAsync` is called, the TTL scheduler is disposed after the normalization scheduler has been drained.
-- The `FireAndForgetWorkScheduler`'s `CancellationToken` is cancelled, aborting any in-progress `Task.Delay` calls via `OperationCanceledException`.
+- The `ConcurrentWorkScheduler`'s `CancellationToken` is cancelled, aborting any in-progress `Task.Delay` calls via `OperationCanceledException`.
 - No TTL work item outlives the cache instance.
 
 ---

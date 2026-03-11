@@ -17,11 +17,11 @@ namespace Intervals.NET.Caching.Infrastructure.Scheduling;
 /// <para><strong>Implementations:</strong></para>
 /// <list type="bullet">
 /// <item><description>
-/// <see cref="TaskBasedWorkScheduler{TWorkItem}"/> —
+/// <see cref="UnboundedSerialWorkScheduler{TWorkItem}"/> —
 /// Unbounded task chaining; lightweight, default recommendation for most scenarios.
 /// </description></item>
 /// <item><description>
-/// <see cref="ChannelBasedWorkScheduler{TWorkItem}"/> —
+/// <see cref="BoundedSerialWorkScheduler{TWorkItem}"/> —
 /// Bounded channel with backpressure; for high-frequency or resource-constrained scenarios.
 /// </description></item>
 /// </list>
@@ -61,18 +61,18 @@ internal interface IWorkScheduler<TWorkItem> : IAsyncDisposable
     /// The task-based strategy accepts the parameter for API consistency but does not use it.
     /// </param>
     /// <returns>
-    /// A <see cref="ValueTask"/> that completes synchronously for the task-based strategy
-    /// (fire-and-forget) or asynchronously for the channel-based strategy when the channel is full
+    /// A <see cref="ValueTask"/> that completes synchronously for the unbounded serial strategy
+    /// (fire-and-forget) or asynchronously for the bounded serial strategy when the channel is full
     /// (backpressure).
     /// </returns>
     /// <remarks>
     /// <para><strong>Strategy-Specific Behavior:</strong></para>
     /// <list type="bullet">
     /// <item><description>
-    /// <strong>Task-Based:</strong> chains the new item to the previous task and returns immediately.
+    /// <strong>Unbounded Serial (<see cref="UnboundedSerialWorkScheduler{TWorkItem}"/>):</strong> chains the new item to the previous task and returns immediately.
     /// </description></item>
     /// <item><description>
-    /// <strong>Channel-Based:</strong> enqueues the item; awaits <c>WriteAsync</c> if the channel
+    /// <strong>Bounded Serial (<see cref="BoundedSerialWorkScheduler{TWorkItem}"/>):</strong> enqueues the item; awaits <c>WriteAsync</c> if the channel
     /// is at capacity, creating intentional backpressure on the caller's loop.
     /// </description></item>
     /// </list>

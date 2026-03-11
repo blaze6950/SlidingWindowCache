@@ -10,8 +10,8 @@ The execution subsystem performs debounced, cancellable background work and is t
 |--------------------------------------------------------------------|------------------------------------------------------------------------------------------------------------|--------------------------------------------------------------------|
 | `IWorkScheduler<TWorkItem>`                                        | `src/Intervals.NET.Caching/Infrastructure/Scheduling/IWorkScheduler.cs`                                   | Cache-agnostic serialization contract                              |
 | `WorkSchedulerBase<TWorkItem>`                                     | `src/Intervals.NET.Caching/Infrastructure/Scheduling/WorkSchedulerBase.cs`                                | Shared execution pipeline: debounce, cancellation, diagnostics, cleanup |
-| `TaskBasedWorkScheduler<TWorkItem>`                                | `src/Intervals.NET.Caching/Infrastructure/Scheduling/TaskBasedWorkScheduler.cs`                           | Default: async task-chaining with per-item cancellation            |
-| `ChannelBasedWorkScheduler<TWorkItem>`                             | `src/Intervals.NET.Caching/Infrastructure/Scheduling/ChannelBasedWorkScheduler.cs`                        | Optional: bounded channel-based queue with backpressure            |
+| `UnboundedSerialWorkScheduler<TWorkItem>`                          | `src/Intervals.NET.Caching/Infrastructure/Scheduling/UnboundedSerialWorkScheduler.cs`                     | Default: async task-chaining with per-item cancellation            |
+| `BoundedSerialWorkScheduler<TWorkItem>`                            | `src/Intervals.NET.Caching/Infrastructure/Scheduling/BoundedSerialWorkScheduler.cs`                       | Optional: bounded channel-based queue with backpressure            |
 | `ISchedulableWorkItem`                                             | `src/Intervals.NET.Caching/Infrastructure/Scheduling/ISchedulableWorkItem.cs`                             | `TWorkItem` constraint: `Cancel()` + `IDisposable` + `CancellationToken` |
 | `IWorkSchedulerDiagnostics`                                        | `src/Intervals.NET.Caching/Infrastructure/Scheduling/IWorkSchedulerDiagnostics.cs`                        | Scheduler-level diagnostic events (`WorkStarted`, `WorkCancelled`, `WorkFailed`) |
 | `ExecutionRequest<TRange, TData, TDomain>`                         | `src/Intervals.NET.Caching.SlidingWindow/Core/Rebalance/Execution/ExecutionRequest.cs`                    | SWC work item; implements `ISchedulableWorkItem`                   |
@@ -34,14 +34,14 @@ The generic work schedulers live in `Intervals.NET.Caching` and have **zero coup
 
 `IntentController` holds a reference to `IWorkScheduler<ExecutionRequest<TRange,TData,TDomain>>` directly — no SWC-specific scheduler interface is needed.
 
-### TaskBasedWorkScheduler (default)
+### UnboundedSerialWorkScheduler (default)
 
 - Uses **async task chaining**: each `PublishWorkItemAsync` call creates a new `async Task` that first `await`s the previous task, then unconditionally yields to the ThreadPool via `await Task.Yield()`, then runs `ExecuteWorkItemCoreAsync` after the debounce delay. No `Task.Run` is used — `Task.Yield()` in `ChainExecutionAsync` is the explicit mechanism that guarantees ThreadPool execution regardless of whether the previous task completed synchronously or the executor itself is synchronous.
 - On each new work item: a new task is chained onto the tail of the previous one; the caller (`IntentController`) creates a per-request `CancellationTokenSource` so any in-progress debounce delay can be cancelled when superseded.
 - The chaining approach is lock-free: `_currentExecutionTask` is updated via `Volatile.Write` after each chain step.
 - Selected when `SlidingWindowCacheOptions.RebalanceQueueCapacity` is `null`
 
-### ChannelBasedWorkScheduler (optional)
+### BoundedSerialWorkScheduler (optional)
 
 - Uses `System.Threading.Channels.Channel<T>` with `BoundedChannelFullMode.Wait`
 - Provides backpressure semantics: when the channel is at capacity, `PublishWorkItemAsync` (an `async ValueTask`) awaits the channel write, throttling the background intent processing loop. **No requests are ever dropped.**
@@ -50,7 +50,7 @@ The generic work schedulers live in `Intervals.NET.Caching` and have **zero coup
 
 **Strategy comparison:**
 
-| Aspect       | TaskBased                  | ChannelBased           |
+| Aspect       | UnboundedSerial            | BoundedSerial          |
 |--------------|----------------------------|------------------------|
 | Debounce     | Per-item delay             | Channel draining       |
 | Backpressure | None                       | Bounded capacity       |
@@ -118,8 +118,8 @@ The generic work schedulers live in `Intervals.NET.Caching` and have **zero coup
 
 Exceptions thrown by `RebalanceExecutor` are caught **inside the work schedulers**, not in `IntentController.ProcessIntentsAsync`:
 
-- **`TaskBasedWorkScheduler`**: Exceptions from `ExecuteWorkItemCoreAsync` (including `OperationCanceledException`) are caught in `ChainExecutionAsync`. An outer try/catch in `ChainExecutionAsync` also handles failures propagated from the previous chained task.
-- **`ChannelBasedWorkScheduler`**: Exceptions from `ExecuteWorkItemCoreAsync` are caught inside the `ProcessWorkItemsAsync` reader loop.
+- **`UnboundedSerialWorkScheduler`**: Exceptions from `ExecuteWorkItemCoreAsync` (including `OperationCanceledException`) are caught in `ChainExecutionAsync`. An outer try/catch in `ChainExecutionAsync` also handles failures propagated from the previous chained task.
+- **`BoundedSerialWorkScheduler`**: Exceptions from `ExecuteWorkItemCoreAsync` are caught inside the `ProcessWorkItemsAsync` reader loop.
 
 In both cases, `OperationCanceledException` is reported via `IWorkSchedulerDiagnostics.WorkCancelled` (which `SlidingWindowWorkSchedulerDiagnostics` maps to `ICacheDiagnostics.RebalanceExecutionCancelled`) and other exceptions via `WorkFailed` (→ `RebalanceExecutionFailed`). Background execution exceptions are **never propagated to the user thread**.
 

@@ -33,11 +33,11 @@ public sealed class VisitedPlacesCacheOptions<TRange, TData> : IEquatable<Visite
     /// </summary>
     /// <remarks>
     /// <para>
-    /// When <see langword="null"/> (the default), a <c>TaskBasedWorkScheduler</c> is used:
+    /// When <see langword="null"/> (the default), an <see cref="UnboundedSerialWorkScheduler{TWorkItem}"/> is used:
     /// unbounded, no backpressure, minimal memory overhead — suitable for most scenarios.
     /// </para>
     /// <para>
-    /// When set to a positive integer, a <c>ChannelBasedWorkScheduler</c> with that capacity
+    /// When set to a positive integer, a <see cref="BoundedSerialWorkScheduler{TWorkItem}"/> with that capacity
     /// is used: bounded, applies backpressure to the user path when the queue is full.
     /// Must be &gt;= 1 when non-null.
     /// </para>

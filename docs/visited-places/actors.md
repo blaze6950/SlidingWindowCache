@@ -8,7 +8,7 @@ This document is the canonical actor catalog for `VisitedPlacesCache`. Formal in
 
 - **User Thread** — serves `GetDataAsync`; ends at event publish (fire-and-forget).
 - **Background Storage Loop** — single background thread; dequeues `CacheNormalizationRequest`s and performs all cache mutations (statistics updates, segment storage, eviction).
-- **TTL Loop** — independent background work dispatched fire-and-forget on the thread pool via `FireAndForgetWorkScheduler`; awaits TTL delays and removes expired segments directly via `ISegmentStorage`. Only present when `VisitedPlacesCacheOptions.SegmentTtl` is non-null.
+- **TTL Loop** — independent background work dispatched fire-and-forget on the thread pool via `ConcurrentWorkScheduler`; awaits TTL delays and removes expired segments directly via `ISegmentStorage`. Only present when `VisitedPlacesCacheOptions.SegmentTtl` is non-null.
 
 There are up to three execution contexts in VPC when TTL is enabled (compared to two in the no-TTL configuration, and three in SlidingWindowCache). There is no Decision Path; the Background Storage Loop combines the roles of event processing and cache mutation. The TTL Loop is an independent actor with its own scheduler and activity counter.
 
@@ -266,7 +266,7 @@ The Eviction Executor is an **internal implementation detail of `EvictionEngine`
 - Await `Task.Delay` for the remaining TTL duration (fire-and-forget on the thread pool; concurrent with other TTL work items).
 - On expiry, call `segment.MarkAsRemoved()` — if it returns `true` (first caller), call `storage.Remove(segment)` and `engine.OnSegmentsRemoved([segment])`.
 - Fire `IVisitedPlacesCacheDiagnostics.TtlSegmentExpired()` regardless of whether the segment was already removed.
-- Run on an independent `FireAndForgetWorkScheduler` (never on the Background Storage Loop or User Thread).
+- Run on an independent `ConcurrentWorkScheduler` (never on the Background Storage Loop or User Thread).
 - Support cancellation: `OperationCanceledException` from `Task.Delay` is swallowed cleanly on disposal.
 
 **Non-responsibilities**
@@ -283,7 +283,7 @@ The Eviction Executor is an **internal implementation detail of `EvictionEngine`
 **Components**
 - `TtlExpirationExecutor<TRange, TData>`
 - `TtlExpirationWorkItem<TRange, TData>`
-- `FireAndForgetWorkScheduler<TtlExpirationWorkItem<TRange, TData>>` (one per cache, TTL-dedicated)
+- `ConcurrentWorkScheduler<TtlExpirationWorkItem<TRange, TData>>` (one per cache, TTL-dedicated)
 
 ---
 
