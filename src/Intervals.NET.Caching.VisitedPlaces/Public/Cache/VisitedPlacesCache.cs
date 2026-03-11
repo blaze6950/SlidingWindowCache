@@ -262,7 +262,7 @@ public sealed class VisitedPlacesCache<TRange, TData, TDomain>
                 {
                     // Cancel the shared disposal token — simultaneously aborts all pending
                     // Task.Delay calls across every in-flight TTL work item.
-                    _ttlDisposalCts!.Cancel();
+                    await _ttlDisposalCts!.CancelAsync();
 
                     // Stop accepting new TTL work items.
                     await _ttlScheduler.DisposeAsync().ConfigureAwait(false);
