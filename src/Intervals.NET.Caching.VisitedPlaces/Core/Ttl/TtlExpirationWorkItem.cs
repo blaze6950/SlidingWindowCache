@@ -40,8 +40,6 @@ namespace Intervals.NET.Caching.VisitedPlaces.Core.Ttl;
 internal sealed class TtlExpirationWorkItem<TRange, TData> : ISchedulableWorkItem
     where TRange : IComparable<TRange>
 {
-    private readonly CancellationToken _cancellationToken;
-
     /// <summary>
     /// Initializes a new <see cref="TtlExpirationWorkItem{TRange,TData}"/>.
     /// </summary>
@@ -58,7 +56,7 @@ internal sealed class TtlExpirationWorkItem<TRange, TData> : ISchedulableWorkIte
     {
         Segment = segment;
         ExpiresAt = expiresAt;
-        _cancellationToken = cancellationToken;
+        CancellationToken = cancellationToken;
     }
 
     /// <summary>The segment that will be removed when this work item is executed.</summary>
@@ -68,7 +66,7 @@ internal sealed class TtlExpirationWorkItem<TRange, TData> : ISchedulableWorkIte
     public DateTimeOffset ExpiresAt { get; }
 
     /// <inheritdoc/>
-    public CancellationToken CancellationToken => _cancellationToken;
+    public CancellationToken CancellationToken { get; }
 
     /// <inheritdoc/>
     /// <remarks>
