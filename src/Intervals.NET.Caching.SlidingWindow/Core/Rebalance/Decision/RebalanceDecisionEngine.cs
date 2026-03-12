@@ -1,5 +1,6 @@
 using Intervals.NET.Domain.Abstractions;
 using Intervals.NET.Caching.SlidingWindow.Core.Planning;
+using Intervals.NET.Caching.SlidingWindow.Core.Rebalance.Intent;
 
 namespace Intervals.NET.Caching.SlidingWindow.Core.Rebalance.Decision;
 

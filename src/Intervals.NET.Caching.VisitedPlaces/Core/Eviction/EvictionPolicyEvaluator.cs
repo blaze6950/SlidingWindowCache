@@ -1,3 +1,4 @@
+using Intervals.NET.Caching.VisitedPlaces.Core.Background;
 using Intervals.NET.Caching.VisitedPlaces.Core.Eviction.Pressure;
 
 namespace Intervals.NET.Caching.VisitedPlaces.Core.Eviction;

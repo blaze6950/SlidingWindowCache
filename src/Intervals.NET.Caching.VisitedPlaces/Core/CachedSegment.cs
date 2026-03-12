@@ -1,4 +1,5 @@
 using Intervals.NET.Caching.VisitedPlaces.Core.Eviction;
+using Intervals.NET.Caching.VisitedPlaces.Infrastructure.Storage;
 
 namespace Intervals.NET.Caching.VisitedPlaces.Core;
 

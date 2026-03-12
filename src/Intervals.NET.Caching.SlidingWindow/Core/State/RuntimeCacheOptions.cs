@@ -22,7 +22,7 @@ namespace Intervals.NET.Caching.SlidingWindow.Core.State;
 /// <para><strong>Validation:</strong></para>
 /// <para>
 /// Applies the same validation rules as
-/// <see cref="Intervals.NET.Caching.Public.Configuration.SlidingWindowCacheOptions"/>:
+/// <see cref="SlidingWindowCacheOptions"/>:
 /// cache sizes ≥ 0, thresholds in [0, 1], threshold sum ≤ 1.0.
 /// </para>
 /// <para><strong>Threading:</strong></para>

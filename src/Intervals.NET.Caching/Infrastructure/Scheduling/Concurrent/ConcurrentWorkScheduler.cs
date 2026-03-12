@@ -1,6 +1,7 @@
 using Intervals.NET.Caching.Infrastructure.Concurrency;
 using Intervals.NET.Caching.Infrastructure.Diagnostics;
 using Intervals.NET.Caching.Infrastructure.Scheduling.Base;
+using Intervals.NET.Caching.Infrastructure.Scheduling.Serial;
 
 namespace Intervals.NET.Caching.Infrastructure.Scheduling.Concurrent;
 

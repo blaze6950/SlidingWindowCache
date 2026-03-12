@@ -1,3 +1,5 @@
+using Intervals.NET.Caching.VisitedPlaces.Public.Instrumentation;
+
 namespace Intervals.NET.Caching.VisitedPlaces.Core.Eviction.Pressure;
 
 /// <summary>
@@ -13,7 +15,7 @@ namespace Intervals.NET.Caching.VisitedPlaces.Core.Eviction.Pressure;
 /// <item><description><see cref="Reduce"/> is a no-op (no state to update)</description></item>
 /// </list>
 /// <para>
-/// Similar to <see cref="Instrumentation.NoOpDiagnostics"/>, this avoids null checks throughout
+/// Similar to <see cref="NoOpDiagnostics"/>, this avoids null checks throughout
 /// the eviction pipeline.
 /// </para>
 /// </remarks>

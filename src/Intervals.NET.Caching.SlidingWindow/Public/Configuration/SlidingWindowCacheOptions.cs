@@ -11,12 +11,12 @@ namespace Intervals.NET.Caching.SlidingWindow.Public.Configuration;
 /// <see cref="SlidingWindowCacheOptions"/> is a <c>sealed class</c> with get-only properties. All values
 /// are validated at construction time and cannot be changed on this object afterwards.
 /// Runtime-updatable options (cache sizes, thresholds, debounce delay) may be changed on a live
-/// cache instance via <see cref="Intervals.NET.Caching.Public.ISlidingWindowCache{TRange,TData,TDomain}.UpdateRuntimeOptions"/>.
+/// cache instance via <see cref="ISlidingWindowCache{TRange,TData,TDomain}.UpdateRuntimeOptions"/>.
 /// </para>
 /// <para><strong>Creation-time vs Runtime options:</strong></para>
 /// <list type="bullet">
-/// <item><description><strong>Creation-time only</strong> — <see cref="ReadMode"/>, <see cref="RebalanceQueueCapacity"/>: determine which concrete classes are instantiated and cannot change after construction.</description></item>
-/// <item><description><strong>Runtime-updatable</strong> — <see cref="LeftCacheSize"/>, <see cref="RightCacheSize"/>, <see cref="LeftThreshold"/>, <see cref="RightThreshold"/>, <see cref="DebounceDelay"/>: configure sliding window geometry and execution timing; may be updated on a live cache instance.</description></item>
+/// <item><description><strong>Creation-time only</strong> ï¿½ <see cref="ReadMode"/>, <see cref="RebalanceQueueCapacity"/>: determine which concrete classes are instantiated and cannot change after construction.</description></item>
+/// <item><description><strong>Runtime-updatable</strong> ï¿½ <see cref="LeftCacheSize"/>, <see cref="RightCacheSize"/>, <see cref="LeftThreshold"/>, <see cref="RightThreshold"/>, <see cref="DebounceDelay"/>: configure sliding window geometry and execution timing; may be updated on a live cache instance.</description></item>
 /// </list>
 /// </remarks>
 public sealed class SlidingWindowCacheOptions : IEquatable<SlidingWindowCacheOptions>

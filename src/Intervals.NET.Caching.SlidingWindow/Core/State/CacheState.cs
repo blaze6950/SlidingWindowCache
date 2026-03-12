@@ -1,5 +1,6 @@
 using Intervals.NET.Domain.Abstractions;
 using Intervals.NET.Caching.SlidingWindow.Infrastructure.Storage;
+using Intervals.NET.Caching.SlidingWindow.Public.Cache;
 
 namespace Intervals.NET.Caching.SlidingWindow.Core.State;
 

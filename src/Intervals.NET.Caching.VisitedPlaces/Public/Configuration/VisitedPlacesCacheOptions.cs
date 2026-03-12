@@ -1,3 +1,5 @@
+using Intervals.NET.Caching.Infrastructure.Scheduling.Serial;
+
 namespace Intervals.NET.Caching.VisitedPlaces.Public.Configuration;
 
 /// <summary>
