@@ -362,9 +362,15 @@ Assert.Equal(expectedCount, cache.SegmentCount);
 
 **VPC.T.3** [Conceptual] Pending TTL delays are **cancelled on disposal**.
 
-- When `VisitedPlacesCache.DisposeAsync` is called, the TTL scheduler is disposed after the normalization scheduler has been drained.
+- When `VisitedPlacesCache.DisposeAsync` is called, `TtlEngine.DisposeAsync` is invoked after the normalization scheduler has been drained.
 - The `ConcurrentWorkScheduler`'s `CancellationToken` is cancelled, aborting any in-progress `Task.Delay` calls via `OperationCanceledException`.
 - No TTL work item outlives the cache instance.
+
+**VPC.T.4** [Architectural] The TTL subsystem internals (`TtlExpirationExecutor`, `ConcurrentWorkScheduler`, `AsyncActivityCounter`, `CancellationTokenSource`) are **encapsulated behind `TtlEngine`**.
+
+- `CacheNormalizationExecutor` depends only on `TtlEngine` — it has no direct reference to the executor, scheduler, activity counter, or disposal CTS.
+- `VisitedPlacesCache` holds a single `TtlEngine?` field — the three-field infrastructure (`_ttlActivityCounter`, `_ttlScheduler`, `_ttlDisposalCts`) is owned internally by the engine.
+- This boundary enforces single-responsibility: the executor owns storage mutations; the engine owns TTL lifecycle coordination.
 
 ---
 

@@ -1,6 +1,5 @@
 using System.Reflection;
 using Intervals.NET.Caching.Infrastructure.Concurrency;
-using Intervals.NET.Caching.Infrastructure.Scheduling;
 using Intervals.NET.Caching.Infrastructure.Scheduling.Serial;
 using Intervals.NET.Data.Extensions;
 using Intervals.NET.Domain.Default.Numeric;

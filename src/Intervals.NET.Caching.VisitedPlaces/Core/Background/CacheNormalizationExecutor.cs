@@ -1,6 +1,5 @@
 using Intervals.NET.Caching.Infrastructure.Diagnostics;
 using Intervals.NET.Domain.Abstractions;
-using Intervals.NET.Caching.Infrastructure.Scheduling;
 using Intervals.NET.Caching.Infrastructure.Scheduling.Base;
 using Intervals.NET.Caching.VisitedPlaces.Core.Eviction;
 using Intervals.NET.Caching.VisitedPlaces.Core.Ttl;
@@ -38,7 +37,8 @@ namespace Intervals.NET.Caching.VisitedPlaces.Core.Background;
 ///   Store data — each chunk in <see cref="CacheNormalizationRequest{TRange,TData}.FetchedChunks"/> with
 ///   a non-null Range is added to storage as a new <see cref="CachedSegment{TRange,TData}"/>,
 ///   followed immediately by <see cref="EvictionEngine{TRange,TData}.InitializeSegment"/> to
-///   set up selector metadata and notify stateful policies.
+///   set up selector metadata and notify stateful policies. If TTL is enabled,
+///   <see cref="TtlEngine{TRange,TData}.ScheduleExpirationAsync"/> is called to schedule expiration.
 ///   Skipped when <c>FetchedChunks</c> is null (full cache hit).
 /// </description></item>
 /// <item><description>
@@ -75,9 +75,7 @@ internal sealed class CacheNormalizationExecutor<TRange, TData, TDomain>
     private readonly ISegmentStorage<TRange, TData> _storage;
     private readonly EvictionEngine<TRange, TData> _evictionEngine;
     private readonly IVisitedPlacesCacheDiagnostics _diagnostics;
-    private readonly IWorkScheduler<TtlExpirationWorkItem<TRange, TData>>? _ttlScheduler;
-    private readonly TimeSpan? _segmentTtl;
-    private readonly CancellationToken _ttlCancellationToken;
+    private readonly TtlEngine<TRange, TData>? _ttlEngine;
 
     /// <summary>
     /// Initializes a new <see cref="CacheNormalizationExecutor{TRange,TData,TDomain}"/>.
@@ -88,33 +86,20 @@ internal sealed class CacheNormalizationExecutor<TRange, TData, TDomain>
     /// execution, and eviction diagnostics.
     /// </param>
     /// <param name="diagnostics">Diagnostics sink; must never throw.</param>
-    /// <param name="ttlScheduler">
-    /// Optional TTL work item scheduler. When non-null, a <see cref="TtlExpirationWorkItem{TRange,TData}"/>
-    /// is scheduled for each stored segment immediately after storage. When null, TTL is disabled.
-    /// </param>
-    /// <param name="segmentTtl">
-    /// The time-to-live per segment. Must be non-null when <paramref name="ttlScheduler"/> is non-null.
-    /// </param>
-    /// <param name="ttlCancellationToken">
-    /// Shared disposal cancellation token owned by <c>VisitedPlacesCache</c>. Passed into each
-    /// <see cref="TtlExpirationWorkItem{TRange,TData}"/> at creation time so that a single
-    /// cancellation signal aborts all pending TTL delays simultaneously on disposal.
-    /// Ignored (default) when <paramref name="ttlScheduler"/> is <see langword="null"/>.
+    /// <param name="ttlEngine">
+    /// Optional TTL engine facade. When non-null, <see cref="TtlEngine{TRange,TData}.ScheduleExpirationAsync"/>
+    /// is called for each stored segment immediately after storage. When null, TTL is disabled.
     /// </param>
     public CacheNormalizationExecutor(
         ISegmentStorage<TRange, TData> storage,
         EvictionEngine<TRange, TData> evictionEngine,
         IVisitedPlacesCacheDiagnostics diagnostics,
-        IWorkScheduler<TtlExpirationWorkItem<TRange, TData>>? ttlScheduler = null,
-        TimeSpan? segmentTtl = null,
-        CancellationToken ttlCancellationToken = default)
+        TtlEngine<TRange, TData>? ttlEngine = null)
     {
         _storage = storage;
         _evictionEngine = evictionEngine;
         _diagnostics = diagnostics;
-        _ttlScheduler = ttlScheduler;
-        _segmentTtl = segmentTtl;
-        _ttlCancellationToken = ttlCancellationToken;
+        _ttlEngine = ttlEngine;
     }
 
     /// <summary>
@@ -171,18 +156,10 @@ internal sealed class CacheNormalizationExecutor<TRange, TData, TDomain>
                     _evictionEngine.InitializeSegment(segment);
                     _diagnostics.BackgroundSegmentStored();
 
-                    // TTL: if enabled, schedule expiration for this segment immediately after storing.
-                    if (_ttlScheduler != null && _segmentTtl.HasValue)
+                    // TTL: if enabled, delegate scheduling to the engine facade.
+                    if (_ttlEngine != null)
                     {
-                        var workItem = new TtlExpirationWorkItem<TRange, TData>(
-                            segment,
-                            expiresAt: DateTimeOffset.UtcNow + _segmentTtl.Value,
-                            _ttlCancellationToken);
-
-                        await _ttlScheduler.PublishWorkItemAsync(workItem, CancellationToken.None)
-                            .ConfigureAwait(false);
-
-                        _diagnostics.TtlWorkItemScheduled();
+                        await _ttlEngine.ScheduleExpirationAsync(segment).ConfigureAwait(false);
                     }
 
                     justStoredSegments.Add(segment);

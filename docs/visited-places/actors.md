@@ -262,7 +262,7 @@ The Eviction Executor is an **internal implementation detail of `EvictionEngine`
 ### TTL Actor
 
 **Responsibilities**
-- Receive a `TtlExpirationWorkItem` for each newly stored segment when `SegmentTtl` is configured.
+- Receive a newly stored segment from `CacheNormalizationExecutor` (via `TtlEngine.ScheduleExpirationAsync`) when `SegmentTtl` is configured.
 - Await `Task.Delay` for the remaining TTL duration (fire-and-forget on the thread pool; concurrent with other TTL work items).
 - On expiry, call `segment.MarkAsRemoved()` — if it returns `true` (first caller), call `storage.Remove(segment)` and `engine.OnSegmentsRemoved([segment])`.
 - Fire `IVisitedPlacesCacheDiagnostics.TtlSegmentExpired()` regardless of whether the segment was already removed.
@@ -273,17 +273,19 @@ The Eviction Executor is an **internal implementation detail of `EvictionEngine`
 - Does not interact with the normalization scheduler or the Background Storage Loop directly.
 - Does not serve user requests.
 - Does not evaluate eviction policies.
-- Does not block `WaitForIdleAsync` (uses its own private `AsyncActivityCounter`).
+- Does not block `WaitForIdleAsync` (uses its own private `AsyncActivityCounter` inside `TtlEngine`).
 
 **Invariant ownership**
 - VPC.T.1. Idempotent removal via `segment.MarkAsRemoved()` (Interlocked.CompareExchange)
 - VPC.T.2. Never blocks the User Path (fire-and-forget thread pool + dedicated activity counter)
 - VPC.T.3. Pending delays cancelled on disposal
+- VPC.T.4. TTL subsystem internals encapsulated behind `TtlEngine`
 
 **Components**
-- `TtlExpirationExecutor<TRange, TData>`
-- `TtlExpirationWorkItem<TRange, TData>`
-- `ConcurrentWorkScheduler<TtlExpirationWorkItem<TRange, TData>>` (one per cache, TTL-dedicated)
+- `TtlEngine<TRange, TData>` — facade; owns scheduler, activity counter, disposal CTS, and executor wiring
+- `TtlExpirationExecutor<TRange, TData>` — internal to `TtlEngine`; awaits delay and performs removal
+- `TtlExpirationWorkItem<TRange, TData>` — internal to `TtlEngine`; carries segment reference and expiry timestamp
+- `ConcurrentWorkScheduler<TtlExpirationWorkItem<TRange, TData>>` — internal to `TtlEngine`; one per cache, TTL-dedicated
 
 ---
 
