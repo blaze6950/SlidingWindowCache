@@ -5,7 +5,7 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Intervals.NET.Caching", "sr
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Intervals.NET.Caching.SlidingWindow", "src\Intervals.NET.Caching.SlidingWindow\Intervals.NET.Caching.SlidingWindow.csproj", "{40C9BEF3-8CFA-43CC-AFE0-7E374DF7F9A5}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Intervals.NET.Caching.WasmValidation", "src\Intervals.NET.Caching.WasmValidation\Intervals.NET.Caching.WasmValidation.csproj", "{A1B2C3D4-E5F6-4A5B-8C9D-0E1F2A3B4C5D}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Intervals.NET.Caching.SlidingWindow.WasmValidation", "src\Intervals.NET.Caching.SlidingWindow.WasmValidation\Intervals.NET.Caching.SlidingWindow.WasmValidation.csproj", "{A1B2C3D4-E5F6-4A5B-8C9D-0E1F2A3B4C5D}"
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "SolutionItems", "SolutionItems", "{EB667A96-0E73-48B6-ACC8-C99369A59D0D}"
 	ProjectSection(SolutionItems) = preProject

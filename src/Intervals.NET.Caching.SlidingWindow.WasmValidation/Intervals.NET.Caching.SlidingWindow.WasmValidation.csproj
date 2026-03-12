@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
     <PropertyGroup>
         <TargetFramework>net8.0-browser</TargetFramework>
@@ -15,7 +15,7 @@
     </ItemGroup>
 
     <ItemGroup>
-        <ProjectReference Include="..\Intervals.NET.Caching.Abstractions\Intervals.NET.Caching.Abstractions.csproj" />
+        <ProjectReference Include="..\Intervals.NET.Caching\Intervals.NET.Caching.csproj" />
         <ProjectReference Include="..\Intervals.NET.Caching.SlidingWindow\Intervals.NET.Caching.SlidingWindow.csproj" />
     </ItemGroup>
 

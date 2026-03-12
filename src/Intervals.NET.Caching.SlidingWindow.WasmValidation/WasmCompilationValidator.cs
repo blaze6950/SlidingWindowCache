@@ -1,6 +1,7 @@
-using Intervals.NET;
 using Intervals.NET.Domain.Default.Numeric;
-using Intervals.NET.Caching.Abstractions;
+using Intervals.NET.Caching.Dto;
+using Intervals.NET.Caching.Extensions;
+using Intervals.NET.Caching.Layered;
 using Intervals.NET.Caching.SlidingWindow.Public.Cache;
 using Intervals.NET.Caching.SlidingWindow.Public.Configuration;
 using Intervals.NET.Caching.SlidingWindow.Public.Extensions;
@@ -39,7 +40,7 @@ internal sealed class SimpleDataSource : IDataSource<int, int>
 }
 
 /// <summary>
-/// WebAssembly compilation validator for Intervals.NET.Caching.
+/// WebAssembly compilation validator for Intervals.NET.Caching.SlidingWindow.
 /// This static class validates that the library can compile for net8.0-browser.
 /// It is NOT intended to be executed - successful compilation is the validation.
 /// </summary>
@@ -68,11 +69,11 @@ internal sealed class SimpleDataSource : IDataSource<int, int>
 /// </para>
 /// <list type="bullet">
 /// <item><description>
-/// <see cref="SlidingWindowCacheConsistencyExtensions.GetDataAndWaitForIdleAsync{TRange,TData,TDomain}"/> �
+/// <see cref="RangeCacheConsistencyExtensions.GetDataAndWaitForIdleAsync{TRange,TData,TDomain}"/> —
 /// strong consistency (always waits for idle)
 /// </description></item>
 /// <item><description>
-/// <see cref="SlidingWindowCacheConsistencyExtensions.GetDataAndWaitOnMissAsync{TRange,TData,TDomain}"/> �
+/// <see cref="SlidingWindowCacheConsistencyExtensions.GetDataAndWaitOnMissAsync{TRange,TData,TDomain}"/> —
 /// hybrid consistency (waits on miss/partial hit, returns immediately on full hit)
 /// </description></item>
 /// </list>
@@ -92,13 +93,9 @@ public static class WasmCompilationValidator
     /// </remarks>
     public static async Task ValidateConfiguration1_SnapshotMode_UnboundedQueue()
     {
-        // Create a simple data source
         var dataSource = new SimpleDataSource();
-
-        // Create domain (IntegerFixedStepDomain from Intervals.NET)
         var domain = new IntegerFixedStepDomain();
 
-        // Configure cache options
         var options = new SlidingWindowCacheOptions(
             leftCacheSize: 1.0,
             rightCacheSize: 1.0,
@@ -108,24 +105,16 @@ public static class WasmCompilationValidator
             rebalanceQueueCapacity: null  // Task-based serialization
         );
 
-        // Instantiate SlidingWindowCache with concrete generic types
         var cache = new SlidingWindowCache<int, int, IntegerFixedStepDomain>(
             dataSource,
             domain,
             options
         );
 
-        // Perform a GetDataAsync call with Range from Intervals.NET
-        var range = Intervals.NET.Factories.Range.Closed<int>(0, 10);
+        var range = Factories.Range.Closed<int>(0, 10);
         var result = await cache.GetDataAsync(range, CancellationToken.None);
-
-        // Wait for background operations to complete
         await cache.WaitForIdleAsync();
-
-        // Use result to avoid unused variable warning
         _ = result.Data.Length;
-
-        // Compilation successful if this code builds for net8.0-browser
     }
 
     /// <summary>
@@ -147,7 +136,7 @@ public static class WasmCompilationValidator
         var options = new SlidingWindowCacheOptions(
             leftCacheSize: 1.0,
             rightCacheSize: 1.0,
-            readMode: UserCacheReadMode.CopyOnRead,  // CopyOnReadStorage
+            readMode: UserCacheReadMode.CopyOnRead,
             leftThreshold: 0.2,
             rightThreshold: 0.2,
             rebalanceQueueCapacity: null  // Task-based serialization
@@ -159,7 +148,7 @@ public static class WasmCompilationValidator
             options
         );
 
-        var range = Intervals.NET.Factories.Range.Closed<int>(0, 10);
+        var range = Factories.Range.Closed<int>(0, 10);
         var result = await cache.GetDataAsync(range, CancellationToken.None);
         await cache.WaitForIdleAsync();
         _ = result.Data.Length;
@@ -184,7 +173,7 @@ public static class WasmCompilationValidator
         var options = new SlidingWindowCacheOptions(
             leftCacheSize: 1.0,
             rightCacheSize: 1.0,
-            readMode: UserCacheReadMode.Snapshot,  // SnapshotReadStorage
+            readMode: UserCacheReadMode.Snapshot,
             leftThreshold: 0.2,
             rightThreshold: 0.2,
             rebalanceQueueCapacity: 5  // Channel-based serialization
@@ -196,7 +185,7 @@ public static class WasmCompilationValidator
             options
         );
 
-        var range = Intervals.NET.Factories.Range.Closed<int>(0, 10);
+        var range = Factories.Range.Closed<int>(0, 10);
         var result = await cache.GetDataAsync(range, CancellationToken.None);
         await cache.WaitForIdleAsync();
         _ = result.Data.Length;
@@ -221,7 +210,7 @@ public static class WasmCompilationValidator
         var options = new SlidingWindowCacheOptions(
             leftCacheSize: 1.0,
             rightCacheSize: 1.0,
-            readMode: UserCacheReadMode.CopyOnRead,  // CopyOnReadStorage
+            readMode: UserCacheReadMode.CopyOnRead,
             leftThreshold: 0.2,
             rightThreshold: 0.2,
             rebalanceQueueCapacity: 5  // Channel-based serialization
@@ -233,14 +222,14 @@ public static class WasmCompilationValidator
             options
         );
 
-        var range = Intervals.NET.Factories.Range.Closed<int>(0, 10);
+        var range = Factories.Range.Closed<int>(0, 10);
         var result = await cache.GetDataAsync(range, CancellationToken.None);
         await cache.WaitForIdleAsync();
         _ = result.Data.Length;
     }
 
     /// <summary>
-    /// Validates strong consistency mode: <see cref="SlidingWindowCacheConsistencyExtensions.GetDataAndWaitForIdleAsync{TRange,TData,TDomain}"/>
+    /// Validates strong consistency mode: <see cref="RangeCacheConsistencyExtensions.GetDataAndWaitForIdleAsync{TRange,TData,TDomain}"/>
     /// compiles for net8.0-browser. Exercises both the normal path (idle wait completes) and the
     /// cancellation graceful degradation path (OperationCanceledException from WaitForIdleAsync is
     /// caught and the already-obtained result is returned).
@@ -249,19 +238,19 @@ public static class WasmCompilationValidator
     /// <para><strong>Types Validated:</strong></para>
     /// <list type="bullet">
     /// <item><description>
-    /// <see cref="SlidingWindowCacheConsistencyExtensions.GetDataAndWaitForIdleAsync{TRange,TData,TDomain}"/> �
+    /// <see cref="RangeCacheConsistencyExtensions.GetDataAndWaitForIdleAsync{TRange,TData,TDomain}"/> —
     /// strong consistency extension method; composes GetDataAsync + unconditional WaitForIdleAsync
     /// </description></item>
     /// <item><description>
     /// The <c>try { await WaitForIdleAsync } catch (OperationCanceledException) { }</c> pattern
-    /// inside the extension method � validates that exception handling compiles on WASM
+    /// inside the extension method — validates that exception handling compiles on WASM
     /// </description></item>
     /// </list>
     /// <para><strong>Why One Configuration Is Sufficient:</strong></para>
     /// <para>
     /// The extension method introduces no new strategy axes (storage or serialization). It is a
     /// thin wrapper over GetDataAsync + WaitForIdleAsync; the four internal strategy combinations
-    /// are already covered by Configurations 1�4.
+    /// are already covered by Configurations 1–4.
     /// </para>
     /// </remarks>
     public static async Task ValidateStrongConsistencyMode_GetDataAndWaitForIdleAsync()
@@ -283,7 +272,7 @@ public static class WasmCompilationValidator
             options
         );
 
-        var range = Intervals.NET.Factories.Range.Closed<int>(0, 10);
+        var range = Factories.Range.Closed<int>(0, 10);
 
         // Normal path: waits for idle and returns the result
         var result = await cache.GetDataAndWaitForIdleAsync(range, CancellationToken.None);
@@ -291,7 +280,7 @@ public static class WasmCompilationValidator
         _ = result.CacheInteraction;
 
         // Cancellation graceful degradation path: pre-cancelled token; WaitForIdleAsync
-        // throws OperationCanceledException which is caught � result returned gracefully
+        // throws OperationCanceledException which is caught — result returned gracefully
         using var cts = new CancellationTokenSource();
         cts.Cancel();
         var degradedResult = await cache.GetDataAndWaitForIdleAsync(range, cts.Token);
@@ -308,23 +297,23 @@ public static class WasmCompilationValidator
     /// <para><strong>Types Validated:</strong></para>
     /// <list type="bullet">
     /// <item><description>
-    /// <see cref="SlidingWindowCacheConsistencyExtensions.GetDataAndWaitOnMissAsync{TRange,TData,TDomain}"/> �
+    /// <see cref="SlidingWindowCacheConsistencyExtensions.GetDataAndWaitOnMissAsync{TRange,TData,TDomain}"/> —
     /// hybrid consistency extension method; composes GetDataAsync + conditional WaitForIdleAsync
     /// gated on <see cref="CacheInteraction"/>
     /// </description></item>
     /// <item><description>
-    /// <see cref="CacheInteraction"/> enum � read from <see cref="RangeResult{TRange,TData}.CacheInteraction"/>
+    /// <see cref="CacheInteraction"/> enum — read from <see cref="RangeResult{TRange,TData}.CacheInteraction"/>
     /// on the returned result
     /// </description></item>
     /// <item><description>
     /// The <c>try { await WaitForIdleAsync } catch (OperationCanceledException) { }</c> pattern
-    /// inside the extension method � validates that exception handling compiles on WASM
+    /// inside the extension method — validates that exception handling compiles on WASM
     /// </description></item>
     /// </list>
     /// <para><strong>Why One Configuration Is Sufficient:</strong></para>
     /// <para>
     /// The extension method introduces no new strategy axes. The four internal strategy
-    /// combinations are already covered by Configurations 1�4.
+    /// combinations are already covered by Configurations 1–4.
     /// </para>
     /// </remarks>
     public static async Task ValidateHybridConsistencyMode_GetDataAndWaitOnMissAsync()
@@ -346,9 +335,9 @@ public static class WasmCompilationValidator
             options
         );
 
-        var range = Intervals.NET.Factories.Range.Closed<int>(0, 10);
+        var range = Factories.Range.Closed<int>(0, 10);
 
-        // FullMiss path (first request � cold cache): idle wait is triggered
+        // FullMiss path (first request — cold cache): idle wait is triggered
         var missResult = await cache.GetDataAndWaitOnMissAsync(range, CancellationToken.None);
         _ = missResult.Data.Length;
         _ = missResult.CacheInteraction; // FullMiss
@@ -359,7 +348,7 @@ public static class WasmCompilationValidator
         _ = hitResult.CacheInteraction; // FullHit
 
         // Cancellation graceful degradation path: pre-cancelled token on a miss scenario;
-        // WaitForIdleAsync throws OperationCanceledException which is caught � result returned gracefully
+        // WaitForIdleAsync throws OperationCanceledException which is caught — result returned gracefully
         using var cts = new CancellationTokenSource();
         cts.Cancel();
         var degradedResult = await cache.GetDataAndWaitOnMissAsync(range, cts.Token);
@@ -421,17 +410,13 @@ public static class WasmCompilationValidator
             rightThreshold: 0.2
         );
 
-        // Build the layered cache — exercises LayeredRangeCacheBuilder,
-        // RangeCacheDataSourceAdapter, and LayeredRangeCache
         await using var layered = (LayeredRangeCache<int, int, IntegerFixedStepDomain>)SlidingWindowCacheBuilder.Layered(new SimpleDataSource(), domain)
             .AddSlidingWindowLayer(innerOptions)
             .AddSlidingWindowLayer(outerOptions)
             .Build();
 
-        var range = Intervals.NET.Factories.Range.Closed<int>(0, 10);
+        var range = Factories.Range.Closed<int>(0, 10);
         var result = await layered.GetDataAsync(range, CancellationToken.None);
-
-        // WaitForIdleAsync on LayeredRangeCache awaits all layers (outermost to innermost)
         await layered.WaitForIdleAsync();
 
         _ = result.Data.Length;

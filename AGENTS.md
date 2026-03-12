@@ -416,7 +416,7 @@ fix: race condition in intent processing has been resolved
 - `src/Intervals.NET.Caching.VisitedPlaces/Core/Eviction/Selectors/` - Public concrete selectors: `LruEvictionSelector`, `FifoEvictionSelector`, `SmallestFirstEvictionSelector`
 
 **WebAssembly Validation:**
-- `src/Intervals.NET.Caching.WasmValidation/` - Validates Core + SlidingWindow compile for `net8.0-browser`
+- `src/Intervals.NET.Caching.SlidingWindow.WasmValidation/` - Validates Core + SlidingWindow compile for `net8.0-browser`
 - `src/Intervals.NET.Caching.VisitedPlaces.WasmValidation/` - Validates Core + VisitedPlaces compile for `net8.0-browser`
 
 ## CI/CD
