@@ -72,32 +72,42 @@ internal sealed class SnapshotAppendBufferStorage<TRange, TData> : SegmentStorag
     }
 
     /// <inheritdoc/>
+    /// <remarks>
+    /// <para><strong>Algorithm (O(log n + k)):</strong></para>
+    /// <list type="number">
+    /// <item><description>Acquire stable snapshot via <c>Volatile.Read</c></description></item>
+    /// <item><description>Binary-search snapshot for the rightmost entry whose <c>Start &lt;= range.Start</c>
+    ///   via <see cref="SegmentStorageBase{TRange,TData}.FindLastAtOrBefore{TElement,TAccessor}"/> (Start.Value-based,
+    ///   shared with <see cref="LinkedListStrideIndexStorage{TRange,TData}"/>). No step-back needed:
+    ///   Invariant VPC.C.3 guarantees <c>End[i] &lt; Start[i+1]</c>, so all earlier segments have
+    ///   <c>End &lt; range.Start</c> and cannot intersect.</description></item>
+    /// <item><description>Linear scan forward collecting intersecting non-removed segments;
+    ///   short-circuit when <c>segment.Start &gt; range.End</c></description></item>
+    /// <item><description>Linear scan of append buffer (unsorted, small)</description></item>
+    /// </list>
+    /// </remarks>
     public override IReadOnlyList<CachedSegment<TRange, TData>> FindIntersecting(Range<TRange> range)
     {
         var snapshot = Volatile.Read(ref _snapshot);
 
         var results = new List<CachedSegment<TRange, TData>>();
 
-        // Binary search: find first candidate in snapshot
-        var lo = 0;
-        var hi = snapshot.Length - 1;
-        while (lo <= hi)
-        {
-            var mid = lo + (hi - lo) / 2;
-            // A segment intersects range if segment.Range.End.Value >= range.Start.Value
-            // We want the first segment where End.Value >= range.Start.Value
-            if (snapshot[mid].Range.End.Value.CompareTo(range.Start.Value) < 0)
-            {
-                lo = mid + 1;
-            }
-            else
-            {
-                hi = mid - 1;
-            }
-        }
+        // Binary search: find the rightmost snapshot entry whose Start <= range.Start.
+        // That entry is itself the earliest possible intersector: because segments are
+        // non-overlapping and sorted by Start (Invariant VPC.C.3), every earlier segment
+        // has End < Start[hi] <= range.Start and therefore cannot intersect.
+        // No step-back needed — unlike the stride strategy, every element is directly indexed.
+        var hi = snapshot.Length > 0
+            ? FindLastAtOrBefore(snapshot, range.Start.Value, default(DirectAccessor))
+            : -1;
 
-        // Linear scan from lo forward
-        for (var i = lo; i < snapshot.Length; i++)
+        // Start scanning from hi (the rightmost segment whose Start <= range.Start).
+        // If hi == -1 all segments start after range.Start; begin from 0 in case some
+        // still have Start <= range.End (i.e. the query range starts before all segments).
+        var scanStart = Math.Max(0, hi);
+
+        // Linear scan from scanStart forward
+        for (var i = scanStart; i < snapshot.Length; i++)
         {
             var seg = snapshot[i];
             // Short-circuit: if segment starts after range ends, no more candidates
@@ -258,5 +268,18 @@ internal sealed class SnapshotAppendBufferStorage<TRange, TData> : SegmentStorag
         while (j < right.Count) result[k++] = right[j++];
 
         return result;
+    }
+
+    /// <summary>
+    /// Zero-allocation accessor that extracts <c>Range.Start.Value</c> from a
+    /// <see cref="CachedSegment{TRange,TData}"/> element for use with
+    /// <see cref="SegmentStorageBase{TRange,TData}.FindLastAtOrBefore{TElement,TAccessor}"/>.
+    /// </summary>
+    private readonly struct DirectAccessor : ISegmentAccessor<CachedSegment<TRange, TData>>
+    {
+        [System.Runtime.CompilerServices.MethodImpl(
+            System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
+        public TRange GetStartValue(CachedSegment<TRange, TData> element) =>
+            element.Range.Start.Value;
     }
 }

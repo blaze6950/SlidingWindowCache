@@ -95,11 +95,10 @@ SnapshotAppendBufferStorage
 ### Read Path (User Thread)
 
 1. `Volatile.Read(_snapshot)` — acquire a stable reference to the current snapshot array
-2. Binary search on `_snapshot` to find the first segment whose end ≥ `RequestedRange.Start`
-3. Linear scan forward through `_snapshot` collecting all segments that intersect `RequestedRange` (short-circuit when segment start > `RequestedRange.End`)
-4. Linear scan through `_appendBuffer[0.._appendCount]` collecting intersecting segments
-5. Filter out soft-deleted entries from both scans
-6. Return all collected intersecting segments
+2. Binary search on `_snapshot` to find the rightmost segment whose start ≤ `RequestedRange.Start` (via shared `FindLastAtOrBefore` — see [Algorithm Detail](#findintersecting-algorithm-detail) below)
+3. Linear scan forward through `_snapshot` collecting all segments that intersect `RequestedRange`; short-circuit when segment start > `RequestedRange.End`; skip soft-deleted entries inline
+4. Linear scan through `_appendBuffer[0.._appendCount]` collecting intersecting segments (unsorted, small)
+5. Return all collected intersecting segments
 
 **Read cost**: O(log n + k + m) where n = snapshot size, k = matching segments, m = append buffer size
 
@@ -113,16 +112,16 @@ SnapshotAppendBufferStorage
 3. If `_appendCount == N` (buffer full): **normalize** (see below)
 
 **Remove segment (logical removal):**
-1. Call `segment.MarkAsRemoved()` — sets `segment.IsRemoved = true` atomically (Interlocked.CompareExchange)
+1. Call `segment.TryMarkAsRemoved()` — sets `segment.IsRemoved = true` atomically (Interlocked.CompareExchange)
 2. No immediate structural change to snapshot or append buffer
 
 **Normalize:**
 1. Allocate a new `Segment[]` of size `(_snapshot.Length - removedCount + _appendCount)`
 2. Merge `_snapshot` (excluding `IsRemoved` segments) and `_appendBuffer[0.._appendCount]` into the new array via merge-sort
-3. Reset `_appendCount = 0`
+3. Reset `_appendCount = 0`; clear stale references in `_appendBuffer`
 4. `Volatile.Write(_snapshot, newArray)` — atomically publish the new snapshot
 
-**Normalization cost**: O(n log n) where n = total segment count (or O(n + m) with merge-sort since both inputs are sorted)
+**Normalization cost**: O(n + m) merge of two sorted sequences (snapshot already sorted; append buffer sorted before merge)
 
 **RCU safety**: User Path threads that read `_snapshot` via `Volatile.Read` before normalization continue to see the old, valid snapshot until their read completes. The new snapshot is published atomically; no intermediate state is ever visible.
 
@@ -132,7 +131,6 @@ SnapshotAppendBufferStorage
 - Arrays < 85KB go to the Small Object Heap (generational GC, compactable)
 - Arrays ≥ 85KB go to the Large Object Heap — avoid with this strategy for large caches
 - Append buffer is fixed-size (`AppendBufferSize` entries) and reused across normalizations (no allocation per add)
-- Soft-delete mask is same size as snapshot, reallocated on normalization
 
 ### Alignment with Invariants
 
@@ -156,7 +154,7 @@ SnapshotAppendBufferStorage
 
 ### Tuning: `AppendBufferSize` and `Stride`
 
-**`AppendBufferSize`** controls how many segments are accumulated before the stride index is rebuilt:
+**`AppendBufferSize`** controls how many segments are added before the stride index is rebuilt:
 
 | `AppendBufferSize` | Effect                                                                                                                                                                     |
 |--------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
@@ -176,85 +174,321 @@ SnapshotAppendBufferStorage
 
 ```
 LinkedListStrideIndexStorage
-├── _list: DoublyLinkedList<Segment>     (sorted by range start; single-writer)
-├── _strideIndex: Segment[]              (array of every Nth node = "stride anchors")
-├── _strideAppendBuffer: Segment[M]      (M = AppendBufferSize; new stride anchors before normalization)
-└── _strideAppendCount: int
+├── _list: DoublyLinkedList<Segment>           (sorted by range start; single-writer)
+├── _strideIndex: LinkedListNode<Segment>[]    (every Nth live node = "stride anchors"; published via Volatile.Write)
+└── _addsSinceLastNormalization: int           (counter; triggers stride rebuild at AppendBufferSize threshold)
 ```
 
 > Logical removal is tracked via `CachedSegment.IsRemoved` (an `int` field on each segment, set atomically via `Interlocked.CompareExchange`). No separate mask array is maintained; all reads and stride-index walks filter out segments where `IsRemoved == true`. Physical unlinking of removed nodes from `_list` happens during stride normalization.
 
-**Stride**: A configurable integer N (default N=16) defining how often a stride anchor is placed. A stride anchor is a reference to the Nth, 2Nth, 3Nth... node in the sorted linked list.
+**Stride**: A configurable integer N (default N=16) defining how often a stride anchor is placed. A stride anchor is a reference to the 1st, (N+1)th, (2N+1)th... live node in the sorted linked list.
 
 ### Read Path (User Thread)
 
 1. `Volatile.Read(_strideIndex)` — acquire stable reference to the current stride index
-2. Binary search on `_strideIndex` to find the stride anchor just before `RequestedRange.Start`
-3. From the anchor node, linear scan forward through `_list` collecting all intersecting segments (short-circuit when node start > `RequestedRange.End`)
-4. Linear scan through `_strideAppendBuffer[0.._strideAppendCount]` — these are the most-recently-added segments not yet in the main list
-5. Filter out soft-deleted entries
-6. Return all collected intersecting segments
+2. Binary search on `_strideIndex` to find the rightmost stride anchor whose start ≤ `RequestedRange.Start` (via shared `FindLastAtOrBefore`). No step-back needed: Invariant VPC.C.3 (`End[i] < Start[i+1]`, strict) ensures all segments before the anchor have `End < range.Start` and cannot intersect (see [Algorithm Detail](#findintersecting-algorithm-detail) below)
+3. From the anchor node, linear scan forward through `_list` collecting all intersecting segments; short-circuit when node start > `RequestedRange.End`; skip soft-deleted entries inline
+4. Return all collected intersecting segments
 
-**Read cost**: O(log(n/N) + k + N + m) where n = total segments, N = stride, k = matching segments, m = stride append buffer size
+> All segments are inserted directly into `_list` via `InsertSorted` when added. There is no separate append buffer for `FindIntersecting` to scan — the linked list walk covers all segments regardless of whether the stride index has been rebuilt since they were added.
 
-**Read cost vs Snapshot strategy**: For large n (many segments), the stride-indexed search eliminates the O(log n) binary search over a large array and replaces it with O(log(n/N)) on a smaller stride index + O(N) local scan. For small n, Snapshot is typically faster.
+**Read cost**: O(log(n/N) + k + N) where n = total segments, N = stride, k = matching segments
+
+**Read cost vs Snapshot strategy**: For large n, the stride-indexed search replaces O(log n) binary search on a large array with O(log(n/N)) on the smaller stride index + O(N) local list walk from the anchor. For small n, Snapshot is typically faster.
 
 ### Write Path (Background Thread)
 
 **Add segment:**
-1. Insert new node into `_list` in sorted position (O(log(n/N) + N) using stride to find insertion point)
-2. Write reference to `_strideAppendBuffer[_strideAppendCount]`
-3. Increment `_strideAppendCount`
-4. If `_strideAppendCount == M` (stride buffer full): **normalize stride index** (see below)
+1. Insert new segment into `_list` at the correct sorted position via `InsertSorted` (uses stride index for O(log(n/N)) anchor lookup + O(N) local walk)
+2. Increment `_addsSinceLastNormalization`
+3. If `_addsSinceLastNormalization == AppendBufferSize`: **normalize stride index** (see below)
 
 **Remove segment (logical removal):**
-1. Call `segment.MarkAsRemoved()` — sets `segment.IsRemoved = true` atomically (Interlocked.CompareExchange)
+1. Call `segment.TryMarkAsRemoved()` — sets `segment.IsRemoved = true` atomically (Interlocked.CompareExchange)
 2. No immediate structural change to the list or stride index
 
-**Normalize stride index:**
-1. Allocate a new `Segment[]` of size `ceil(nonRemovedListCount / N)`
-2. Walk `_list` from head to tail, physically unlinking nodes where `IsRemoved == true` and collecting every Nth surviving node as a stride anchor
-3. Reset `_strideAppendBuffer` (clear count)
-4. `Volatile.Write(_strideIndex, newArray)` — atomically publish the new stride index
+**Normalize stride index (two-pass for RCU safety):**
 
-**Normalization cost**: O(n) list traversal + O(n/N) for new stride array allocation
+Pass 1 — build new stride index:
+1. Walk `_list` from head to tail
+2. For each **live** node (skip `IsRemoved` nodes without unlinking them): if this is the Nth live node seen, add it to the new stride anchor array
+3. Publish new stride index: `Interlocked.Exchange(_strideIndex, newArray)` (release fence)
 
-**Physical removal**: Logically-removed nodes are physically unlinked from `_list` during stride normalization. Between normalizations, they remain in the list but are skipped during scans via `segment.IsRemoved`.
+Pass 2 — physical cleanup (safe only after new index is live):
+4. Walk `_list` again; physically unlink every `IsRemoved` node
+5. Reset `_addsSinceLastNormalization = 0`
+
+> **Why two passes?** Any User Path thread that read the *old* stride index before the swap may still be walking through `_list` using old anchor nodes as starting points. Those old anchors may point to nodes that are about to be physically removed. If we unlinked removed nodes *before* publishing the new index, a concurrent walk starting from a stale anchor could follow a node whose `Next` pointer was already set to `null` by physical removal, truncating the walk prematurely and missing live segments. Publishing first ensures all walkers using old anchors will complete correctly before those nodes disappear.
+
+**Normalization cost**: O(n) list traversal (two passes) + O(n/N) for new stride array allocation
 
 ### Memory Behavior
 
 - `_list` nodes are individually allocated (generational GC; no LOH pressure regardless of total size)
 - `_strideIndex` is a small array (n/N entries) — minimal LOH risk
-- Stride append buffer is fixed-size (`AppendBufferSize` entries) and reused (no per-add allocation)
 - Avoids the "one giant array" pattern that causes LOH pressure in the Snapshot strategy
 
 ### RCU Semantics
 
-Same as Strategy 1: User Path threads read via `Volatile.Read(_strideIndex)`. The linked list itself is read directly (nodes are stable; soft-deleted nodes are simply skipped). The stride index snapshot is rebuilt and published atomically.
+Same as Strategy 1: User Path threads read via `Volatile.Read(_strideIndex)`. The linked list itself is read directly (nodes are stable; soft-deleted nodes are simply skipped). The stride index snapshot is rebuilt and published atomically. Physical removal of dead nodes only happens after the new stride index is live, preserving `Next` pointer integrity for any concurrent walk still using the old index.
 
 ### Alignment with Invariants
 
-| Invariant                          | How enforced                                                                    |
-|------------------------------------|---------------------------------------------------------------------------------|
-| VPC.C.2 — No merging               | Insert adds a new independent node; no existing node data is modified           |
-| VPC.C.3 — No overlapping segments  | Invariant maintained at insertion time                                          |
-| VPC.B.5 — Atomic state transitions | `Volatile.Write(_strideIndex, ...)` — stride index snapshot atomically replaced |
-| VPC.A.10 — User Path is read-only  | `FindIntersecting` reads only; all structural mutations are background-only     |
+| Invariant                          | How enforced                                                                                                                |
+|------------------------------------|-----------------------------------------------------------------------------------------------------------------------------|
+| VPC.C.2 — No merging               | Insert adds a new independent node; no existing node data is modified                                                       |
+| VPC.C.3 — No overlapping segments  | Invariant maintained at insertion time                                                                                      |
+| VPC.B.5 — Atomic state transitions | `Interlocked.Exchange(_strideIndex, ...)` — stride index atomically replaced; physical removal deferred until after publish |
+| VPC.A.10 — User Path is read-only  | `FindIntersecting` reads only; all structural mutations are background-only                                                 |
 
 ---
 
 ## Strategy Comparison
 
-| Aspect                          | Snapshot + Append Buffer        | LinkedList + Stride Index         |
-|---------------------------------|---------------------------------|-----------------------------------|
-| **Read cost**                   | O(log n + k + m)                | O(log(n/N) + k + N + m)           |
-| **Write cost (add)**            | O(1) amortized (to buffer)      | O(log(n/N) + N)                   |
-| **Normalization cost**          | O(n log n) or O(n+m)            | O(n)                              |
+| Aspect                              | Snapshot + Append Buffer        | LinkedList + Stride Index         |
+|-------------------------------------|---------------------------------|-----------------------------------|
+| **Read cost**                       | O(log n + k + m)                | O(log(n/N) + k + N)               |
+| **Write cost (add)**                | O(1) amortized (to buffer)      | O(log(n/N) + N)                   |
+| **Normalization cost**              | O(n + m)                        | O(n)                              |
 | **Eviction cost (logical removal)** | O(1)                            | O(1)                              |
-| **Memory pattern**              | One sorted array per snapshot   | Linked list + small stride array  |
-| **LOH risk**                    | High for large n                | Low (no single large array)       |
-| **Best for**                    | Small caches, < 85KB total data | Large caches, high segment counts |
-| **Segment count sweet spot**    | < ~50 segments                  | > ~50–100 segments                |
+| **Memory pattern**                  | One sorted array per snapshot   | Linked list + small stride array  |
+| **LOH risk**                        | High for large n                | Low (no single large array)       |
+| **Best for**                        | Small caches, < 85KB total data | Large caches, high segment counts |
+| **Segment count sweet spot**        | < ~50 segments                  | > ~50–100 segments                |
+
+---
+
+## FindIntersecting Algorithm Detail
+
+Both strategies share the same binary search primitive and the same forward-scan + short-circuit pattern.
+The key difference is *what* the binary search operates on (flat array vs sparse stride anchors).
+Neither strategy needs a step-back after the search — Invariant VPC.C.3 (`End[i] < Start[i+1]`, strict)
+guarantees that all elements before the binary-search result have `End < range.Start` and cannot
+intersect the query range.
+
+### Shared Binary Search: `FindLastAtOrBefore(array, value)`
+
+**Goal**: find the rightmost element in a sorted array where `Start.Value <= value`. Returns that
+index, or `-1` if no element qualifies.
+
+```
+Example: 8 segments sorted by Start.Value, searching for value = 50
+
+Index:   0      1      2      3      4      5      6      7
+Start: [ 10 ] [ 20 ] [ 30 ] [ 40 ] [ 60 ] [ 70 ] [ 80 ] [ 90 ]
+       <=50   <=50   <=50   <=50    >50    >50    >50    >50
+        \_______________________/   \_______________________/
+           qualify (Start<=50)            don't qualify
+
+Answer: index 3  (rightmost where Start <= 50)
+```
+
+**Iteration trace** — `lo` and `hi` are the active search window:
+
+```
+Iteration 1:   lo=0, hi=7
+               mid = 0 + ( 7 - 0 ) / 2 = 3
+               Start[3] = 40 <= 50?  YES  →  lo = mid + 1 = 4
+
+                  lo=0                                             hi=7
+                   |                                                |
+                 [ 10 ] [ 20 ] [ 30 ] [ 40 ] [ 60 ] [ 70 ] [ 80 ] [ 90 ]
+                                       ^^^^
+                                       mid=3, qualifies → lo moves right
+
+Iteration 2:   lo=4, hi=7
+               mid = 4 + ( 7 - 4 ) / 2 = 5
+               Start[5] = 70 <= 50?  NO   →  hi = mid - 1 = 4
+
+                                              lo=4                 hi=7
+                                               |                    |
+                 [ 10 ] [ 20 ] [ 30 ] [ 40 ] [ 60 ] [ 70 ] [ 80 ] [ 90 ]
+                                              ^^^^
+                                              mid=5, doesn't qualify → hi moves left
+
+Iteration 3:   lo=4, hi=4
+               mid = 4 + ( 4 - 4 ) / 2 = 4
+               Start[4] = 60 <= 50?  NO   →  hi = mid - 1 = 3
+
+                                           lo=4  hi=4
+                                              |  |
+                 [ 10 ] [ 20 ] [ 30 ] [ 40 ] [ 60 ] [ 70 ] [ 80 ] [ 90 ]
+                                              ^^^^
+                                              mid=4, doesn't qualify → hi moves left
+
+Loop ends: lo = 4 > hi = 3  →  return hi = 3  ✓
+```
+
+**Invariant maintained throughout**: everything at index < lo qualifies (Start <= value);
+everything at index > hi does not qualify (Start > value). When the loop exits, `hi` is
+the rightmost qualifying index (or -1 if lo never advanced past 0).
+
+---
+
+### Strategy 1 — Snapshot: no step-back needed
+
+`FindIntersecting` calls `FindLastAtOrBefore(snapshot, range.Start.Value)`.
+
+Because every element is directly indexed and segments are **non-overlapping** (Invariant VPC.C.3),
+ends are also monotonically ordered: `End[i] < Start[i+1]`. This means every element before `hi`
+has `End < Start[hi] <= range.Start` and can never intersect the query range.
+`hi` itself is the earliest possible intersector — no step-back is needed.
+
+```
+Example: snapshot has 5 segments; query range = [50, 120]
+
+Index:   0          1          2          3          4
+      [10──25]   [30──55]   [60──75]   [80──95]  [110──130]
+                     ↑ range.Start = 50
+
+FindLastAtOrBefore(snapshot, 50) → hi = 1   (Start[1] = 30, rightmost where Start <= 50)
+
+scanStart = Math.Max(0, hi) = 1         ← start here, no step-back
+
+Scan forward from index 1:
+  i=1: [30──55]  →  Start=30 <= 120, Overlaps [50,120]?  YES  ✓  (End=55 >= 50)
+  i=2: [60──75]  →  Start=60 <= 120, Overlaps [50,120]?  YES  ✓
+  i=3: [80──95]  →  Start=80 <= 120, Overlaps [50,120]?  YES  ✓
+  i=4: [110──130]→  Start=110 <= 120, Overlaps [50,120]?  YES  ✓
+  (end of snapshot)
+
+Why i = 0 is correctly skipped:
+  Invariant VPC.C.3: End[0] = 25 < Start[1] = 30 <= range.Start = 50
+  So [10──25] provably cannot reach range.Start. Starting at hi is exact.
+```
+
+**Edge cases:**
+
+```
+hi = -1  →  all segments start after range.Start
+            scanStart = Math.Max(0, -1) = 0
+            scan from 0; segments may still intersect if Start <= range.End
+
+hi = 0   →  only segment[0] qualifies
+            scanStart = 0; scan from segment[0]
+
+hi = n-1 →  all segments start at or before range.Start
+            scanStart = n-1; scan from last qualifying segment forward
+```
+
+---
+
+### Strategy 2 — Stride Index: no step-back needed
+
+`FindIntersecting` calls `FindLastAtOrBefore(strideIndex, range.Start.Value)`, then uses
+`anchorIdx = Math.Max(0, hi)` — identical reasoning to Strategy 1.
+
+The stride index is **sparse** (every Nth live node), but the no-step-back proof is the same:
+
+```
+Proof (applies to both strategies):
+
+  Let anchor[hi] = the rightmost stride anchor where anchor[hi].Start <= range.Start.
+  Let X = any segment before anchor[hi] in the linked list.
+
+  By sorted order:        X.Start < anchor[hi].Start
+  By VPC.C.3 (strict):   X.End   < Start_of_next_segment_after_X
+  Transitively:           X.End   < ... < anchor[hi].Start
+  By binary search:       anchor[hi].Start <= range.Start
+  Therefore:              X.End   < range.Start
+
+  X cannot intersect [range.Start, range.End].  QED.
+```
+
+This holds regardless of whether X is a stride anchor or an unindexed node between anchors —
+VPC.C.3's strict inequality propagates through the entire sorted chain.
+
+```
+Example: 12 nodes in linked list, stride = 4, query range = [42, 80]
+
+Linked list (sorted by Start, ends respect End[i] < Start[i+1]):
+   1      2      3      4      5      6      7      8      9      10     11     12
+  [A]────[B]────[C]────[D]────[E]────[F]────[G]────[H]────[I]────[J]────[K]────[L]
+  10─11  15─16  20─21  25─26  30─31  35─36  40─41  45─46  50─51  55─56  60─61  65─66
+
+Stride index (every 4th live node):
+  anchor[0] = node 1 (A)  (Start=10)
+  anchor[1] = node 5 (E)  (Start=30)
+  anchor[2] = node 9 (I)  (Start=50)
+
+FindLastAtOrBefore(strideIndex, range.Start=42) → hi = 1
+  (anchor[1].Start=30 <= 42;  anchor[2].Start=50 > 42)
+
+anchorIdx = Math.Max(0, hi) = 1  →  start walk from anchor[1] = node E
+
+Why starting from anchor[1] is safe:
+  Nodes A, B, C, D are before anchor[1] and unreachable by forward walk from E.
+  But by VPC.C.3: D.End=26 < E.Start=30 <= range.Start=42.
+  D.End < range.Start, so D cannot intersect [42, 80].
+  Same reasoning applies to C, B, A.
+
+Walk forward from anchor[1] = node E:
+  E  (30─31): Start=30 <= 80, Overlaps [42,80]?  NO  (End=31 < 42)
+  F  (35─36): NO  (End=36 < 42)
+  G  (40─41): NO  (End=41 < 42)
+  H  (45─46): Start=45 <= 80, Overlaps [42,80]?  YES  ✓
+  I  (50─51): YES  ✓
+  J  (55─56): YES  ✓
+  K  (60─61): YES  ✓
+  L  (65─66): YES  ✓
+  (end of list)
+```
+
+**Edge cases:**
+
+```
+hi = -1         →  all anchors start after range.Start; startNode = null
+                   walk from _list.First (full list walk)
+
+hi = 0          →  anchorIdx = Math.Max(0, 0) = 0
+                   walk from anchor[0]
+
+anchor unlinked →  anchorNode.List == null guard fires
+                   fall back to _list.First
+```
+
+---
+
+### Zero-Allocation Accessor Design
+
+Both strategies use the same `FindLastAtOrBefore` method despite operating on different element
+types. The element types differ in how the `Start.Value` key is extracted:
+
+```
+CachedSegment<TRange,TData>[]                 →  element.Range.Start.Value
+LinkedListNode<CachedSegment<TRange,TData>>[] →  element.Value.Range.Start.Value
+                                                        ^^^^^^
+                                                  one extra indirection
+```
+
+A delegate or virtual method would allocate on every call — unacceptable on the User Path hot
+path. Instead, the accessor is a **zero-size struct** implementing a protected interface. The JIT
+specialises the generic instantiation and inlines the key extraction to a single field load:
+
+```
+interface ISegmentAccessor<TElement> {        ← protected in SegmentStorageBase
+    TRange GetStartValue(TElement element);
+}
+
+struct DirectAccessor         : ISegmentAccessor<CachedSegment<>>
+    → element.Range.Start.Value               ← private nested struct in SnapshotAppendBufferStorage
+
+struct LinkedListNodeAccessor : ISegmentAccessor<LinkedListNode<CachedSegment<>>>
+    → element.Value.Range.Start.Value         ← private nested struct in LinkedListStrideIndexStorage
+
+FindLastAtOrBefore<TElement, TAccessor>(array, value, accessor = default)
+                             ^^^^^^^^^
+                             struct constraint → JIT specialises, inlines GetStartValue
+                             no heap allocation, no virtual dispatch
+```
+
+Each accessor is a private nested `readonly struct` inside the concrete strategy that owns it.
+`ISegmentAccessor<TElement>` is the only accessor-related type in `SegmentStorageBase` — the
+interface contract is shared, the implementations are not. Adding a new storage strategy means
+adding a new nested accessor struct in that strategy's file, with no changes to the base class.
+
+Callers pass `default(DirectAccessor)` or `default(LinkedListNodeAccessor)` — a zero-byte value
+that carries no state and costs nothing at runtime.
 
 ---
 
@@ -301,7 +535,7 @@ The append buffer is an internal optimization to defer sort-order maintenance. I
 
 ### Non-Merging Invariant
 
-Neither strategy ever merges two segments into one. When `Normalization` is mentioned above, it refers to rebuilding the sorted array or stride index — not merging segment data. Each segment created by the Background Path (from a `CacheNormalizationRequest.FetchedChunks` entry) retains its own identity, statistics, and position in the collection for its entire lifetime.
+Neither strategy ever merges two segments into one. When "normalization" is mentioned above, it refers to rebuilding the sorted array or stride index — not merging segment data. Each segment created by the Background Path (from a `CacheNormalizationRequest.FetchedChunks` entry) retains its own identity, statistics, and position in the collection for its entire lifetime.
 
 ---
 

@@ -189,18 +189,21 @@ Assert.Equal(expectedCount, cache.SegmentCount);
 - There is no contiguity requirement in VPC (contrast with SWC's Cache Contiguity Rule)
 - A point in the domain may be absent from `CachedSegments`; this is a valid cache state
 
-**VPC.C.2** [Architectural] **Segments are never merged**, even if two segments are adjacent or overlapping.
+**VPC.C.2** [Architectural] **Segments are never merged**, even if two segments are near-adjacent.
 
-- Two adjacent segments (where one ends exactly where another begins) remain as two distinct segments
+- Two segments whose ranges are consecutive in the domain (no shared point, no gap between them) remain as two distinct segments
 - Merging would reset the statistics of one of the segments and complicate eviction decisions
 - Each independently-fetched sub-range occupies its own permanent entry until evicted
 
-**VPC.C.3** [Architectural] **Overlapping segments are not permitted** in `CachedSegments`.
+**VPC.C.3** [Architectural] **No two segments may share any discrete domain point**.
 
 - Each point in the domain may be cached in at most one segment
-- Storing data for a range that overlaps with an existing segment is an implementation error
+- All VPC ranges use **closed boundaries** (`[start, end]`), so sharing a boundary value means sharing a discrete point — this is prohibited
+- Formally, for any two consecutive segments in sorted order: `End[i] < Start[i+1]` (strict inequality)
+- A corollary: `End[i] + 1 ≤ Start[i+1]` for integer-valued domains
+- Storing data for a range whose `[start, end]` overlaps or touches an existing segment's `[start, end]` is an implementation error
 
-**Rationale:** Overlapping segments would make assembly ambiguous and statistics tracking unreliable. Gap detection logic in the User Path assumes non-overlapping coverage.
+**Rationale:** Shared points would make assembly ambiguous and statistics tracking unreliable. Gap detection logic in the User Path assumes strictly disjoint coverage. The strict-inequality constraint (`End[i] < Start[i+1]`) is also relied upon by the storage layer: `FindIntersecting` uses it to prove that no segment before the binary-search anchor can intersect the query range (see `docs/visited-places/storage-strategies.md`).
 
 ### VPC.C.2 Assembly
 

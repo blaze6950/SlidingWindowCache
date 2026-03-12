@@ -19,6 +19,9 @@ namespace Intervals.NET.Caching.VisitedPlaces.Infrastructure.Storage;
 /// <item><description><see cref="IncrementCount"/> — protected helper for subclass <c>Add</c> methods</description></item>
 /// <item><description><see cref="Random"/> — per-instance <see cref="System.Random"/> for
 ///   <see cref="ISegmentStorage{TRange,TData}.TryGetRandomSegment"/> (Background Path only, no sync needed)</description></item>
+/// <item><description><see cref="FindLastAtOrBefore{TElement,TAccessor}"/> — shared zero-allocation binary search
+///   used by all strategies; each strategy provides its own <see cref="ISegmentAccessor{TElement}"/> implementation
+///   as a private nested struct</description></item>
 /// </list>
 /// <para><strong>Threading Contract for <c>_count</c>:</strong></para>
 /// <para>
@@ -102,5 +105,74 @@ internal abstract class SegmentStorageBase<TRange, TData> : ISegmentStorage<TRan
     protected void IncrementCount()
     {
         Interlocked.Increment(ref _count);
+    }
+
+    // -------------------------------------------------------------------------
+    // Shared binary search infrastructure
+    // -------------------------------------------------------------------------
+
+    /// <summary>
+    /// Zero-allocation accessor abstraction used by <see cref="FindLastAtOrBefore{TElement,TAccessor}"/>
+    /// to extract the <c>Range.Start.Value</c> key from an array element without delegate allocation.
+    /// Implement as a <see langword="readonly struct"/> nested inside the concrete storage class so
+    /// the JIT specialises and inlines the call, and so the implementation stays co-located with
+    /// the strategy that owns it.
+    /// </summary>
+    /// <typeparam name="TElement">The array element type.</typeparam>
+    protected interface ISegmentAccessor<in TElement>
+    {
+        /// <summary>Returns the <c>Range.Start.Value</c> of <paramref name="element"/>.</summary>
+        TRange GetStartValue(TElement element);
+    }
+
+    /// <summary>
+    /// Binary-searches <paramref name="array"/> for the rightmost element whose
+    /// <c>Range.Start.Value</c> is less than or equal to <paramref name="value"/>.
+    /// </summary>
+    /// <typeparam name="TElement">Array element type.</typeparam>
+    /// <typeparam name="TAccessor">
+    /// A <see langword="struct"/> implementing <see cref="ISegmentAccessor{TElement}"/>.
+    /// Passed as a value type so the JIT specialises and inlines the key extraction — no
+    /// delegate allocation, no virtual dispatch on the User Path hot path.
+    /// Each concrete storage strategy defines its own <typeparamref name="TAccessor"/> as a
+    /// private nested <see langword="readonly struct"/>.
+    /// </typeparam>
+    /// <param name="array">The sorted array to search (must be non-empty).</param>
+    /// <param name="value">The upper-bound value to compare each element's start against.</param>
+    /// <param name="accessor">The accessor instance (zero-size struct; use <c>default</c>).</param>
+    /// <returns>
+    /// The index of the rightmost element where <c>Start.Value &lt;= value</c>,
+    /// or <c>-1</c> if every element has a start greater than <paramref name="value"/>.
+    /// </returns>
+    /// <remarks>
+    /// <para><strong>Invariant:</strong> <paramref name="array"/> must be sorted ascending by
+    /// <c>Range.Start.Value</c> (guaranteed by Invariant VPC.C.3 — segments store no shared
+    /// discrete points and are stored in order).</para>
+    /// <para><strong>Complexity:</strong> O(log n).</para>
+    /// </remarks>
+    protected static int FindLastAtOrBefore<TElement, TAccessor>(
+        TElement[] array,
+        TRange value,
+        TAccessor accessor = default)
+        where TAccessor : struct, ISegmentAccessor<TElement>
+    {
+        var lo = 0;
+        var hi = array.Length - 1;
+
+        while (lo <= hi)
+        {
+            var mid = lo + (hi - lo) / 2;
+            if (accessor.GetStartValue(array[mid]).CompareTo(value) <= 0)
+            {
+                lo = mid + 1;
+            }
+            else
+            {
+                hi = mid - 1;
+            }
+        }
+
+        // hi is the rightmost index where Start.Value <= value, or -1 if none.
+        return hi;
     }
 }

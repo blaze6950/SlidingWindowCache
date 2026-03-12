@@ -99,8 +99,12 @@ internal sealed class LinkedListStrideIndexStorage<TRange, TData> : SegmentStora
     /// <para><strong>Algorithm (O(log(n/N) + k + N)):</strong></para>
     /// <list type="number">
     /// <item><description>Acquire stable stride index via <c>Volatile.Read</c></description></item>
-    /// <item><description>Binary-search stride index for the anchor just before <paramref name="range"/>.Start (via <see cref="FindLastAnchorAtOrBefore"/>)</description></item>
-    /// <item><description>Walk the list forward from the anchor node, collecting intersecting non-removed segments (checked via <see cref="CachedSegment{TRange,TData}.IsRemoved"/>)</description></item>
+    /// <item><description>Binary-search stride index for the rightmost anchor whose <c>Start &lt;= range.Start</c>
+    ///   via <see cref="SegmentStorageBase{TRange,TData}.FindLastAtOrBefore{TElement,TAccessor}"/> (Start.Value-based,
+    ///   shared with <see cref="SnapshotAppendBufferStorage{TRange,TData}"/>). No step-back needed:
+    ///   Invariant VPC.C.3 guarantees <c>End[i] &lt; Start[i+1]</c> (strict), so every segment before
+    ///   the anchor has <c>End &lt; anchor.Start &lt;= range.Start</c> and cannot intersect the query.</description></item>
+    /// <item><description>Walk the list forward from the anchor node, collecting intersecting non-removed segments</description></item>
     /// </list>
     /// </remarks>
     public override IReadOnlyList<CachedSegment<TRange, TData>> FindIntersecting(Range<TRange> range)
@@ -109,16 +113,18 @@ internal sealed class LinkedListStrideIndexStorage<TRange, TData> : SegmentStora
 
         var results = new List<CachedSegment<TRange, TData>>();
 
-        // Binary search: find the last anchor whose Start <= range.End, then step back one
-        // more to ensure we don't miss segments that start before range.Start but overlap it.
+        // Binary search: find the rightmost anchor whose Start <= range.Start.
+        // No step-back needed: VPC.C.3 guarantees End[i] < Start[i+1] (strict inequality),
+        // so all segments before anchor[hi] have End < anchor[hi].Start <= range.Start
+        // and therefore cannot intersect the query range.
+        // Uses Start.Value-based search (shared with SnapshotAppendBufferStorage via base class).
         LinkedListNode<CachedSegment<TRange, TData>>? startNode = null;
 
         if (strideIndex.Length > 0)
         {
-            var hi = FindLastAnchorAtOrBefore(strideIndex, range.End.Value);
+            var hi = FindLastAtOrBefore(strideIndex, range.Start.Value, default(LinkedListNodeAccessor));
 
-            // Step back one more so we don't miss segments whose start is before range.Start.
-            var anchorIdx = hi > 0 ? hi - 1 : 0;
+            var anchorIdx = Math.Max(0, hi);
             if (hi >= 0)
             {
                 var anchorNode = strideIndex[anchorIdx];
@@ -273,40 +279,6 @@ internal sealed class LinkedListStrideIndexStorage<TRange, TData> : SegmentStora
     }
 
     /// <summary>
-    /// Binary-searches the stride index for the rightmost anchor whose
-    /// <c>Range.Start.Value</c> is less than or equal to <paramref name="value"/>.
-    /// </summary>
-    /// <param name="strideIndex">The stride index to search (must be non-empty).</param>
-    /// <param name="value">The upper bound value to compare against each anchor's range start.</param>
-    /// <returns>
-    /// The index of the rightmost anchor where <c>Start.Value &lt;= value</c>,
-    /// or <c>-1</c> if all anchors have a start greater than <paramref name="value"/>.
-    /// </returns>
-    private static int FindLastAnchorAtOrBefore(
-        LinkedListNode<CachedSegment<TRange, TData>>[] strideIndex,
-        TRange value)
-    {
-        var lo = 0;
-        var hi = strideIndex.Length - 1;
-
-        while (lo <= hi)
-        {
-            var mid = lo + (hi - lo) / 2;
-            if (strideIndex[mid].Value.Range.Start.Value.CompareTo(value) <= 0)
-            {
-                lo = mid + 1;
-            }
-            else
-            {
-                hi = mid - 1;
-            }
-        }
-
-        // hi is the rightmost index where Start.Value <= value, or -1 if none.
-        return hi;
-    }
-
-    /// <summary>
     /// Inserts a segment into the linked list in sorted order by range start value,
     /// using the stride index for an O(log(n/N)) anchor lookup followed by an O(N) walk.
     /// </summary>
@@ -324,7 +296,7 @@ internal sealed class LinkedListStrideIndexStorage<TRange, TData> : SegmentStora
 
         if (strideIndex.Length > 0)
         {
-            var hi = FindLastAnchorAtOrBefore(strideIndex, segment.Range.Start.Value);
+            var hi = FindLastAtOrBefore(strideIndex, segment.Range.Start.Value, default(LinkedListNodeAccessor));
 
             if (hi >= 0)
             {
@@ -444,5 +416,19 @@ internal sealed class LinkedListStrideIndexStorage<TRange, TData> : SegmentStora
 
         // Reset the add counter.
         _addsSinceLastNormalization = 0;
+    }
+
+    /// <summary>
+    /// Zero-allocation accessor that extracts <c>Range.Start.Value</c> from a
+    /// <see cref="LinkedListNode{T}"/> whose value is a <see cref="CachedSegment{TRange,TData}"/>,
+    /// for use with <see cref="SegmentStorageBase{TRange,TData}.FindLastAtOrBefore{TElement,TAccessor}"/>.
+    /// </summary>
+    private readonly struct LinkedListNodeAccessor
+        : ISegmentAccessor<LinkedListNode<CachedSegment<TRange, TData>>>
+    {
+        [System.Runtime.CompilerServices.MethodImpl(
+            System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
+        public TRange GetStartValue(LinkedListNode<CachedSegment<TRange, TData>> element) =>
+            element.Value.Range.Start.Value;
     }
 }
