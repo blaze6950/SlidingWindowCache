@@ -128,8 +128,9 @@ public sealed class VisitedPlacesCacheInvariantTests : IAsyncDisposable
 
         // ASSERT — GetDataAsync should complete within reasonable time
         // The data source takes 200ms; if user path waited for background, it would be >= 200ms.
-        // We assert it completes in under 1 second (very generous — background path is asynchronous).
-        Assert.True(sw.ElapsedMilliseconds < 1000,
+        // We assert it completes in under 750ms (well above the 200ms data-source delay,
+        // well below any scheduler-induced background-wait that would indicate blocking).
+        Assert.True(sw.ElapsedMilliseconds < 750,
             $"GetDataAsync took {sw.ElapsedMilliseconds}ms — User Path must not block on Background Path.");
 
         Assert.Equal(10, result.Data.Length);

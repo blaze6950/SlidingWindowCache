@@ -167,13 +167,21 @@ if (Test-Path "./artifacts") {
     Remove-Item -Path "./artifacts" -Recurse -Force
 }
 dotnet pack $env:CORE_PROJECT_PATH --configuration Release --no-build --output ./artifacts
-dotnet pack $env:SWC_PROJECT_PATH --configuration Release --no-build --output ./artifacts
-dotnet pack $env:VPC_PROJECT_PATH --configuration Release --no-build --output ./artifacts
 if ($LASTEXITCODE -ne 0) {
-    Write-Host "? Package creation failed" -ForegroundColor Red
+    Write-Host "? Package creation failed (Core)" -ForegroundColor Red
     $failed = $true
 }
-else {
+dotnet pack $env:SWC_PROJECT_PATH --configuration Release --no-build --output ./artifacts
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "? Package creation failed (SlidingWindow)" -ForegroundColor Red
+    $failed = $true
+}
+dotnet pack $env:VPC_PROJECT_PATH --configuration Release --no-build --output ./artifacts
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "? Package creation failed (VisitedPlaces)" -ForegroundColor Red
+    $failed = $true
+}
+if (-not $failed) {
     $packages = Get-ChildItem -Path "./artifacts" -Filter "*.nupkg"
     Write-Host "? Packages created successfully" -ForegroundColor Green
     foreach ($pkg in $packages) {

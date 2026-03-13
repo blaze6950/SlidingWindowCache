@@ -132,7 +132,7 @@ internal sealed class BoundedSupersessionWorkScheduler<TWorkItem>
 
     private async Task ProcessWorkItemsAsync()
     {
-        await foreach (var workItem in _workChannel.Reader.ReadAllAsync())
+        await foreach (var workItem in _workChannel.Reader.ReadAllAsync().ConfigureAwait(false))
         {
             await ExecuteWorkItemCoreAsync(workItem).ConfigureAwait(false);
         }

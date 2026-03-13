@@ -41,8 +41,19 @@ public sealed class VisitedPlacesCacheOptionsBuilder<TRange, TData>
     /// Sets the background event channel capacity.
     /// Defaults to <see langword="null"/> (unbounded task-chaining scheduling).
     /// </summary>
+    /// <param name="capacity">The channel capacity. Must be &gt;= 1.</param>
+    /// <exception cref="ArgumentOutOfRangeException">
+    /// Thrown when <paramref name="capacity"/> is less than 1.
+    /// </exception>
     public VisitedPlacesCacheOptionsBuilder<TRange, TData> WithEventChannelCapacity(int capacity)
     {
+        if (capacity < 1)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(capacity),
+                "EventChannelCapacity must be greater than or equal to 1.");
+        }
+
         _eventChannelCapacity = capacity;
         return this;
     }

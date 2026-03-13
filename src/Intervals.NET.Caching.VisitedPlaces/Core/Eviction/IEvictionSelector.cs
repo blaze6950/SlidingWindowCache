@@ -104,7 +104,7 @@ public interface IEvictionSelector<TRange, TData>
      /// the next call, preventing the same segment from being selected twice.
      /// </para>
      /// <para>
-     /// The selector calls <see cref="ISegmentStorage{TRange,TData}.GetRandomSegment"/> up to
+     /// The selector calls <see cref="ISegmentStorage{TRange,TData}.TryGetRandomSegment"/> up to
      /// <c>SampleSize</c> times, skipping segments that are in <paramref name="immuneSegments"/>.
      /// </para>
      /// </remarks>

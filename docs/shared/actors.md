@@ -37,6 +37,7 @@ Every cache implementation in this solution has the following logical actor role
 
 The exact components that fill these roles differ between implementations. See:
 - `docs/sliding-window/actors.md` — SlidingWindow actor catalog and responsibilities
+- `docs/visited-places/actors.md` — VisitedPlaces actor catalog and responsibilities
 
 ---
 
@@ -54,3 +55,4 @@ Throughout the component docs, execution contexts are annotated as:
 
 - `docs/shared/architecture.md` — single-writer architecture rationale
 - `docs/sliding-window/actors.md` — SlidingWindow-specific actor responsibilities
+- `docs/visited-places/actors.md` — VisitedPlaces-specific actor responsibilities

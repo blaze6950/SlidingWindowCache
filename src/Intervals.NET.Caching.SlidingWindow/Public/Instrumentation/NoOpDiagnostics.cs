@@ -9,6 +9,11 @@ public sealed class NoOpDiagnostics : NoOpCacheDiagnostics, ISlidingWindowCacheD
     /// <summary>
     /// A shared singleton instance. Use this to avoid unnecessary allocations.
     /// </summary>
+    /// <remarks>
+    /// Shadows <see cref="NoOpCacheDiagnostics.Instance"/> to return the
+    /// SlidingWindow-specific <see cref="NoOpDiagnostics"/> type, which also implements
+    /// <see cref="ISlidingWindowCacheDiagnostics"/>.
+    /// </remarks>
     public new static readonly NoOpDiagnostics Instance = new();
 
     /// <inheritdoc/>

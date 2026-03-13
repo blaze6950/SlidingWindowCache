@@ -250,6 +250,11 @@ internal sealed class SnapshotAppendBufferStorage<TRange, TData> : SegmentStorag
 
         // Atomically publish the new snapshot FIRST (release fence — User Path reads with acquire fence)
         // Must happen before resetting _appendCount so User Path never sees count==0 with the old snapshot.
+        // NOTE: There is a brief window between publishing the snapshot and resetting _appendCount
+        // where a concurrent User Path could read the new snapshot but also count the same newly-appended
+        // segments via the append buffer (i.e. see them twice). This is an accepted design tradeoff:
+        // over-counting is harmless (TryGetRandomSegment skips IsRemoved segments), and the window
+        // closes as soon as _appendCount is reset below.
         Volatile.Write(ref _snapshot, merged);
 
         // Reset append buffer — after snapshot publication

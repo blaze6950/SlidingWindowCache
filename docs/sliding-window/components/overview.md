@@ -5,9 +5,9 @@
 This folder documents the internal component set of the Sliding Window Cache. It is intentionally split by responsibility and execution context to avoid a single mega-document.
 
 The library is organized across two packages:
-- **`Intervals.NET.Caching`** — shared contracts and infrastructure (`IRangeCache`, `IDataSource`, `LayeredRangeCache`, `RangeCacheDataSourceAdapter`, `LayeredRangeCacheBuilder`, `GetDataAndWaitForIdleAsync`, `AsyncActivityCounter`, `WorkSchedulerBase`)
 - **`Intervals.NET.Caching.SlidingWindow`** — sliding-window cache implementation (`SlidingWindowCache`, `ISlidingWindowCache`, builders, `GetDataAndWaitOnMissAsync`)
-- **`Intervals.NET.Caching.VisitedPlaces`** — scaffold only; random-access optimized cache, not yet implemented
+- **`Intervals.NET.Caching.VisitedPlaces`** — visited places cache implementation (`VisitedPlacesCache`, `IVisitedPlacesCache`, builders, eviction policies and selectors, TTL)
+- **`Intervals.NET.Caching`** (not a package) — shared contracts and infrastructure (`IRangeCache`, `IDataSource`, `LayeredRangeCache`, `RangeCacheDataSourceAdapter`, `LayeredRangeCacheBuilder`, `GetDataAndWaitForIdleAsync`, `AsyncActivityCounter`, `WorkSchedulerBase`)
 
 ## Motivation
 
@@ -33,7 +33,7 @@ The system is easier to reason about when components are grouped by:
 - User Path: assembles requested data and publishes intent
 - Intent loop: observes latest intent and runs analytical validation
 - Execution: performs debounced, cancellable rebalance work and mutates cache state
-- Work scheduler (shared): `WorkSchedulerBase<TWorkItem>` — cache-agnostic abstract base; holds shared execution pipeline (debounce → cancellation → executor delegate → diagnostics → cleanup); concrete subclasses are `UnboundedSerialWorkScheduler<TWorkItem>` (default, task-chaining) and `BoundedSerialWorkScheduler<TWorkItem>` (bounded channel with backpressure)
+- Work scheduler (shared): `WorkSchedulerBase<TWorkItem>` — cache-agnostic abstract base; holds shared execution pipeline (debounce → cancellation → executor delegate → diagnostics → cleanup); for SlidingWindowCache the concrete subclasses are `UnboundedSupersessionWorkScheduler<TWorkItem>` (default, latest-wins task-chaining) and `BoundedSupersessionWorkScheduler<TWorkItem>` (bounded channel with latest-wins supersession); `UnboundedSerialWorkScheduler<TWorkItem>` and `BoundedSerialWorkScheduler<TWorkItem>` are also available and used by VisitedPlacesCache
 
 ### Component Index
 
@@ -61,8 +61,8 @@ The system is easier to reason about when components are grouped by:
     ├── 🟦 CacheState<TRange, TData, TDomain>              ⚠️ Shared Mutable
     ├── 🟦 IntentController<TRange, TData, TDomain>
     │   └── uses → 🟧 IWorkScheduler<ExecutionRequest<TRange, TData, TDomain>>
-    │       ├── implements → 🟦 UnboundedSerialWorkScheduler<TWorkItem> (default, task-chaining)
-    │       └── implements → 🟦 BoundedSerialWorkScheduler<TWorkItem> (optional, bounded channel)
+    │       ├── implements → 🟦 UnboundedSupersessionWorkScheduler<TWorkItem> (default, latest-wins task-chaining)
+    │       └── implements → 🟦 BoundedSupersessionWorkScheduler<TWorkItem> (optional, bounded channel with supersession)
     ├── 🟦 RebalanceDecisionEngine<TRange, TDomain>
     │   ├── owns → 🟦 NoRebalanceSatisfactionPolicy<TRange>
     │   └── owns → 🟦 ProportionalRangePlanner<TRange, TDomain>
@@ -75,17 +75,29 @@ The system is easier to reason about when components are grouped by:
 🟦 WorkSchedulerBase<TWorkItem>   [Abstract base — cache-agnostic]
 │  where TWorkItem : class, ISchedulableWorkItem
 │  Injects: executor delegate, debounce provider delegate, IWorkSchedulerDiagnostics, AsyncActivityCounter
-│  Implements: LastWorkItem, StoreLastWorkItem()
-│              ExecuteWorkItemCoreAsync() (shared debounce + execute pipeline)
+│  Implements: ExecuteWorkItemCoreAsync() (shared debounce + execute pipeline)
 │              DisposeAsync() (idempotent guard + cancel + DisposeAsyncCore)
 │  Abstract: PublishWorkItemAsync(...), DisposeAsyncCore()
 │
-├── implements → 🟦 UnboundedSerialWorkScheduler<TWorkItem> (default)
+├── implements → 🟦 SupersessionWorkSchedulerBase<TWorkItem>   [Abstract — latest-wins]
+│   │  Adds: LastWorkItem, StoreLastWorkItem() (supersession / latest-wins tracking)
+│   │
+│   ├── implements → 🟦 UnboundedSupersessionWorkScheduler<TWorkItem> (default for SlidingWindowCache)
+│   │                  Adds: lock-free task chain (_currentExecutionTask)
+│   │                  Overrides: PublishWorkItemAsync → stores latest + chains new task
+│   │                             DisposeAsyncCore → awaits task chain
+│   │
+│   └── implements → 🟦 BoundedSupersessionWorkScheduler<TWorkItem> (optional for SlidingWindowCache)
+│                      Adds: BoundedChannel<TWorkItem>, background loop task
+│                      Overrides: PublishWorkItemAsync → stores latest + writes to channel
+│                                 DisposeAsyncCore → completes channel + awaits loop
+│
+├── implements → 🟦 UnboundedSerialWorkScheduler<TWorkItem> (used by VisitedPlacesCache)
 │                  Adds: lock-free task chain (_currentExecutionTask)
 │                  Overrides: PublishWorkItemAsync → chains new task
 │                             DisposeAsyncCore → awaits task chain
 │
-└── implements → 🟦 BoundedSerialWorkScheduler<TWorkItem> (optional)
+└── implements → 🟦 BoundedSerialWorkScheduler<TWorkItem> (optional for VisitedPlacesCache)
                    Adds: BoundedChannel<TWorkItem>, background loop task
                    Overrides: PublishWorkItemAsync → writes to channel
                               DisposeAsyncCore → completes channel + awaits loop
@@ -220,17 +232,17 @@ The system is easier to reason about when components are grouped by:
 └────────────────────────────────────────────────────────────────────────────┘
                                       │
                                       ▼
-┌────────────────────────────────────────────────────────────────────────────┐
-│ IWorkScheduler<ExecutionRequest<...>>  [EXECUTION SERIALIZATION]           │
-│                                                                            │
-│ Strategies:                                                                │
-│  • Task chaining (lock-free) — UnboundedSerialWorkScheduler              │
-│  • Channel<ExecutionRequest> (bounded) — BoundedSerialWorkScheduler      │
-│                                                                            │
-│ Execution flow:                                                            │
-│  1. Debounce delay (cancellable)                                           │
-│  2. Call RebalanceExecutor.ExecuteAsync(...)                               │
-└────────────────────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────────────────────────┐
+│ IWorkScheduler<ExecutionRequest<...>>  [EXECUTION SERIALIZATION]                        │
+│                                                                                         │
+│ Strategies:                                                                             │
+│  • Task chaining (lock-free, latest-wins) — UnboundedSupersessionWorkScheduler          │
+│  • Channel<ExecutionRequest> (bounded, latest-wins) — BoundedSupersessionWorkScheduler  │
+│                                                                                         │
+│ Execution flow:                                                                         │
+│  1. Debounce delay (cancellable)                                                        │
+│  2. Call RebalanceExecutor.ExecuteAsync(...)                                            │
+└─────────────────────────────────────────────────────────────────────────────────────────┘
                                       │
                                       ▼
 ┌────────────────────────────────────────────────────────────────────────────┐
@@ -248,23 +260,23 @@ The system is easier to reason about when components are grouped by:
 └────────────────────────────────────────────────────────────────────────────┘
                                       │
                                       ▼
-┌────────────────────────────────────────────────────────────────────────────┐
-│ CacheState  [SHARED MUTABLE STATE]                                         │
-│                                                                            │
-│ Written by:  RebalanceExecutor (sole writer)                               │
-│ Read by:     UserRequestHandler, DecisionEngine, IntentController          │
-│                                                                            │
-│ ICacheStorage implementations:                                             │
-│  • SnapshotReadStorage   (array — zero-alloc reads)                        │
-│  • CopyOnReadStorage     (List — cheap writes)                             │
-│                                                                            │
-│ RuntimeCacheOptionsHolder  [SHARED RUNTIME CONFIGURATION]                  │
-│                                                                            │
-│ Written by:  SlidingWindowCache.UpdateRuntimeOptions (Volatile.Write)      │
-│ Read by:     ProportionalRangePlanner, NoRebalanceRangePlanner,            │
-│              UnboundedSerialWorkScheduler (via debounce provider delegate),
-│              BoundedSerialWorkScheduler (via debounce provider delegate)    │
-└────────────────────────────────────────────────────────────────────────────┘
+┌───────────────────────────────────────────────────────────────────────────────────┐
+│ CacheState  [SHARED MUTABLE STATE]                                                │
+│                                                                                   │
+│ Written by:  RebalanceExecutor (sole writer)                                      │
+│ Read by:     UserRequestHandler, DecisionEngine, IntentController                 │
+│                                                                                   │
+│ ICacheStorage implementations:                                                    │
+│  • SnapshotReadStorage   (array — zero-alloc reads)                               │
+│  • CopyOnReadStorage     (List — cheap writes)                                    │
+│                                                                                   │
+│ RuntimeCacheOptionsHolder  [SHARED RUNTIME CONFIGURATION]                         │
+│                                                                                   │
+│ Written by:  SlidingWindowCache.UpdateRuntimeOptions (Volatile.Write)             │
+│ Read by:     ProportionalRangePlanner, NoRebalanceRangePlanner,                   │
+│              UnboundedSupersessionWorkScheduler (via debounce provider delegate), │
+│              BoundedSupersessionWorkScheduler (via debounce provider delegate)    │
+└───────────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ## Invariant Implementation Mapping
@@ -310,8 +322,8 @@ Only `UserRequestHandler` has access to `IntentController.PublishIntent`. Its sc
 `UserRequestHandler` publishes intent and returns immediately (fire-and-forget). `IWorkScheduler<ExecutionRequest<...>>` schedules execution via task chaining or channels. User thread and ThreadPool thread contexts are separated.
 
 - `src/Intervals.NET.Caching.SlidingWindow/Core/Rebalance/Intent/IntentController.cs` — `ProcessIntentsAsync` runs on background thread
-- `src/Intervals.NET.Caching/Infrastructure/Scheduling/UnboundedSerialWorkScheduler.cs` — task-chaining serialization
-- `src/Intervals.NET.Caching/Infrastructure/Scheduling/BoundedSerialWorkScheduler.cs` — channel-based background execution
+- `src/Intervals.NET.Caching/Infrastructure/Scheduling/Supersession/UnboundedSupersessionWorkScheduler.cs` — latest-wins task-chaining serialization
+- `src/Intervals.NET.Caching/Infrastructure/Scheduling/Supersession/BoundedSupersessionWorkScheduler.cs` — channel-based background execution with supersession
 
 ### Atomic Cache Updates
 **Invariants**: SWC.B.2, SWC.B.3

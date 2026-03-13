@@ -89,6 +89,11 @@ internal abstract class WorkSchedulerBase<TWorkItem> : IWorkScheduler<TWorkItem>
         IWorkSchedulerDiagnostics diagnostics,
         AsyncActivityCounter activityCounter)
     {
+        ArgumentNullException.ThrowIfNull(executor);
+        ArgumentNullException.ThrowIfNull(debounceProvider);
+        ArgumentNullException.ThrowIfNull(diagnostics);
+        ArgumentNullException.ThrowIfNull(activityCounter);
+
         Executor = executor;
         DebounceProvider = debounceProvider;
         Diagnostics = diagnostics;

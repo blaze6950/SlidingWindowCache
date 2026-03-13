@@ -138,6 +138,8 @@ public sealed class LayeredRangeCacheBuilder<TRange, TData, TDomain>
         {
             // Dispose all successfully created layers to prevent resource leaks
             // if a factory throws partway through construction.
+            // Note: sync-over-async here is intentional — this is error-path cleanup
+            // inside a synchronous Build() method; there is no ambient async context.
             foreach (var cache in caches)
             {
                 cache.DisposeAsync().AsTask().GetAwaiter().GetResult();

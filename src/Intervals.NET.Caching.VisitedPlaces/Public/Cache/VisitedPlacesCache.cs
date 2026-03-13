@@ -36,7 +36,7 @@ namespace Intervals.NET.Caching.VisitedPlaces.Public.Cache;
 /// Two logical threads: the User Thread (serves requests) and the Background Storage Loop
 /// (processes events, adds to storage, executes eviction). The User Path is strictly read-only
 /// (Invariant VPC.A.10). TTL expirations run concurrently on the ThreadPool and use atomic
-/// operations (<see cref="CachedSegment{TRange,TData}.MarkAsRemoved()"/>) to coordinate
+/// operations (<see cref="CachedSegment{TRange,TData}.TryMarkAsRemoved()"/>) to coordinate
 /// removal with the Background Storage Loop.
 /// </para>
 /// <para><strong>Consistency Modes:</strong></para>
@@ -144,18 +144,19 @@ public sealed class VisitedPlacesCache<TRange, TData, TDomain>
         // Scheduler: serializes background events without delay (debounce = zero).
         // When EventChannelCapacity is null, use unbounded serial scheduler (default).
         // When EventChannelCapacity is set, use bounded serial scheduler with backpressure.
-        ISerialWorkScheduler<CacheNormalizationRequest<TRange, TData>> scheduler = options.EventChannelCapacity is { } capacity
-            ? new BoundedSerialWorkScheduler<CacheNormalizationRequest<TRange, TData>>(
-                executor: (evt, ct) => executor.ExecuteAsync(evt, ct),
-                debounceProvider: static () => TimeSpan.Zero,
-                diagnostics: schedulerDiagnostics,
-                activityCounter: _activityCounter,
-                capacity: capacity)
-            : new UnboundedSerialWorkScheduler<CacheNormalizationRequest<TRange, TData>>(
-                executor: (evt, ct) => executor.ExecuteAsync(evt, ct),
-                debounceProvider: static () => TimeSpan.Zero,
-                diagnostics: schedulerDiagnostics,
-                activityCounter: _activityCounter);
+        ISerialWorkScheduler<CacheNormalizationRequest<TRange, TData>> scheduler =
+            options.EventChannelCapacity is { } capacity
+                ? new BoundedSerialWorkScheduler<CacheNormalizationRequest<TRange, TData>>(
+                    executor: (evt, ct) => executor.ExecuteAsync(evt, ct),
+                    debounceProvider: static () => TimeSpan.Zero,
+                    diagnostics: schedulerDiagnostics,
+                    activityCounter: _activityCounter,
+                    capacity: capacity)
+                : new UnboundedSerialWorkScheduler<CacheNormalizationRequest<TRange, TData>>(
+                    executor: (evt, ct) => executor.ExecuteAsync(evt, ct),
+                    debounceProvider: static () => TimeSpan.Zero,
+                    diagnostics: schedulerDiagnostics,
+                    activityCounter: _activityCounter);
 
         // User request handler: read-only User Path, publishes events to the scheduler.
         _userRequestHandler = new UserRequestHandler<TRange, TData, TDomain>(

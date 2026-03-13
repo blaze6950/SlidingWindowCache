@@ -22,7 +22,7 @@ namespace Intervals.NET.Caching.VisitedPlaces.Infrastructure.Storage;
 /// <para>
 /// Rather than maintaining a separate <c>_softDeleted</c> collection, this implementation uses
 /// <see cref="CachedSegment{TRange,TData}.IsRemoved"/> as the primary soft-delete filter.
-/// The flag is set atomically by <see cref="CachedSegment{TRange,TData}.MarkAsRemoved"/>.
+/// The flag is set atomically by <see cref="CachedSegment{TRange,TData}.TryMarkAsRemoved"/>.
 /// Removed nodes are physically unlinked from <c>_list</c> during <see cref="NormalizeStrideIndex"/>,
 /// but only AFTER the new stride index is published (to preserve list integrity for any
 /// concurrent User Path walk still using the old stride index).
@@ -467,8 +467,12 @@ internal sealed class LinkedListStrideIndexStorage<TRange, TData> : SegmentStora
             node = next;
         }
 
-        // Reset the add counter.
-        _addsSinceLastNormalization = 0;
+        // Reset the add counter — always runs, even if unlink loop throws.
+        try { }
+        finally
+        {
+            _addsSinceLastNormalization = 0;
+        }
     }
 
     /// <summary>

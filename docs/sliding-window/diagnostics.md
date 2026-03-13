@@ -1,21 +1,33 @@
 # Diagnostics — SlidingWindow Cache
 
-For the shared diagnostics pattern (two-tier design, zero-cost abstraction, `RebalanceExecutionFailed` critical requirement), see `docs/shared/diagnostics.md`. This document covers the `ICacheDiagnostics` interface, all 18 events, and SWC-specific usage patterns.
+For the shared diagnostics pattern (two-tier design, zero-cost abstraction, `BackgroundOperationFailed` critical requirement), see `docs/shared/diagnostics.md`. This document covers the two-level diagnostics hierarchy, all 18 events (5 shared + 13 SWC-specific), and SWC-specific usage patterns.
 
 ---
 
-## Interface: `ICacheDiagnostics`
+## Interfaces: `ICacheDiagnostics` and `ISlidingWindowCacheDiagnostics`
+
+The diagnostics system uses a two-level hierarchy. The shared `ICacheDiagnostics` interface (in `Intervals.NET.Caching`) defines 5 events common to all cache implementations. `ISlidingWindowCacheDiagnostics` (in `Intervals.NET.Caching.SlidingWindow`) extends it with 13 SWC-specific events.
 
 ```csharp
+// Shared foundation — Intervals.NET.Caching
 public interface ICacheDiagnostics
 {
     // User Path Events
     void UserRequestServed();
-    void CacheExpanded();
-    void CacheReplaced();
     void UserRequestFullCacheHit();
     void UserRequestPartialCacheHit();
     void UserRequestFullCacheMiss();
+
+    // Failure Events
+    void BackgroundOperationFailed(Exception ex);
+}
+
+// SlidingWindow-specific — Intervals.NET.Caching.SlidingWindow
+public interface ISlidingWindowCacheDiagnostics : ICacheDiagnostics
+{
+    // User Path Events (SWC-specific)
+    void CacheExpanded();
+    void CacheReplaced();
 
     // Data Source Access Events
     void DataSourceFetchSingleRange();
@@ -35,9 +47,6 @@ public interface ICacheDiagnostics
     void RebalanceSkippedPendingNoRebalanceRange();   // Stage 2: pending NoRebalanceRange
     void RebalanceSkippedSameRange();                 // Stage 4: desired == current range
     void RebalanceScheduled();                        // Stage 5: execution scheduled
-
-    // Failure Events
-    void RebalanceExecutionFailed(Exception ex);
 }
 ```
 
@@ -66,11 +75,11 @@ Console.WriteLine($"Rebalances: {diagnostics.RebalanceExecutionCompleted}");
 Features:
 - Thread-safe (`Interlocked.Increment`)
 - Low overhead (~1–5 ns per event)
-- Read-only properties for all 18 counters
+- Read-only properties for all 18 counters (5 shared + 13 SWC-specific)
 - `Reset()` method for test isolation
 - Instance-based (multiple caches can have separate diagnostics)
 
-**WARNING**: The default `EventCounterCacheDiagnostics` implementation of `RebalanceExecutionFailed` only writes to Debug output. For production use, you MUST create a custom implementation that logs to your logging infrastructure. See `docs/shared/diagnostics.md` for requirements.
+**WARNING**: The default `EventCounterCacheDiagnostics` implementation of `BackgroundOperationFailed` only writes to Debug output. For production use, you MUST create a custom implementation that logs to your logging infrastructure. See `docs/shared/diagnostics.md` for requirements.
 
 ### `NoOpDiagnostics` — Zero-Cost Implementation
 
@@ -79,7 +88,7 @@ Empty implementation with no-op methods that the JIT eliminates completely. Auto
 ### Custom Implementations
 
 ```csharp
-public class PrometheusMetricsDiagnostics : ICacheDiagnostics
+public class PrometheusMetricsDiagnostics : ISlidingWindowCacheDiagnostics
 {
     private readonly Counter _requestsServed;
     private readonly Counter _cacheHits;
@@ -269,26 +278,6 @@ Assert.Equal(1, diagnostics.RebalanceIntentPublished);
 
 ---
 
-#### `RebalanceIntentCancelled()`
-**Tracks:** Intent cancellation before or during execution  
-**Location:** `IntentController.ProcessIntentsAsync` (background loop — when new intent supersedes pending intent)  
-**Context:** Background Thread (Intent Processing Loop)  
-**Invariants:** SWC.A.2 (User Path priority), SWC.A.2a (User cancels rebalance), SWC.C.4 (Obsolete intent doesn't start)
-
-```csharp
-var options = new SlidingWindowCacheOptions(debounceDelay: TimeSpan.FromSeconds(1));
-var cache = TestHelpers.CreateCache(domain, diagnostics, options);
-
-var task1 = cache.GetDataAsync(Range.Closed(100, 200), ct);
-var task2 = cache.GetDataAsync(Range.Closed(300, 400), ct);  // cancels previous
-
-await Task.WhenAll(task1, task2);
-await cache.WaitForIdleAsync();
-Assert.True(diagnostics.RebalanceIntentCancelled >= 1);
-```
-
----
-
 ### Rebalance Execution Lifecycle Events
 
 #### `RebalanceExecutionStarted()`
@@ -336,7 +325,7 @@ Assert.True(diagnostics.RebalanceExecutionCancelled >= 1);
 
 ---
 
-#### `RebalanceExecutionFailed(Exception ex)` — CRITICAL
+#### `BackgroundOperationFailed(Exception ex)` — CRITICAL
 
 **Tracks:** Rebalance execution failure due to exception  
 **Location:** `RebalanceExecutor.ExecuteAsync` (catch `Exception`)
@@ -349,7 +338,7 @@ Assert.True(diagnostics.RebalanceExecutionCancelled >= 1);
 - Cache stops rebalancing with no indication
 
 ```csharp
-public void RebalanceExecutionFailed(Exception ex)
+public void BackgroundOperationFailed(Exception ex)
 {
     _logger.LogError(ex,
         "Cache rebalance execution failed. Cache will continue serving user requests " +
@@ -399,8 +388,8 @@ Assert.True(diagnostics.RebalanceSkippedPendingNoRebalanceRange >= 1);
 
 #### `RebalanceSkippedSameRange()`
 **Tracks:** Rebalance skipped because desired cache range equals current cache range  
-**Location:** `RebalanceDecisionEngine.Evaluate` (Stage 4 early exit)  
-**Context:** Background Thread (Rebalance Execution)  
+**Location:** `IntentController.RecordDecisionOutcome` (Intent Processing Loop, Stage 4 early exit from `RebalanceDecisionEngine`)  
+**Context:** Background Thread (Intent Processing Loop)  
 **Scenarios:** D2 (`DesiredCacheRange == CurrentCacheRange`)  
 **Invariants:** SWC.D.4, SWC.C.8c
 
@@ -474,10 +463,10 @@ public static void AssertPartialCacheHit(EventCounterCacheDiagnostics d, int exp
 
 ## Performance Considerations
 
-| Implementation | Per-Event Cost | Memory |
-|---|---|---|
-| `EventCounterCacheDiagnostics` | ~1–5 ns (`Interlocked.Increment`, no alloc) | 72 bytes (18 integers) |
-| `NoOpDiagnostics` | Zero (JIT-eliminated) | 0 bytes |
+| Implementation                 | Per-Event Cost                              | Memory                                             |
+|--------------------------------|---------------------------------------------|----------------------------------------------------|
+| `EventCounterCacheDiagnostics` | ~1–5 ns (`Interlocked.Increment`, no alloc) | 72 bytes (18 integers: 5 shared + 13 SWC-specific) |
+| `NoOpDiagnostics`              | Zero (JIT-eliminated)                       | 0 bytes                                            |
 
 Recommendation:
 - **Development/Testing**: Always use `EventCounterCacheDiagnostics`
@@ -506,16 +495,16 @@ Omit the second argument (or pass `null`) to use the default `NoOpDiagnostics` f
 
 ### What Each Layer's Diagnostics Report
 
-| Event | Meaning in a layered context |
-|---|---|
-| `UserRequestServed` | A request was served by **this layer** (whether from cache or via adapter) |
-| `UserRequestFullCacheHit` | The request was served entirely from **this layer's** window |
-| `UserRequestPartialCacheHit` | This layer partially served the request; the rest was fetched from the layer below |
-| `UserRequestFullCacheMiss` | This layer had no data; the full request was delegated to the layer below |
-| `DataSourceFetchSingleRange` | This layer called the layer below (via the adapter) for a single range |
-| `DataSourceFetchMissingSegments` | This layer called the layer below for gap-filling segments only |
-| `RebalanceExecutionCompleted` | This layer completed a background rebalance (window expansion/shrink) |
-| `RebalanceSkippedCurrentNoRebalanceRange` | This layer's rebalance was skipped — still within its stability zone |
+| Event                                     | Meaning in a layered context                                                       |
+|-------------------------------------------|------------------------------------------------------------------------------------|
+| `UserRequestServed`                       | A request was served by **this layer** (whether from cache or via adapter)         |
+| `UserRequestFullCacheHit`                 | The request was served entirely from **this layer's** window                       |
+| `UserRequestPartialCacheHit`              | This layer partially served the request; the rest was fetched from the layer below |
+| `UserRequestFullCacheMiss`                | This layer had no data; the full request was delegated to the layer below          |
+| `DataSourceFetchSingleRange`              | This layer called the layer below (via the adapter) for a single range             |
+| `DataSourceFetchMissingSegments`          | This layer called the layer below for gap-filling segments only                    |
+| `RebalanceExecutionCompleted`             | This layer completed a background rebalance (window expansion/shrink)              |
+| `RebalanceSkippedCurrentNoRebalanceRange` | This layer's rebalance was skipped — still within its stability zone               |
 
 ### Detecting Cascading Rebalances
 
@@ -556,7 +545,7 @@ var dataSourceFetches = lInnerDiagnostics.DataSourceFetchMissingSegments
 
 ### Production Guidance for Layered Caches
 
-- Always handle `RebalanceExecutionFailed` on each layer independently.
+- Always handle `BackgroundOperationFailed` on each layer independently.
 - Use separate `EventCounterCacheDiagnostics` instances per layer during development and staging.
 - Layer diagnostics are completely independent — there is no aggregate or combined diagnostics object.
 
@@ -564,7 +553,7 @@ var dataSourceFetches = lInnerDiagnostics.DataSourceFetchMissingSegments
 
 ## See Also
 
-- `docs/shared/diagnostics.md` — shared diagnostics pattern, `RebalanceExecutionFailed` production requirements
+- `docs/shared/diagnostics.md` — shared diagnostics pattern, `BackgroundOperationFailed` production requirements
 - `docs/sliding-window/invariants.md` — invariants tracked by diagnostics events
 - `docs/sliding-window/scenarios.md` — user/decision/rebalance scenarios referenced in event descriptions
 - `docs/sliding-window/components/overview.md` — component locations where events are recorded

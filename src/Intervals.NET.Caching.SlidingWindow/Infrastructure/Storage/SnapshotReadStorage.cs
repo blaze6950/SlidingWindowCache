@@ -76,7 +76,10 @@ internal sealed class SnapshotReadStorage<TRange, TData, TDomain> : ICacheStorag
             return ReadOnlyMemory<TData>.Empty;
         }
 
-        // Calculate the offset and length for the requested range
+        // Calculate the offset and length for the requested range.
+        // Note: if `range` extends outside the stored `Range`, `startOffset` or the derived
+        // array slice may be out of bounds. The caller (UserRequestHandler) is responsible for
+        // ensuring that only ranges fully contained within Range are passed here.
         var startOffset = _domain.Distance(Range.Start.Value, range.Start.Value);
         var length = (int)range.Span(_domain);
 

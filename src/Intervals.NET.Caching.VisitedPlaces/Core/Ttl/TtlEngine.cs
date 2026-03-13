@@ -65,8 +65,8 @@ namespace Intervals.NET.Caching.VisitedPlaces.Core.Ttl;
 /// <para>
 /// Unlike <see cref="EvictionEngine{TRange,TData}"/>, <see cref="TtlEngine{TRange,TData}"/>
 /// does hold a reference to storage (passed through to the internal executor). TTL is a
-/// background actor permitted to call <c>storage.Remove</c>; thread safety is guaranteed by
-/// <see cref="CachedSegment{TRange,TData}.MarkAsRemoved()"/> (Interlocked.CompareExchange).
+/// background actor permitted to call <c>storage.TryRemove</c>; thread safety is guaranteed by
+/// <see cref="CachedSegment{TRange,TData}.TryMarkAsRemoved()"/> (Interlocked.CompareExchange).
 /// </para>
 /// <para>Alignment: Invariants VPC.T.1, VPC.T.2, VPC.T.3, VPC.T.4.</para>
 /// </remarks>
@@ -74,6 +74,7 @@ internal sealed class TtlEngine<TRange, TData> : IAsyncDisposable
     where TRange : IComparable<TRange>
 {
     private readonly TimeSpan _segmentTtl;
+    private readonly TimeProvider _timeProvider;
     private readonly IWorkScheduler<TtlExpirationWorkItem<TRange, TData>> _scheduler;
     private readonly AsyncActivityCounter _activityCounter;
     private readonly CancellationTokenSource _disposalCts;
@@ -89,7 +90,7 @@ internal sealed class TtlEngine<TRange, TData> : IAsyncDisposable
     /// </param>
     /// <param name="storage">
     /// The segment storage. Passed through to <see cref="TtlExpirationExecutor{TRange,TData}"/>;
-    /// <c>Remove</c> is called after the TTL delay elapses.
+    /// <see cref="ISegmentStorage{TRange,TData}.TryRemove"/> is called after the TTL delay elapses.
     /// </param>
     /// <param name="evictionEngine">
     /// The eviction engine. Passed through to <see cref="TtlExpirationExecutor{TRange,TData}"/>;
@@ -97,6 +98,11 @@ internal sealed class TtlEngine<TRange, TData> : IAsyncDisposable
     /// aggregates consistent.
     /// </param>
     /// <param name="diagnostics">Diagnostics sink; must never throw.</param>
+    /// <param name="timeProvider">
+    /// Optional time provider for computing expiration timestamps. Defaults to
+    /// <see cref="TimeProvider.System"/> when <see langword="null"/>. Supply a fake
+    /// <see cref="TimeProvider"/> in tests to control time deterministically.
+    /// </param>
     /// <exception cref="ArgumentNullException">
     /// Thrown when <paramref name="storage"/>, <paramref name="evictionEngine"/>, or
     /// <paramref name="diagnostics"/> is <see langword="null"/>.
@@ -105,18 +111,20 @@ internal sealed class TtlEngine<TRange, TData> : IAsyncDisposable
         TimeSpan segmentTtl,
         ISegmentStorage<TRange, TData> storage,
         EvictionEngine<TRange, TData> evictionEngine,
-        IVisitedPlacesCacheDiagnostics diagnostics)
+        IVisitedPlacesCacheDiagnostics diagnostics,
+        TimeProvider? timeProvider = null)
     {
         ArgumentNullException.ThrowIfNull(storage);
         ArgumentNullException.ThrowIfNull(evictionEngine);
         ArgumentNullException.ThrowIfNull(diagnostics);
 
         _segmentTtl = segmentTtl;
+        _timeProvider = timeProvider ?? TimeProvider.System;
         _diagnostics = diagnostics;
         _disposalCts = new CancellationTokenSource();
         _activityCounter = new AsyncActivityCounter();
 
-        var executor = new TtlExpirationExecutor<TRange, TData>(storage, evictionEngine, diagnostics);
+        var executor = new TtlExpirationExecutor<TRange, TData>(storage, evictionEngine, diagnostics, _timeProvider);
 
         _scheduler = new ConcurrentWorkScheduler<TtlExpirationWorkItem<TRange, TData>>(
             executor: (workItem, ct) => executor.ExecuteAsync(workItem, ct),
@@ -133,7 +141,7 @@ internal sealed class TtlEngine<TRange, TData> : IAsyncDisposable
     /// <returns>A <see cref="ValueTask"/> that completes when the work item has been enqueued.</returns>
     /// <remarks>
     /// <para>
-    /// Computes the absolute expiry time as <c>DateTimeOffset.UtcNow + SegmentTtl</c> and embeds
+    /// Computes the absolute expiry time as <c>TimeProvider.GetUtcNow() + SegmentTtl</c> and embeds
     /// the shared disposal <see cref="CancellationToken"/> into the work item so that a single
     /// <c>CancelAsync()</c> call during disposal simultaneously aborts all pending delays.
     /// </para>
@@ -147,7 +155,7 @@ internal sealed class TtlEngine<TRange, TData> : IAsyncDisposable
     {
         var workItem = new TtlExpirationWorkItem<TRange, TData>(
             segment,
-            expiresAt: DateTimeOffset.UtcNow + _segmentTtl,
+            expiresAt: _timeProvider.GetUtcNow() + _segmentTtl,
             _disposalCts.Token);
 
         await _scheduler.PublishWorkItemAsync(workItem, CancellationToken.None)

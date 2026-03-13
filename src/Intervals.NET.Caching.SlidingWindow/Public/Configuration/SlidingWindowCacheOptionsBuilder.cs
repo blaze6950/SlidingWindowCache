@@ -8,8 +8,7 @@ namespace Intervals.NET.Caching.SlidingWindow.Public.Configuration;
 /// <para><strong>Purpose:</strong></para>
 /// <para>
 /// Provides a fluent alternative to the <see cref="SlidingWindowCacheOptions"/> constructor, especially
-/// useful for inline configuration via <see cref="Cache.SlidingWindowCacheBuilder{TRange,TData,TDomain}"/> and
-/// <see cref="Cache.LayeredSlidingWindowCacheBuilder{TRange,TData,TDomain}"/>.
+/// useful for inline configuration via <see cref="Cache.SlidingWindowCacheBuilder{TRange,TData,TDomain}"/>.
 /// </para>
 /// <para><strong>Required Fields:</strong></para>
 /// <para>

@@ -46,8 +46,10 @@ public sealed class SlidingWindowCacheInvariantTests : IAsyncDisposable
     /// Tracks a cache instance for automatic cleanup in Dispose.
     /// </summary>
     private (SlidingWindowCache<int, int, IntegerFixedStepDomain> cache, Moq.Mock<IDataSource<int, int>> mockDataSource)
-        TrackCache(
-            (SlidingWindowCache<int, int, IntegerFixedStepDomain> cache, Moq.Mock<IDataSource<int, int>> mockDataSource) tuple)
+        TrackCache((
+            SlidingWindowCache<int, int, IntegerFixedStepDomain> cache,
+            Moq.Mock<IDataSource<int, int>> mockDataSource
+            ) tuple)
     {
         _currentCache = tuple.cache;
         return tuple;
@@ -116,6 +118,7 @@ public sealed class SlidingWindowCacheInvariantTests : IAsyncDisposable
     #region A. User Path & Fast User Access Invariants
 
     #region A.2 Concurrency & Priority
+
     /// <summary>
     /// Tests Invariant A.2a (🟢 Behavioral): User Request MAY cancel ongoing or pending Rebalance Execution
     /// ONLY when a new rebalance is validated as necessary by the multi-stage decision pipeline.
@@ -934,36 +937,41 @@ public sealed class SlidingWindowCacheInvariantTests : IAsyncDisposable
         var (cache2, _) = TestHelpers.CreateCacheWithDefaults(_domain, diagnostics2, options);
 
         // ACT: Cache1 - Establish cache at [100, 110], then request [200, 210]
-        await cache1.GetDataAndWaitForIdleAsync(TestHelpers.CreateRange(100, 110));
-        var result1 = await cache1.GetDataAsync(TestHelpers.CreateRange(200, 210), CancellationToken.None);
-        await cache1.WaitForIdleAsync();
+        try
+        {
+            await cache1.GetDataAndWaitForIdleAsync(TestHelpers.CreateRange(100, 110));
+            var result1 = await cache1.GetDataAsync(TestHelpers.CreateRange(200, 210), CancellationToken.None);
+            await cache1.WaitForIdleAsync();
 
-        // Cache2 - Cold start directly to [200, 210] (no prior cache state)
-        var result2 = await cache2.GetDataAsync(TestHelpers.CreateRange(200, 210), CancellationToken.None);
-        await cache2.WaitForIdleAsync();
+            // Cache2 - Cold start directly to [200, 210] (no prior cache state)
+            var result2 = await cache2.GetDataAsync(TestHelpers.CreateRange(200, 210), CancellationToken.None);
+            await cache2.WaitForIdleAsync();
 
-        // ASSERT: Both caches should have same behavior for [200, 210] despite different histories
-        TestHelpers.AssertUserDataCorrect(result1.Data, TestHelpers.CreateRange(200, 210));
-        TestHelpers.AssertUserDataCorrect(result2.Data, TestHelpers.CreateRange(200, 210));
+            // ASSERT: Both caches should have same behavior for [200, 210] despite different histories
+            TestHelpers.AssertUserDataCorrect(result1.Data, TestHelpers.CreateRange(200, 210));
+            TestHelpers.AssertUserDataCorrect(result2.Data, TestHelpers.CreateRange(200, 210));
 
-        // Both should have scheduled rebalance for the same desired range (deterministic computation)
-        // Verify both caches converged to serving the same expanded range
-        diagnostics1.Reset();
-        diagnostics2.Reset();
+            // Both should have scheduled rebalance for the same desired range (deterministic computation)
+            // Verify both caches converged to serving the same expanded range
+            diagnostics1.Reset();
+            diagnostics2.Reset();
 
-        var verify1 = await cache1.GetDataAsync(TestHelpers.CreateRange(195, 215), CancellationToken.None);
-        var verify2 = await cache2.GetDataAsync(TestHelpers.CreateRange(195, 215), CancellationToken.None);
+            var verify1 = await cache1.GetDataAsync(TestHelpers.CreateRange(195, 215), CancellationToken.None);
+            var verify2 = await cache2.GetDataAsync(TestHelpers.CreateRange(195, 215), CancellationToken.None);
 
-        TestHelpers.AssertUserDataCorrect(verify1.Data, TestHelpers.CreateRange(195, 215));
-        TestHelpers.AssertUserDataCorrect(verify2.Data, TestHelpers.CreateRange(195, 215));
+            TestHelpers.AssertUserDataCorrect(verify1.Data, TestHelpers.CreateRange(195, 215));
+            TestHelpers.AssertUserDataCorrect(verify2.Data, TestHelpers.CreateRange(195, 215));
 
-        // Both should be full cache hits (both caches expanded to same desired range)
-        TestHelpers.AssertFullCacheHit(diagnostics1, 1);
-        TestHelpers.AssertFullCacheHit(diagnostics2, 1);
-
-        // Cleanup
-        await cache1.DisposeAsync();
-        await cache2.DisposeAsync();
+            // Both should be full cache hits (both caches expanded to same desired range)
+            TestHelpers.AssertFullCacheHit(diagnostics1, 1);
+            TestHelpers.AssertFullCacheHit(diagnostics2, 1);
+        }
+        finally
+        {
+            // Cleanup — always dispose both caches, even if an assertion fails
+            await cache1.DisposeAsync();
+            await cache2.DisposeAsync();
+        }
     }
 
     // NOTE: Invariant E.3, E.4, E.5: DesiredCacheRange represents canonical target state,
@@ -1339,7 +1347,7 @@ public sealed class SlidingWindowCacheInvariantTests : IAsyncDisposable
         // Should throw OperationCanceledException or derived type (TaskCanceledException)
         var exception = await Record.ExceptionAsync(async () => await requestTask);
         Assert.True(exception is OperationCanceledException,
-            $"Expected OperationCanceledException but got {exception.GetType().Name}");
+            $"Expected OperationCanceledException but got {exception?.GetType().Name ?? "null"}");
     }
 
     #endregion

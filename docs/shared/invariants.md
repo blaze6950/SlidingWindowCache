@@ -4,6 +4,7 @@ Invariants that apply across all cache implementations in this solution. These g
 
 For implementation-specific invariants, see:
 - `docs/sliding-window/invariants.md` — SlidingWindow invariant groups SWC.A–SWC.I
+- `docs/visited-places/invariants.md` — VisitedPlaces invariant groups VPC.A–VPC.T
 
 ---
 
@@ -93,3 +94,4 @@ After the background loop exits, the activity counter may remain non-zero (if a 
 - `docs/shared/architecture.md` — AsyncActivityCounter design rationale
 - `docs/shared/components/infrastructure.md` — AsyncActivityCounter implementation details
 - `docs/sliding-window/invariants.md` — SlidingWindow-specific invariant groups (SWC.A–SWC.I)
+- `docs/visited-places/invariants.md` — VisitedPlaces-specific invariant groups (VPC.A–VPC.T)

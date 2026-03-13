@@ -2,7 +2,7 @@
 
 This document describes the temporal behavior of `VisitedPlacesCache`: what happens over time when user requests occur, background events are processed, and eviction runs.
 
-Canonical term definitions: `docs/visited-places/glossary.md` (to be written). Formal invariants: `docs/visited-places/invariants.md` (to be written).
+Canonical term definitions: `docs/visited-places/glossary.md`. Formal invariants: `docs/visited-places/invariants.md`.
 
 ---
 

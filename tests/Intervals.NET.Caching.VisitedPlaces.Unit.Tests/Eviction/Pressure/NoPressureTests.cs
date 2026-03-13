@@ -42,7 +42,7 @@ public sealed class NoPressureTests
     #region Reduce Tests
 
     [Fact]
-    public void Reduce_IsNoOp_IsExceededRemainsFlase()
+    public void Reduce_IsNoOp_IsExceededRemainsFalse()
     {
         // ARRANGE
         var pressure = NoPressure<int, int>.Instance;

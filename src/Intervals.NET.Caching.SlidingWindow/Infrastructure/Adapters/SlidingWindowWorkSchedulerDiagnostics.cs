@@ -1,13 +1,13 @@
 using Intervals.NET.Caching.Infrastructure.Diagnostics;
-using Intervals.NET.Caching.Infrastructure.Scheduling.Serial;
+using Intervals.NET.Caching.Infrastructure.Scheduling.Supersession;
 using Intervals.NET.Caching.SlidingWindow.Public.Instrumentation;
 
 namespace Intervals.NET.Caching.SlidingWindow.Infrastructure.Adapters;
 
 /// <summary>
 /// Bridges <see cref="ISlidingWindowCacheDiagnostics"/> to <see cref="IWorkSchedulerDiagnostics"/> for use by
-/// <see cref="UnboundedSerialWorkScheduler{TWorkItem}"/> and
-/// <see cref="BoundedSerialWorkScheduler{TWorkItem}"/>.
+/// <see cref="UnboundedSupersessionWorkScheduler{TWorkItem}"/> and
+/// <see cref="BoundedSupersessionWorkScheduler{TWorkItem}"/>.
 /// </summary>
 /// <remarks>
 /// <para><strong>Purpose:</strong></para>

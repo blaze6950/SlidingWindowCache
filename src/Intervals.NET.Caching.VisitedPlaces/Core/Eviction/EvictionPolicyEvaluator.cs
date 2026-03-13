@@ -35,7 +35,7 @@ namespace Intervals.NET.Caching.VisitedPlaces.Core.Eviction;
 /// <para>
 /// <see cref="CacheNormalizationExecutor{TRange,TData,TDomain}"/> previously held all of this
 /// logic inline. Moving it here simplifies the executor and creates a clean boundary for
-/// stateful policy support. The processor is unaware of whether any given policy maintains
+/// stateful policy support. The executor is unaware of whether any given policy maintains
 /// internal state; it only calls the three evaluator methods at the appropriate points in
 /// the four-step sequence.
 /// </para>

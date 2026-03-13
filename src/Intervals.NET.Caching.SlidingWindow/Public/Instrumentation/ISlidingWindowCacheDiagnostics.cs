@@ -32,7 +32,7 @@ namespace Intervals.NET.Caching.SlidingWindow.Public.Instrumentation;
 /// <item><term><see cref="RebalanceExecutionCancelled"/></term><term>Background Thread (Rebalance Execution)</term></item>
 /// <item><term><see cref="RebalanceSkippedCurrentNoRebalanceRange"/></term><term>Background Thread (Intent Processing Loop)</term></item>
 /// <item><term><see cref="RebalanceSkippedPendingNoRebalanceRange"/></term><term>Background Thread (Intent Processing Loop)</term></item>
-/// <item><term><see cref="RebalanceSkippedSameRange"/></term><term>Background Thread (Rebalance Execution)</term></item>
+/// <item><term><see cref="RebalanceSkippedSameRange"/></term><term>Background Thread (Intent Processing Loop)</term></item>
 /// <item><term><see cref="RebalanceScheduled"/></term><term>Background Thread (Intent Processing Loop)</term></item>
 /// </list>
 /// <para>
@@ -232,13 +232,13 @@ public interface ISlidingWindowCacheDiagnostics : ICacheDiagnostics
 
     /// <summary>
     /// Records a rebalance skipped because CurrentCacheRange equals DesiredCacheRange.
-    /// Called when RebalanceExecutor detects that delivered data range already matches desired range, avoiding redundant I/O.
+    /// Called when IntentController detects that the current cache range already matches the desired range, avoiding redundant I/O.
     /// Indicates same-range optimization preventing unnecessary fetch operations (Decision Scenario D2).
-    /// Location: RebalanceExecutor.ExecuteAsync (before expensive I/O operations)
+    /// Location: IntentController.RecordDecisionOutcome (Stage 4 early exit from RebalanceDecisionEngine)
     /// Related: Invariant SWC.D.4 (No rebalance if DesiredCacheRange == CurrentCacheRange), Invariant SWC.C.8c (RebalanceSkippedSameRange counter semantics)
     /// </summary>
     /// <remarks>
-    /// <para><strong>Context:</strong> Background Thread (Rebalance Execution)</para>
+    /// <para><strong>Context:</strong> Background Thread (Intent Processing Loop)</para>
     /// </remarks>
     void RebalanceSkippedSameRange();
 

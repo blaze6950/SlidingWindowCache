@@ -45,8 +45,8 @@ namespace Intervals.NET.Caching.VisitedPlaces.Core.Ttl;
 /// <para><strong>Thread safety — concurrent removal with the Background Storage Loop:</strong></para>
 /// <para>
 /// Both this executor and <c>CacheNormalizationExecutor</c> may call
-/// <see cref="ISegmentStorage{TRange,TData}.Remove"/> and
-/// <see cref="EvictionEngine{TRange,TData}.OnSegmentsRemoved"/> concurrently.
+/// <see cref="ISegmentStorage{TRange,TData}.TryRemove"/> and
+/// <see cref="EvictionEngine{TRange,TData}.OnSegmentRemoved"/> concurrently.
 /// Safety is guaranteed at each point of contention:
 /// </para>
 /// <list type="bullet">
@@ -58,10 +58,10 @@ namespace Intervals.NET.Caching.VisitedPlaces.Core.Ttl;
 /// </description></item>
 /// <item><description>
 ///   <see cref="EvictionEngine{TRange,TData}.OnSegmentRemoved"/> is only reached by the winner
-///   of <c>Remove</c>, so double-notification is impossible.
+///   of <see cref="ISegmentStorage{TRange,TData}.TryRemove"/>, so double-notification is impossible.
 /// </description></item>
 /// <item><description>
-///   <see cref="EvictionEngine{TRange,TData}.OnSegmentsRemoved"/> updates
+///   <see cref="EvictionEngine{TRange,TData}.OnSegmentRemoved"/> updates
 ///   <c>MaxTotalSpanPolicy._totalSpan</c> via <c>Interlocked.Add</c> — safe under concurrent
 ///   calls from any thread.
 /// </description></item>
@@ -81,6 +81,7 @@ internal sealed class TtlExpirationExecutor<TRange, TData>
     private readonly ISegmentStorage<TRange, TData> _storage;
     private readonly EvictionEngine<TRange, TData> _evictionEngine;
     private readonly IVisitedPlacesCacheDiagnostics _diagnostics;
+    private readonly TimeProvider _timeProvider;
 
     /// <summary>
     /// Initializes a new <see cref="TtlExpirationExecutor{TRange,TData}"/>.
@@ -90,18 +91,25 @@ internal sealed class TtlExpirationExecutor<TRange, TData>
     /// after <see cref="CachedSegment{TRange,TData}.TryMarkAsRemoved()"/> succeeds.
     /// </param>
     /// <param name="evictionEngine">
-    /// The eviction engine. <see cref="EvictionEngine{TRange,TData}.OnSegmentsRemoved"/> is
+    /// The eviction engine. <see cref="EvictionEngine{TRange,TData}.OnSegmentRemoved"/> is
     /// called after successful removal to keep stateful policy aggregates consistent.
     /// </param>
     /// <param name="diagnostics">Diagnostics sink; must never throw.</param>
+    /// <param name="timeProvider">
+    /// Time provider used to compute the remaining delay. Defaults to
+    /// <see cref="TimeProvider.System"/> when <see langword="null"/>. Supply a fake
+    /// <see cref="TimeProvider"/> in tests to control time deterministically.
+    /// </param>
     public TtlExpirationExecutor(
         ISegmentStorage<TRange, TData> storage,
         EvictionEngine<TRange, TData> evictionEngine,
-        IVisitedPlacesCacheDiagnostics diagnostics)
+        IVisitedPlacesCacheDiagnostics diagnostics,
+        TimeProvider? timeProvider = null)
     {
         _storage = storage;
         _evictionEngine = evictionEngine;
         _diagnostics = diagnostics;
+        _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
     /// <summary>
@@ -118,7 +126,7 @@ internal sealed class TtlExpirationExecutor<TRange, TData>
     {
         // Compute remaining delay from now to expiry.
         // If already past expiry, delay is zero and we proceed immediately.
-        var remaining = workItem.ExpiresAt - DateTimeOffset.UtcNow;
+        var remaining = workItem.ExpiresAt - _timeProvider.GetUtcNow();
 
         if (remaining > TimeSpan.Zero)
         {
@@ -127,7 +135,7 @@ internal sealed class TtlExpirationExecutor<TRange, TData>
             await Task.Delay(remaining, cancellationToken).ConfigureAwait(false);
         }
 
-        // Delegate removal to storage, which atomically claims ownership via MarkAsRemoved()
+        // Delegate removal to storage, which atomically claims ownership via TryMarkAsRemoved()
         // and returns true only for the first caller. If the segment was already evicted by
         // the Background Storage Loop, this returns false and we fire only the diagnostic.
         if (!_storage.TryRemove(workItem.Segment))

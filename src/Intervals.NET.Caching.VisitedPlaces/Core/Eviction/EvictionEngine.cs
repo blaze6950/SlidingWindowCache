@@ -36,9 +36,11 @@ namespace Intervals.NET.Caching.VisitedPlaces.Core.Eviction;
 /// <para><strong>Diagnostics split:</strong></para>
 /// <para>
 /// The engine fires eviction-specific diagnostics:
-/// <see cref="IVisitedPlacesCacheDiagnostics.EvictionEvaluated"/>,
-/// <see cref="IVisitedPlacesCacheDiagnostics.EvictionTriggered"/>,
-/// <see cref="IVisitedPlacesCacheDiagnostics.EvictionExecuted"/>.
+/// <see cref="IVisitedPlacesCacheDiagnostics.EvictionEvaluated"/> and
+/// <see cref="IVisitedPlacesCacheDiagnostics.EvictionTriggered"/>.
+/// <see cref="IVisitedPlacesCacheDiagnostics.EvictionExecuted"/> is fired by the
+/// <see cref="Background.CacheNormalizationExecutor{TRange,TData,TDomain}"/> (the processor),
+/// not the engine, because it reflects actual removal work rather than loop entry.
 /// The processor retains ownership of storage-level diagnostics
 /// (<c>BackgroundSegmentStored</c>, <c>BackgroundStatisticsUpdated</c>, etc.).
 /// </para>

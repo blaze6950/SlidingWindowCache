@@ -218,7 +218,7 @@ internal sealed class BoundedSerialWorkScheduler<TWorkItem> : SerialWorkSchedule
     /// </remarks>
     private async Task ProcessWorkItemsAsync()
     {
-        await foreach (var workItem in _workChannel.Reader.ReadAllAsync())
+        await foreach (var workItem in _workChannel.Reader.ReadAllAsync().ConfigureAwait(false))
         {
             await ExecuteWorkItemCoreAsync(workItem).ConfigureAwait(false);
         }

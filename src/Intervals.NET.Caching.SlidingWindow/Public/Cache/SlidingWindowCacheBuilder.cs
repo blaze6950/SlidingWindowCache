@@ -65,11 +65,7 @@ public static class SlidingWindowCacheBuilder
         where TDomain : IRangeDomain<TRange>
     {
         ArgumentNullException.ThrowIfNull(dataSource);
-
-        if (domain is null)
-        {
-            throw new ArgumentNullException(nameof(domain));
-        }
+        ArgumentNullException.ThrowIfNull(domain);
 
         return new SlidingWindowCacheBuilder<TRange, TData, TDomain>(dataSource, domain);
     }

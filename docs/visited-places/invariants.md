@@ -414,7 +414,7 @@ VPC invariant groups:
 | VPC.D  | Concurrency                               | 5     |
 | VPC.E  | Eviction                                  | 14    |
 | VPC.F  | Data Source & I/O                         | 4     |
-| VPC.T  | TTL (Time-To-Live)                        | 3     |
+| VPC.T  | TTL (Time-To-Live)                        | 4     |
 
 Shared invariants (S.H, S.J) are in `docs/shared/invariants.md`.
 

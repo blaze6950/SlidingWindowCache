@@ -39,7 +39,7 @@ public sealed class CachedSegment<TRange, TData>
     public IEvictionMetadata? EvictionMetadata { get; internal set; }
 
     // Removal state: 0 = live, 1 = removed.
-    // Accessed atomically via Interlocked.CompareExchange (MarkAsRemoved) and Volatile.Read (IsRemoved).
+    // Accessed atomically via Interlocked.CompareExchange (TryMarkAsRemoved) and Volatile.Read (IsRemoved).
     private int _isRemoved;
 
     /// <summary>
@@ -48,7 +48,7 @@ public sealed class CachedSegment<TRange, TData>
     /// <remarks>
     /// <para>
     /// This flag is <strong>monotonic</strong>: once set to <see langword="true"/> by
-    /// <see cref="MarkAsRemoved"/> it is never reset to <see langword="false"/>.
+    /// <see cref="TryMarkAsRemoved"/> it is never reset to <see langword="false"/>.
     /// It lives on the segment object itself, so it survives storage compaction
     /// (normalization passes that rebuild the snapshot / stride index).
     /// </para>
@@ -60,7 +60,7 @@ public sealed class CachedSegment<TRange, TData>
     /// collection between the Background Path and the TTL thread.
     /// </para>
     /// <para><strong>Thread safety:</strong> Read via <c>Volatile.Read</c> (acquire fence).
-    /// Written atomically by <see cref="MarkAsRemoved"/> via
+    /// Written atomically by <see cref="TryMarkAsRemoved"/> via
     /// <c>Interlocked.CompareExchange</c>.</para>
     /// </remarks>
     internal bool IsRemoved => Volatile.Read(ref _isRemoved) != 0;

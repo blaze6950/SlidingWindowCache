@@ -199,6 +199,12 @@ internal sealed class CacheNormalizationExecutor<TRange, TData, TDomain>
 
             _diagnostics.NormalizationRequestProcessed();
         }
+        catch (OperationCanceledException)
+        {
+            // Cancellation (e.g. from TtlEngine disposal CTS) must propagate so the
+            // scheduler's execution pipeline can fire WorkCancelled instead of WorkFailed.
+            throw;
+        }
         catch (Exception ex)
         {
             _diagnostics.BackgroundOperationFailed(ex);

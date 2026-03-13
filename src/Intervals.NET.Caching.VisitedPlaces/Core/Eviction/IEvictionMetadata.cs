@@ -15,8 +15,8 @@ namespace Intervals.NET.Caching.VisitedPlaces.Core.Eviction;
 /// </para>
 /// <list type="bullet">
 /// <item><description>Selectors own their metadata type (typically as a nested <c>internal sealed class</c>)</description></item>
-/// <item><description>Selectors initialize metadata via <c>InitializeMetadata</c> when a segment is stored</description></item>
-/// <item><description>Selectors update metadata via <c>UpdateMetadata</c> when segments are used</description></item>
+ /// <item><description>Selectors initialize metadata via <c>InitializeSegment</c> when a segment is stored</description></item>
+ /// <item><description>Selectors update metadata via <c>UpdateSegmentMetadata</c> when segments are used</description></item>
 /// <item><description>Selectors read metadata in <c>OrderCandidates</c> using a lazy-initialize pattern:
 /// if the segment carries metadata from a different selector, replace it with the current selector's own type</description></item>
 /// <item><description>Selectors that need no metadata (e.g., <c>SmallestFirstEvictionSelector</c>) leave the field null</description></item>

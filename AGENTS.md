@@ -225,7 +225,7 @@ try
 }
 catch (Exception ex)
 {
-    _cacheDiagnostics.RebalanceExecutionFailed(ex);
+    _cacheDiagnostics.BackgroundOperationFailed(ex);
     // Exception swallowed to prevent background task crashes
 }
 ```

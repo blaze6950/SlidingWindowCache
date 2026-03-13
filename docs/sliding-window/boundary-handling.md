@@ -22,7 +22,7 @@ For the shared `IDataSource` boundary contract and nullable `Range` semantics th
 
 ```csharp
 // RangeResult is a sealed record (reference type) with an internal constructor.
-// Instances are created exclusively by UserRequestHandler.
+// Instances are created exclusively by UserRequestHandler and RangeCacheDataSourceAdapter.
 public sealed record RangeResult<TRange, TData>
     where TRange : IComparable<TRange>
 {

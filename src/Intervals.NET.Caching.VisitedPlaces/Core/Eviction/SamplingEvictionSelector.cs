@@ -84,6 +84,7 @@ public abstract class SamplingEvictionSelector<TRange, TData>
     /// <inheritdoc/>
     void IStorageAwareEvictionSelector<TRange, TData>.Initialize(ISegmentStorage<TRange, TData> storage)
     {
+        ArgumentNullException.ThrowIfNull(storage);
         _storage = storage;
     }
 
