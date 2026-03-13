@@ -257,4 +257,76 @@ public static class WasmCompilationValidator
         _ = result.Data.Length;
         _ = layered.LayerCount;
     }
+
+    /// <summary>
+    /// Validates that <see cref="FifoEvictionSelector{TRange,TData}"/> compiles for net8.0-browser.
+    /// </summary>
+    public static async Task ValidateFifoEvictionSelector()
+    {
+        var dataSource = new SimpleDataSource();
+        var domain = new IntegerFixedStepDomain();
+
+        IReadOnlyList<IEvictionPolicy<int, int>> policies =
+            [new MaxSegmentCountPolicy<int, int>(maxCount: 10)];
+        IEvictionSelector<int, int> selector = new FifoEvictionSelector<int, int>();
+
+        await using var cache = (VisitedPlacesCache<int, int, IntegerFixedStepDomain>)
+            VisitedPlacesCacheBuilder
+                .For<int, int, IntegerFixedStepDomain>(dataSource, domain)
+                .WithEviction(policies, selector)
+                .Build();
+
+        var range = Factories.Range.Closed<int>(0, 10);
+        var result = await cache.GetDataAsync(range, CancellationToken.None);
+        await cache.WaitForIdleAsync();
+        _ = result.Data.Length;
+    }
+
+    /// <summary>
+    /// Validates that <see cref="SmallestFirstEvictionSelector{TRange,TData,TDomain}"/> compiles for net8.0-browser.
+    /// </summary>
+    public static async Task ValidateSmallestFirstEvictionSelector()
+    {
+        var dataSource = new SimpleDataSource();
+        var domain = new IntegerFixedStepDomain();
+
+        IReadOnlyList<IEvictionPolicy<int, int>> policies =
+            [new MaxSegmentCountPolicy<int, int>(maxCount: 10)];
+        IEvictionSelector<int, int> selector = new SmallestFirstEvictionSelector<int, int, IntegerFixedStepDomain>(domain);
+
+        await using var cache = (VisitedPlacesCache<int, int, IntegerFixedStepDomain>)
+            VisitedPlacesCacheBuilder
+                .For<int, int, IntegerFixedStepDomain>(dataSource, domain)
+                .WithEviction(policies, selector)
+                .Build();
+
+        var range = Factories.Range.Closed<int>(0, 10);
+        var result = await cache.GetDataAsync(range, CancellationToken.None);
+        await cache.WaitForIdleAsync();
+        _ = result.Data.Length;
+    }
+
+    /// <summary>
+    /// Validates that <see cref="MaxTotalSpanPolicy{TRange,TData,TDomain}"/> compiles for net8.0-browser.
+    /// </summary>
+    public static async Task ValidateMaxTotalSpanPolicy()
+    {
+        var dataSource = new SimpleDataSource();
+        var domain = new IntegerFixedStepDomain();
+
+        IReadOnlyList<IEvictionPolicy<int, int>> policies =
+            [new MaxTotalSpanPolicy<int, int, IntegerFixedStepDomain>(maxTotalSpan: 1000, domain)];
+        IEvictionSelector<int, int> selector = new LruEvictionSelector<int, int>();
+
+        await using var cache = (VisitedPlacesCache<int, int, IntegerFixedStepDomain>)
+            VisitedPlacesCacheBuilder
+                .For<int, int, IntegerFixedStepDomain>(dataSource, domain)
+                .WithEviction(policies, selector)
+                .Build();
+
+        var range = Factories.Range.Closed<int>(0, 10);
+        var result = await cache.GetDataAsync(range, CancellationToken.None);
+        await cache.WaitForIdleAsync();
+        _ = result.Data.Length;
+    }
 }

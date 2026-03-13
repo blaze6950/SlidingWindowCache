@@ -90,7 +90,7 @@ public sealed class TtlExpirationExecutorTests
     #region ExecuteAsync — Segment Already Evicted (Idempotency)
 
     [Fact]
-    public async Task ExecuteAsync_SegmentAlreadyEvicted_IsNoOpButStillFiresDiagnostic()
+    public async Task ExecuteAsync_SegmentAlreadyEvicted_IsNoOpAndDoesNotFireDiagnostic()
     {
         // ARRANGE — segment evicted before TTL fires (TryMarkAsRemoved already claimed)
         var (executor, segment) = CreateExecutorWithSegment(0, 9);
@@ -104,9 +104,9 @@ public sealed class TtlExpirationExecutorTests
         // ACT
         await executor.ExecuteAsync(workItem, CancellationToken.None);
 
-        // ASSERT — no second removal; TtlSegmentExpired still fires
+        // ASSERT — no second removal; TtlSegmentExpired does NOT fire (already-removed is a no-op)
         Assert.Equal(1, _storage.Count); // storage not touched (MarkAsRemoved returned false)
-        Assert.Equal(1, _diagnostics.TtlSegmentExpired);
+        Assert.Equal(0, _diagnostics.TtlSegmentExpired);
     }
 
     #endregion

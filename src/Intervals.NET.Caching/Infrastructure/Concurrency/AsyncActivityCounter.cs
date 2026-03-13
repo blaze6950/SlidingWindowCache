@@ -118,8 +118,8 @@ internal sealed class AsyncActivityCounter
     /// <para><strong>Call Sites (verified in docs/invariants.md Section H.1):</strong></para>
     /// <list type="bullet">
     /// <item><description>IntentController.PublishIntent() - line 173 before semaphore signal at line 177</description></item>
-    /// <item><description>TaskBasedRebalanceExecutionController.PublishExecutionRequest() - line 196 before Volatile.Write(_lastExecutionRequest) at line 214 and task chain publication at line 220</description></item>
-    /// <item><description>ChannelBasedRebalanceExecutionController.PublishExecutionRequest() - line 220 before channel write at line 239</description></item>
+    /// <item><description>UnboundedSupersessionWorkScheduler.ScheduleAsync() - before Volatile.Write(_lastExecutionRequest) and task chain publication</description></item>
+    /// <item><description>BoundedSupersessionWorkScheduler.ScheduleAsync() - before channel write</description></item>
     /// </list>
     /// </remarks>
     public void IncrementActivity()
@@ -173,9 +173,9 @@ internal sealed class AsyncActivityCounter
     /// <para><strong>Call Sites (verified in docs/invariants.md Section H.2):</strong></para>
     /// <list type="bullet">
     /// <item><description>IntentController.ProcessIntentsAsync() - finally block at line 271</description></item>
-    /// <item><description>TaskBasedRebalanceExecutionController.ExecuteRequestAsync() - finally block at line 349</description></item>
-    /// <item><description>ChannelBasedRebalanceExecutionController.ProcessExecutionRequestsAsync() - finally block at line 327</description></item>
-    /// <item><description>ChannelBasedRebalanceExecutionController.PublishExecutionRequest() - catch block at line 245 (channel write failure)</description></item>
+    /// <item><description>UnboundedSupersessionWorkScheduler.ExecuteRequestAsync() - finally block</description></item>
+    /// <item><description>BoundedSupersessionWorkScheduler.ProcessExecutionRequestsAsync() - finally block</description></item>
+    /// <item><description>BoundedSupersessionWorkScheduler.ScheduleAsync() - catch block (channel write failure)</description></item>
     /// </list>
     /// <para><strong>Critical Contract:</strong></para>
     /// <para>

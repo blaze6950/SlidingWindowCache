@@ -18,7 +18,7 @@ namespace Intervals.NET.Caching.SlidingWindow.Unit.Tests.Public.Cache;
 /// Uses <see cref="SimpleTestDataSource{TData}"/> as a lightweight real data source to avoid
 /// mocking the complex <see cref="IDataSource{TRange,TData}"/> interface for these tests.
 /// </summary>
-public sealed class LayeredWindowCacheBuilderTests
+public sealed class LayeredSlidingWindowCacheBuilderTests
 {
     #region Test Infrastructure
 

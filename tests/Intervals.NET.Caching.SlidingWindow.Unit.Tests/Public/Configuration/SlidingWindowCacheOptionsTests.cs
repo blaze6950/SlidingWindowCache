@@ -6,7 +6,7 @@ namespace Intervals.NET.Caching.SlidingWindow.Unit.Tests.Public.Configuration;
 /// Unit tests for SlidingWindowCacheOptions that verify validation logic, property initialization,
 /// and edge cases for cache configuration.
 /// </summary>
-public class WindowCacheOptionsTests
+public class SlidingWindowCacheOptionsTests
 {
     #region Constructor - Valid Parameters Tests
 

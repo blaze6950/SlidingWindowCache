@@ -72,7 +72,7 @@ namespace Intervals.NET.Caching.Infrastructure.Scheduling.Serial;
 /// <para>See also: <see cref="BoundedSerialWorkScheduler{TWorkItem}"/> for the bounded FIFO alternative with backpressure.</para>
 /// <para>See also: <see cref="UnboundedSupersessionWorkScheduler{TWorkItem}"/> for the unbounded supersession variant.</para>
 /// </remarks>
-internal class UnboundedSerialWorkScheduler<TWorkItem> : SerialWorkSchedulerBase<TWorkItem>
+internal sealed class UnboundedSerialWorkScheduler<TWorkItem> : SerialWorkSchedulerBase<TWorkItem>
     where TWorkItem : class, ISchedulableWorkItem
 {
     // Task chaining state (volatile write for single-writer pattern)

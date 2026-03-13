@@ -232,7 +232,7 @@ public static class SlidingWindowCacheConsistencyExtensions
         where TRange : IComparable<TRange>
         where TDomain : IRangeDomain<TRange>
     {
-        var result = await cache.GetDataAsync(requestedRange, cancellationToken);
+        var result = await cache.GetDataAsync(requestedRange, cancellationToken).ConfigureAwait(false);
 
         // Wait for idle only on cache miss scenarios (full miss or partial hit) to ensure
         // the cache is rebalanced around the new position before returning.
@@ -243,7 +243,7 @@ public static class SlidingWindowCacheConsistencyExtensions
         {
             try
             {
-                await cache.WaitForIdleAsync(cancellationToken);
+                await cache.WaitForIdleAsync(cancellationToken).ConfigureAwait(false);
             }
             catch (OperationCanceledException)
             {

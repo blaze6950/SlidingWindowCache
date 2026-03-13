@@ -17,7 +17,7 @@ namespace Intervals.NET.Caching.SlidingWindow.Unit.Tests.Infrastructure.Concurre
 /// Unit tests for UnboundedSerialWorkScheduler used as a rebalance execution scheduler.
 /// Validates chain resilience when previous task is faulted.
 /// </summary>
-public sealed class TaskBasedRebalanceExecutionControllerTests
+public sealed class UnboundedSupersessionWorkSchedulerTests
 {
     [Fact]
     public async Task PublishWorkItemAsync_ContinuesAfterFaultedPreviousTask()

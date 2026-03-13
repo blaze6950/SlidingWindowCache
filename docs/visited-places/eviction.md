@@ -10,13 +10,13 @@ For the surrounding execution context, see `docs/visited-places/scenarios.md` (S
 
 VPC eviction is a **constraint satisfaction** system with five decoupled components:
 
-| Component                    | Role                        | Question answered                                                        |
-|------------------------------|-----------------------------|--------------------------------------------------------------------------|
-| **Eviction Policy**          | Constraint evaluator        | "Is my constraint currently violated?"                                   |
-| **Eviction Pressure**        | Constraint tracker          | "Is the constraint still violated after removing this segment?"          |
-| **Eviction Selector**        | Candidate sampler           | "Which candidate is the worst in a random sample?"                       |
-| **Eviction Engine**          | Eviction facade             | Orchestrates selector, evaluator, and executor; owns eviction diagnostics |
-| **Eviction Policy Evaluator**| Policy lifecycle manager    | Maintains stateful policy aggregates; constructs composite pressure      |
+| Component                     | Role                     | Question answered                                                         |
+|-------------------------------|--------------------------|---------------------------------------------------------------------------|
+| **Eviction Policy**           | Constraint evaluator     | "Is my constraint currently violated?"                                    |
+| **Eviction Pressure**         | Constraint tracker       | "Is the constraint still violated after removing this segment?"           |
+| **Eviction Selector**         | Candidate sampler        | "Which candidate is the worst in a random sample?"                        |
+| **Eviction Engine**           | Eviction facade          | Orchestrates selector, evaluator, and executor; owns eviction diagnostics |
+| **Eviction Policy Evaluator** | Policy lifecycle manager | Maintains stateful policy aggregates; constructs composite pressure       |
 
 The **Eviction Engine** mediates all interactions between these components. `CacheNormalizationExecutor` depends only on the engine — it has no direct reference to the evaluator, selector, or executor.
 
@@ -35,7 +35,7 @@ CacheNormalizationExecutor
   │
   ├─ engine.EvaluateAndExecute(allSegments, justStored)
   │    ├─ evaluator.Evaluate(allSegments)  →  pressure
-  │    │    └─ each policy.Evaluate(...)  (stateful: O(1), stateless: O(N))
+  │    │    └─ each policy.Evaluate(...)  (O(1) via running aggregates)
   │    └─ [if pressure.IsExceeded]
   │         executor.Execute(pressure, allSegments, justStored)
   │              └─ selector.TrySelectCandidate(...)  [loop until satisfied]
@@ -81,7 +81,7 @@ Produces:   SegmentCountPressure (nested in MaxSegmentCountPolicy, count-based, 
 
 **Use case**: Controlling memory usage when all segments are approximately the same size, or when the absolute number of cache entries is the primary concern.
 
-**Note**: Count-based eviction is order-independent — removing any segment equally satisfies the constraint by decrementing the count by 1. This policy is **stateless**: it reads `allSegments.Count` directly in `Evaluate`, which is O(1).
+**Note**: Count-based eviction is order-independent — removing any segment equally satisfies the constraint by decrementing the count by 1. This policy tracks segment count via `Interlocked.Increment`/`Decrement` in `OnSegmentAdded`/`OnSegmentRemoved`, keeping `Evaluate` at O(1).
 
 #### MaxTotalSpanPolicy
 
@@ -96,7 +96,7 @@ Produces:   TotalSpanPressure (nested in MaxTotalSpanPolicy, span-aware, order-d
 
 **Use case**: Controlling the total domain coverage cached, regardless of how many segments it is split into. More meaningful than segment count when segments vary significantly in span.
 
-**Design note**: `MaxTotalSpanPolicy` implements `IStatefulEvictionPolicy` — it maintains a running total span aggregate updated via `OnSegmentAdded`/`OnSegmentRemoved`. This keeps its `Evaluate` at O(1) rather than requiring an O(N) re-scan of all segments. The `TotalSpanPressure` it produces tracks actual span reduction as segments are removed, guaranteeing correctness regardless of selector order.
+**Design note**: `MaxTotalSpanPolicy` implements `IEvictionPolicy` — it maintains a running total span aggregate updated via `OnSegmentAdded`/`OnSegmentRemoved`. This keeps its `Evaluate` at O(1) rather than requiring an O(N) re-scan of all segments. The `TotalSpanPressure` it produces tracks actual span reduction as segments are removed, guaranteeing correctness regardless of selector order.
 
 #### MaxMemoryPolicy (planned)
 
@@ -329,28 +329,17 @@ The processor retains ownership of storage-level diagnostics (`BackgroundSegment
 
 ### Responsibilities
 
-- Maintains a typed array of `IStatefulEvictionPolicy` instances (extracted from the full policy list at construction).
-- Notifies all stateful policies of segment lifecycle events (`OnSegmentAdded`, `OnSegmentRemoved`), enabling O(1) `Evaluate` calls.
+- Maintains the list of `IEvictionPolicy` instances registered at construction.
+- Notifies all policies of segment lifecycle events (`OnSegmentAdded`, `OnSegmentRemoved`), enabling O(1) `Evaluate` calls via running aggregates.
 - Evaluates all registered policies after each storage step and aggregates results into a single `IEvictionPressure`.
 - Constructs a `CompositePressure` when multiple policies fire simultaneously; returns the single pressure directly when only one fires; returns `NoPressure<TRange,TData>.Instance` when none fire.
 
-### Stateful vs. Stateless Policies
+### Policy Lifecycle Participation
 
-Policies fall into two categories:
-
-**Stateless policies** implement only `IEvictionPolicy<TRange, TData>`. They receive no lifecycle notifications and recompute their metric from `allSegments` in `Evaluate`. This is acceptable when the metric is already O(1) (e.g., `allSegments.Count` for `MaxSegmentCountPolicy`).
-
-**Stateful policies** implement `IStatefulEvictionPolicy<TRange, TData>` (which extends `IEvictionPolicy`). They maintain a running aggregate updated incrementally via `OnSegmentAdded` and `OnSegmentRemoved`. When `Evaluate` is called, they only compare the cached aggregate against the configured threshold — O(1) regardless of cache size. This avoids O(N) re-scans for metrics that require iterating all segments (e.g., total span).
-
-```csharp
-internal interface IStatefulEvictionPolicy<TRange, TData> : IEvictionPolicy<TRange, TData>
-{
-    void OnSegmentAdded(CachedSegment<TRange, TData> segment);
-    void OnSegmentRemoved(CachedSegment<TRange, TData> segment);
-}
-```
-
-The evaluator separates stateful policies into a dedicated array at construction, so the `OnSegmentAdded`/`OnSegmentRemoved` notification loop only iterates policies that actually use it.
+All policies implement `IEvictionPolicy<TRange, TData>`, which includes `OnSegmentAdded`,
+`OnSegmentRemoved`, and `Evaluate`. Each policy maintains its own running aggregate updated
+incrementally via the lifecycle methods, keeping `Evaluate` at O(1). The evaluator forwards
+all `OnSegmentAdded`/`OnSegmentRemoved` calls to every registered policy.
 
 ---
 
@@ -364,11 +353,11 @@ All built-in selectors use metadata. Time-aware selectors (LRU, FIFO) capture ti
 
 ### Selector-Specific Metadata Types
 
-| Selector                        | Metadata Class         | Fields                    | Notes                                                           |
-|---------------------------------|------------------------|---------------------------|-----------------------------------------------------------------|
-| `LruEvictionSelector`           | `LruMetadata`          | `DateTime LastAccessedAt` | Updated on each `UsedSegments` entry                            |
-| `FifoEvictionSelector`          | `FifoMetadata`         | `DateTime CreatedAt`      | Immutable after creation                                        |
-| `SmallestFirstEvictionSelector` | `SmallestFirstMetadata`| `long Span`               | Immutable after creation; computed from `Range.Span(domain)`    |
+| Selector                        | Metadata Class          | Fields                    | Notes                                                        |
+|---------------------------------|-------------------------|---------------------------|--------------------------------------------------------------|
+| `LruEvictionSelector`           | `LruMetadata`           | `DateTime LastAccessedAt` | Updated on each `UsedSegments` entry                         |
+| `FifoEvictionSelector`          | `FifoMetadata`          | `DateTime CreatedAt`      | Immutable after creation                                     |
+| `SmallestFirstEvictionSelector` | `SmallestFirstMetadata` | `long Span`               | Immutable after creation; computed from `Range.Span(domain)` |
 
 Metadata classes are nested `internal sealed` classes inside their respective selector classes.
 
@@ -439,7 +428,7 @@ Step 3+4: EvaluateAndExecute                     (EvictionEngine)
   |        Returns: toRemove list
   |
 Step 4 (storage): Remove evicted segments        (CacheNormalizationExecutor, sole storage writer)
-  |      + engine.OnSegmentsRemoved(toRemove)
+  |      + engine.OnSegmentRemoved(segment) per removed segment
   |        → evaluator.OnSegmentRemoved(...)  per segment
 ```
 

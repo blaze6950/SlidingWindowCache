@@ -32,8 +32,7 @@ namespace Intervals.NET.Caching.VisitedPlaces.Core.Ttl;
     ///   ownership via <see cref="CachedSegment{TRange,TData}.TryMarkAsRemoved()"/> internally
     ///   (<c>Interlocked.CompareExchange</c>) and returns <see langword="true"/> only for the
     ///   first caller. If it returns <see langword="false"/> the segment was already removed by
-    ///   eviction; fire <see cref="IVisitedPlacesCacheDiagnostics.TtlSegmentExpired"/> and return
-    ///   (idempotent no-op for storage and engine).
+    ///   eviction; return immediately without firing any diagnostic (idempotent no-op for storage and engine).
 /// </description></item>
 /// <item><description>
 ///   Call <see cref="EvictionEngine{TRange,TData}.OnSegmentRemoved"/> to update stateful
@@ -133,8 +132,8 @@ internal sealed class TtlExpirationExecutor<TRange, TData>
         // the Background Storage Loop, this returns false and we fire only the diagnostic.
         if (!_storage.TryRemove(workItem.Segment))
         {
-            // Already removed — still fire the diagnostic so TTL events are always counted.
-            _diagnostics.TtlSegmentExpired();
+            // Already removed by eviction — idempotent no-op. Diagnostic is NOT fired;
+            // TtlSegmentExpired counts only actual TTL-driven removals.
             return;
         }
 

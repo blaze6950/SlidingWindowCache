@@ -9,7 +9,7 @@ namespace Intervals.NET.Caching.SlidingWindow.Unit.Tests.Public.Cache;
 /// Unit tests for SlidingWindowCache disposal behavior.
 /// Validates proper resource cleanup, idempotency, and exception handling.
 /// </summary>
-public class WindowCacheDisposalTests
+public class SlidingWindowCacheDisposalTests
 {
     #region Test Infrastructure
 

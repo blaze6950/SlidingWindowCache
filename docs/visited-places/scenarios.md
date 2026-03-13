@@ -141,7 +141,7 @@ Scenarios are grouped by path:
 1. **Metadata update** — update per-segment eviction metadata for all used segments by calling `engine.UpdateMetadata(usedSegments)` (delegated to `selector.UpdateMetadata`)
 2. **Storage** — store fetched data as new segment(s), if `FetchedData != null`; call `engine.InitializeSegment(segment)` for each new segment (initializes selector metadata and notifies stateful policies)
 3. **Eviction evaluation + execution** — call `engine.EvaluateAndExecute(allSegments, justStoredSegments)` if new data was stored; returns list of segments to remove
-4. **Post-removal** — remove returned segments from storage (`storage.Remove`); call `engine.OnSegmentsRemoved(toRemove)` to notify stateful policies
+4. **Post-removal** — remove returned segments from storage (`storage.Remove`); call `engine.OnSegmentRemoved(segment)` for each removed segment to notify policies
 
 ---
 
@@ -195,7 +195,7 @@ Scenarios are grouped by path:
    - Executor builds immune set from `justStoredSegments`
    - Executor loops: `selector.TrySelectCandidate(allSegments, immune, out candidate)` → `pressure.Reduce(candidate)` until satisfied
    - Engine returns `toRemove` list
-5. Processor removes evicted segments from storage; calls `engine.OnSegmentsRemoved(toRemove)`
+5. Processor removes evicted segments from storage; calls `engine.OnSegmentRemoved(segment)` per removed segment
 6. Cache returns to within-policy state
 
 **Note**: Multiple policies may fire simultaneously. The Eviction Executor runs once per event (not once per fired policy), using `CompositePressure` to satisfy all constraints simultaneously.
@@ -215,7 +215,7 @@ Scenarios are grouped by path:
    - Each stored segment is added independently; no merging with existing segments
    - `engine.InitializeSegment(segment)` is called for each new segment
 4. `engine.EvaluateAndExecute(allSegments, justStoredSegments)` (after all new segments are stored)
-5. If any policy fires: processor removes returned segments; calls `engine.OnSegmentsRemoved(toRemove)`
+5. If any policy fires: processor removes returned segments; calls `engine.OnSegmentRemoved(segment)` per removed segment
 
 **Note**: Gaps are stored as distinct segments. Segments are never merged, even when adjacent. Each independently-fetched sub-range occupies its own entry in `CachedSegments`. This preserves independent statistics per fetched unit.
 
@@ -252,7 +252,7 @@ Scenarios are grouped by path:
    - Executor builds immune set (the just-stored segment)
    - LRU Selector samples O(SampleSize) eligible segments; selects the one with the smallest `LruMetadata.LastAccessedAt`
    - Executor calls `pressure.Reduce(candidate)`; `SegmentCountPressure.IsExceeded` becomes `false`
-4. Processor removes the selected segment from storage; `engine.OnSegmentsRemoved([candidate])`
+4. Processor removes the selected segment from storage; `engine.OnSegmentRemoved(candidate)`
 5. Total segment count returns to 10
 
 **Post-condition**: All remaining segments are valid cache entries with up-to-date metadata.
@@ -451,7 +451,7 @@ Scenarios are grouped by path:
 2. At `t=30s`, the delay completes
 3. TTL actor calls `S₁.MarkAsRemoved()` — returns `true` (first caller; segment is still present)
 4. TTL actor calls `_storage.Remove(S₁)` — segment physically removed from storage
-5. TTL actor calls `_engine.OnSegmentsRemoved([S₁])` — notifies stateful policies
+5. TTL actor calls `_engine.OnSegmentRemoved(S₁)` — notifies policies
 6. `_diagnostics.TtlSegmentExpired()` is fired
 7. `S₁` is no longer returned by `FindIntersecting`; subsequent user requests for its range incur a cache miss
 
@@ -472,7 +472,7 @@ Scenarios are grouped by path:
 2. At `t=60s`, the TTL work item fires and calls `S₁.MarkAsRemoved()`:
    - Returns `false` (another caller already set the flag)
    - TTL actor skips `storage.Remove` and `engine.OnSegmentsRemoved` entirely
-3. `_diagnostics.TtlSegmentExpired()` is still fired (diagnostic is always fired on TTL expiry)
+3. `_diagnostics.TtlSegmentExpired()` is NOT fired — `TryRemove` returned `false` (segment already removed by eviction).
 
 **Invariant enforced**: VPC.T.1 — TTL expiration is idempotent.
 

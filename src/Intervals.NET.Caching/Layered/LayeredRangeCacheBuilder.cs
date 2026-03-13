@@ -104,6 +104,13 @@ public sealed class LayeredRangeCacheBuilder<TRange, TData, TDomain>
     /// <exception cref="InvalidOperationException">
     /// Thrown when no layers have been added via <see cref="AddLayer"/>.
     /// </exception>
+    /// <remarks>
+    /// <para><strong>Failure Safety:</strong></para>
+    /// <para>
+    /// If a factory throws during construction, all previously created layers are disposed
+    /// before the exception propagates, preventing resource leaks.
+    /// </para>
+    /// </remarks>
     public IRangeCache<TRange, TData, TDomain> Build()
     {
         if (_factories.Count == 0)
@@ -116,13 +123,27 @@ public sealed class LayeredRangeCacheBuilder<TRange, TData, TDomain>
         var caches = new List<IRangeCache<TRange, TData, TDomain>>(_factories.Count);
         var currentSource = _rootDataSource;
 
-        foreach (var factory in _factories)
+        try
         {
-            var cache = factory(currentSource);
-            caches.Add(cache);
+            foreach (var factory in _factories)
+            {
+                var cache = factory(currentSource);
+                caches.Add(cache);
 
-            // Wrap this cache as the data source for the next (outer) layer
-            currentSource = new RangeCacheDataSourceAdapter<TRange, TData, TDomain>(cache);
+                // Wrap this cache as the data source for the next (outer) layer
+                currentSource = new RangeCacheDataSourceAdapter<TRange, TData, TDomain>(cache);
+            }
+        }
+        catch
+        {
+            // Dispose all successfully created layers to prevent resource leaks
+            // if a factory throws partway through construction.
+            foreach (var cache in caches)
+            {
+                cache.DisposeAsync().AsTask().GetAwaiter().GetResult();
+            }
+
+            throw;
         }
 
         return new LayeredRangeCache<TRange, TData, TDomain>(caches);

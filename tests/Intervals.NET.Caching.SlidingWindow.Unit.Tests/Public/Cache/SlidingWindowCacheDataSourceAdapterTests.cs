@@ -13,7 +13,7 @@ namespace Intervals.NET.Caching.SlidingWindow.Unit.Tests.Public.Cache;
 /// and exception forwarding. Uses a mocked <see cref="IRangeCache{TRange,TData,TDomain}"/> to
 /// isolate the adapter from any real cache implementation.
 /// </summary>
-public sealed class WindowCacheDataSourceAdapterTests
+public sealed class SlidingWindowCacheDataSourceAdapterTests
 {
     #region Test Infrastructure
 

@@ -54,6 +54,10 @@ internal sealed class LinkedListStrideIndexStorage<TRange, TData> : SegmentStora
     // Sorted linked list — mutated on Background Path only.
     private readonly LinkedList<CachedSegment<TRange, TData>> _list = [];
 
+    // Synchronizes the linked-list walk (User Path) against node unlinking (Background Path).
+    // The stride index binary search is lock-free; only the linked-list portion requires this lock.
+    private readonly object _listSyncRoot = new();
+
     // Stride index: every Nth LinkedListNode in the sorted list as a navigation anchor.
     // Stores nodes directly — no separate segment-to-node map needed.
     // Published atomically via Volatile.Write; read via Volatile.Read on the User Path.
@@ -142,25 +146,33 @@ internal sealed class LinkedListStrideIndexStorage<TRange, TData> : SegmentStora
         }
 
         // Walk linked list from the start node (or from head if no usable anchor found).
-        var node = startNode ?? _list.First;
-
-        while (node != null)
+        // Lock protects against concurrent node unlinking in NormalizeStrideIndex:
+        // - Prevents _list.First from being mutated while we read it (C4)
+        // - Prevents node.Next from being set to null by Remove() during our walk (C5)
+        // The entire walk is under one lock acquisition for efficiency — the Background Path
+        // waits for the read to finish rather than racing node-by-node.
+        lock (_listSyncRoot)
         {
-            var seg = node.Value;
+            var node = startNode ?? _list.First;
 
-            // Short-circuit: if segment starts after range ends, no more candidates.
-            if (seg.Range.Start.Value.CompareTo(range.End.Value) > 0)
+            while (node != null)
             {
-                break;
-            }
+                var seg = node.Value;
 
-            // Use IsRemoved flag as the primary soft-delete filter (no shared collection needed).
-            if (!seg.IsRemoved && seg.Range.Overlaps(range))
-            {
-                (results ??= []).Add(seg);
-            }
+                // Short-circuit: if segment starts after range ends, no more candidates.
+                if (seg.Range.Start.Value.CompareTo(range.End.Value) > 0)
+                {
+                    break;
+                }
 
-            node = node.Next;
+                // Use IsRemoved flag as the primary soft-delete filter (no shared collection needed).
+                if (!seg.IsRemoved && seg.Range.Overlaps(range))
+                {
+                    (results ??= []).Add(seg);
+                }
+
+                node = node.Next;
+            }
         }
 
         // NOTE: All segments added via Add() are inserted into _list immediately (InsertSorted).
@@ -366,11 +378,10 @@ internal sealed class LinkedListStrideIndexStorage<TRange, TData> : SegmentStora
     /// <para><strong>Order matters for thread safety (Invariant VPC.B.5):</strong></para>
     /// <para>
     /// The new stride index is built and published BEFORE dead nodes are physically unlinked.
-    /// This ensures that any User Path thread reading the OLD stride index before the swap
-    /// still finds all anchor nodes present in <c>_list</c> (their <c>Next</c> pointers intact).
-    /// If dead nodes were unlinked first, a concurrent <c>FindIntersecting</c> walk starting
-    /// from a stale anchor could truncate prematurely when it hits a node whose <c>Next</c>
-    /// was set to <see langword="null"/> by the physical removal.
+    /// Dead nodes are then unlinked under <c>_listSyncRoot</c>, which is the same lock held
+    /// by the User Path during its entire linked-list walk in <see cref="FindIntersecting"/>.
+    /// This guarantees that no User Path walk can observe a node whose <c>Next</c> pointer was
+    /// set to <see langword="null"/> by <c>LinkedList.Remove()</c> mid-walk.
     /// </para>
     /// <para><strong>Allocation:</strong> Uses an <see cref="ArrayPool{T}"/> rental as the
     /// anchor accumulation buffer (returned immediately after the right-sized index array is
@@ -427,19 +438,24 @@ internal sealed class LinkedListStrideIndexStorage<TRange, TData> : SegmentStora
             anchorPool.Return(anchorBuffer, clearArray: true);
         }
 
-        // Second pass: now that the new stride index is live, physically unlink removed nodes.
-        // Any User Path thread that was using the old stride index has already advanced past
-        // these nodes via Next pointers that were still valid before we unlinked them.
-        var node = _list.First;
-        while (node != null)
+        // Second pass: physically unlink removed nodes under lock.
+        // The User Path holds the same lock during its entire linked-list walk, so this
+        // unlinking pass waits until any in-progress read completes, then runs uninterrupted.
+        // This eliminates the race where Remove() sets node.Next to null while a User Path
+        // thread is walking through that node.
+        lock (_listSyncRoot)
         {
-            var next = node.Next;
-            if (node.Value.IsRemoved)
+            var node = _list.First;
+            while (node != null)
             {
-                _list.Remove(node);
-            }
+                var next = node.Next;
+                if (node.Value.IsRemoved)
+                {
+                    _list.Remove(node);
+                }
 
-            node = next;
+                node = next;
+            }
         }
 
         // Reset the add counter.

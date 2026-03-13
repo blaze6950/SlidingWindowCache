@@ -512,8 +512,8 @@ public sealed class VisitedPlacesCacheInvariantTests : IAsyncDisposable
         // Wait for both TTL work items to fire (one is a no-op because segment was already evicted)
         await Task.Delay(500);
 
-        // ASSERT — two TTL expirations fired, zero background failures
-        Assert.Equal(2, _diagnostics.TtlSegmentExpired);
+        // ASSERT — only one TTL expiration diagnostic fires (the no-op branch is silent), zero background failures
+        Assert.Equal(1, _diagnostics.TtlSegmentExpired);
         Assert.Equal(0, _diagnostics.BackgroundOperationFailed);
     }
 

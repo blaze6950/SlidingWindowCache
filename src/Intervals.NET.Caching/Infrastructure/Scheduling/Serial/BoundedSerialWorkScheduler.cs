@@ -75,7 +75,7 @@ namespace Intervals.NET.Caching.Infrastructure.Scheduling.Serial;
 /// <para>See also: <see cref="UnboundedSerialWorkScheduler{TWorkItem}"/> for the unbounded FIFO alternative.</para>
 /// <para>See also: <see cref="BoundedSupersessionWorkScheduler{TWorkItem}"/> for the bounded supersession variant.</para>
 /// </remarks>
-internal class BoundedSerialWorkScheduler<TWorkItem> : SerialWorkSchedulerBase<TWorkItem>
+internal sealed class BoundedSerialWorkScheduler<TWorkItem> : SerialWorkSchedulerBase<TWorkItem>
     where TWorkItem : class, ISchedulableWorkItem
 {
     private readonly Channel<TWorkItem> _workChannel;

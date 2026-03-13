@@ -154,7 +154,7 @@ Assert.Equal(expectedCount, cache.SegmentCount);
 1. Update metadata for all `UsedSegments` by delegating to the `EvictionEngine` (`engine.UpdateMetadata` → `selector.UpdateMetadata`)
 2. Store `FetchedData` as new segment(s), if present; call `engine.InitializeSegment(segment)` after each store
 3. Evaluate all Eviction Policies and execute eviction if any policy is exceeded (`engine.EvaluateAndExecute`), only if new data was stored in step 2
-4. Remove evicted segments from storage (`storage.Remove` per segment); call `engine.OnSegmentsRemoved(toRemove)` after all removals
+4. Remove evicted segments from storage (`storage.Remove` per segment); call `engine.OnSegmentRemoved(segment)` after each removal
 
 **VPC.B.3a** [Architectural] **Metadata update always precedes storage** in the processing sequence.
 
@@ -412,7 +412,7 @@ VPC invariant groups:
 | VPC.B  | Background Path & Event Processing        | 8     |
 | VPC.C  | Segment Storage & Non-Contiguity          | 6     |
 | VPC.D  | Concurrency                               | 5     |
-| VPC.E  | Eviction                                  | 13    |
+| VPC.E  | Eviction                                  | 14    |
 | VPC.F  | Data Source & I/O                         | 4     |
 | VPC.T  | TTL (Time-To-Live)                        | 3     |
 

@@ -157,7 +157,7 @@ public interface ISlidingWindowCacheDiagnostics : ICacheDiagnostics
     /// Records the start of rebalance execution after decision engine approves execution.
     /// Called when DecisionEngine determines rebalance is necessary (RequestedRange outside NoRebalanceRange and DesiredCacheRange != CurrentCacheRange).
     /// Indicates transition from Decision Path to Execution Path (Decision Scenario D3).
-    /// Location: TaskBasedRebalanceExecutionController.ExecuteRequestAsync / ChannelBasedRebalanceExecutionController.ProcessExecutionRequestsAsync (before executor invocation)
+    /// Location: UnboundedSupersessionWorkScheduler.ExecuteRequestAsync / BoundedSupersessionWorkScheduler.ProcessExecutionRequestsAsync (before executor invocation)
     /// Related: Invariant SWC.D.5 (Rebalance triggered only if confirmed necessary)
     /// </summary>
     /// <remarks>
@@ -181,7 +181,7 @@ public interface ISlidingWindowCacheDiagnostics : ICacheDiagnostics
     /// Records cancellation of rebalance execution due to a new user request or intent supersession.
     /// Called when intentToken is cancelled during rebalance execution (after execution started but before completion).
     /// Indicates User Path priority enforcement and single-flight execution (yielding to new requests).
-    /// Location: TaskBasedRebalanceExecutionController.ExecuteRequestAsync / ChannelBasedRebalanceExecutionController.ProcessExecutionRequestsAsync (catch OperationCanceledException during execution)
+    /// Location: UnboundedSupersessionWorkScheduler.ExecuteRequestAsync / BoundedSupersessionWorkScheduler.ProcessExecutionRequestsAsync (catch OperationCanceledException during execution)
     /// Related: Invariant SWC.F.1a (Rebalance Execution must yield to User Path immediately)
     /// </summary>
     /// <remarks>

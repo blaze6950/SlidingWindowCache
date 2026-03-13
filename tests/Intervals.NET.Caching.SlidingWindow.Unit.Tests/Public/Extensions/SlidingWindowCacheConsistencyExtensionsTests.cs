@@ -15,7 +15,7 @@ namespace Intervals.NET.Caching.SlidingWindow.Unit.Tests.Public.Extensions;
 /// Uses mocked <see cref="ISlidingWindowCache{TRange, TData, TDomain}"/> to isolate the extension methods
 /// from any real cache implementation.
 /// </summary>
-public sealed class WindowCacheConsistencyExtensionsTests
+public sealed class SlidingWindowCacheConsistencyExtensionsTests
 {
     #region Test Infrastructure
 

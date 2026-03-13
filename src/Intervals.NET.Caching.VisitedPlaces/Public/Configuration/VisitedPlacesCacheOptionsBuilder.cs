@@ -14,7 +14,7 @@ public sealed class VisitedPlacesCacheOptionsBuilder<TRange, TData>
 {
     private StorageStrategyOptions<TRange, TData> _storageStrategy =
         SnapshotAppendBufferStorageOptions<TRange, TData>.Default;
-    private int _eventChannelCapacity = 128;
+    private int? _eventChannelCapacity;
     private TimeSpan? _segmentTtl;
 
     /// <summary>
@@ -39,7 +39,7 @@ public sealed class VisitedPlacesCacheOptionsBuilder<TRange, TData>
 
     /// <summary>
     /// Sets the background event channel capacity.
-    /// Defaults to 128.
+    /// Defaults to <see langword="null"/> (unbounded task-chaining scheduling).
     /// </summary>
     public VisitedPlacesCacheOptionsBuilder<TRange, TData> WithEventChannelCapacity(int capacity)
     {

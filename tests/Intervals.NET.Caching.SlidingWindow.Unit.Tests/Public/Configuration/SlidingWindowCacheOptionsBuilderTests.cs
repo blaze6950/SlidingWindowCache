@@ -6,7 +6,7 @@ namespace Intervals.NET.Caching.SlidingWindow.Unit.Tests.Public.Configuration;
 /// Unit tests for <see cref="SlidingWindowCacheOptionsBuilder"/> that verify fluent API,
 /// default values, required-field enforcement, and <see cref="SlidingWindowCacheOptions"/> output.
 /// </summary>
-public class WindowCacheOptionsBuilderTests
+public class SlidingWindowCacheOptionsBuilderTests
 {
     #region Build() — Required Fields Tests
 

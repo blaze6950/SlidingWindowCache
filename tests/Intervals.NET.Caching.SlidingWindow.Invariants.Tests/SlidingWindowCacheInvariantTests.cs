@@ -15,13 +15,13 @@ namespace Intervals.NET.Caching.SlidingWindow.Invariants.Tests;
 /// Tests use DEBUG instrumentation counters to verify behavioral properties.
 /// Uses Intervals.NET for proper range handling and inclusivity considerations.
 /// </summary>
-public sealed class WindowCacheInvariantTests : IAsyncDisposable
+public sealed class SlidingWindowCacheInvariantTests : IAsyncDisposable
 {
     private readonly IntegerFixedStepDomain _domain;
     private SlidingWindowCache<int, int, IntegerFixedStepDomain>? _currentCache;
     private readonly EventCounterCacheDiagnostics _cacheDiagnostics;
 
-    public WindowCacheInvariantTests()
+    public SlidingWindowCacheInvariantTests()
     {
         _cacheDiagnostics = new EventCounterCacheDiagnostics();
         _domain = TestHelpers.CreateIntDomain();

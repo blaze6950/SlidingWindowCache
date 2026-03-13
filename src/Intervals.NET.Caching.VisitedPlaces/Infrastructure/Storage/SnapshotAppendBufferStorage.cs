@@ -128,7 +128,7 @@ internal sealed class SnapshotAppendBufferStorage<TRange, TData> : SegmentStorag
         }
 
         // Scan append buffer (unsorted, small)
-        var appendCount = _appendCount; // safe: Background Path writes this; User Path reads it
+        var appendCount = Volatile.Read(ref _appendCount); // Acquire fence: ensures visibility of append buffer entries written before this count was published
         for (var i = 0; i < appendCount; i++)
         {
             var seg = _appendBuffer[i];
@@ -145,7 +145,7 @@ internal sealed class SnapshotAppendBufferStorage<TRange, TData> : SegmentStorag
     public override void Add(CachedSegment<TRange, TData> segment)
     {
         _appendBuffer[_appendCount] = segment;
-        _appendCount++;
+        Volatile.Write(ref _appendCount, _appendCount + 1); // Release fence: ensures buffer entry is visible before count increment
         IncrementCount();
 
         if (_appendCount == _appendBufferSize)
@@ -205,7 +205,10 @@ internal sealed class SnapshotAppendBufferStorage<TRange, TData> : SegmentStorag
     /// <para><strong>Algorithm:</strong> O(n + m) merge of two sorted sequences (snapshot sorted,
     /// append buffer sorted in-place on the private backing array).</para>
     /// <para>Resets <c>_appendCount</c> to 0 and publishes via <c>Volatile.Write</c> so User
-    /// Path threads atomically see the new snapshot. Removed segments (whose
+    /// Path threads atomically see the new snapshot. The snapshot is published BEFORE
+    /// <c>_appendCount</c> is reset to zero — this eliminates the race where the User Path
+    /// could observe <c>_appendCount == 0</c> but still read the old snapshot (missing new segments).
+    /// Removed segments (whose
     /// <see cref="CachedSegment{TRange,TData}.IsRemoved"/> flag is set) are excluded from the
     /// new snapshot and are physically dropped from memory.</para>
     /// <para><strong>Allocation:</strong> No intermediate <c>List&lt;T&gt;</c> allocations.
@@ -245,13 +248,14 @@ internal sealed class SnapshotAppendBufferStorage<TRange, TData> : SegmentStorag
         // Merge two sorted sequences directly into the output array — one allocation.
         var merged = MergeSorted(snapshot, liveSnapshotCount, _appendBuffer, _appendCount, liveAppendCount);
 
-        // Reset append buffer
-        _appendCount = 0;
+        // Atomically publish the new snapshot FIRST (release fence — User Path reads with acquire fence)
+        // Must happen before resetting _appendCount so User Path never sees count==0 with the old snapshot.
+        Volatile.Write(ref _snapshot, merged);
+
+        // Reset append buffer — after snapshot publication
+        Volatile.Write(ref _appendCount, 0);
         // Clear stale references in append buffer
         Array.Clear(_appendBuffer, 0, _appendBufferSize);
-
-        // Atomically publish the new snapshot (release fence — User Path reads with acquire fence)
-        Volatile.Write(ref _snapshot, merged);
     }
 
     private static CachedSegment<TRange, TData>[] MergeSorted(

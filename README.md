@@ -3,7 +3,8 @@
 
 A read-only, range-based, sequential-optimized cache with decision-driven background rebalancing, three consistency modes (eventual/hybrid/strong), and intelligent work avoidance.
 
-[![CI/CD](https://github.com/blaze6950/Intervals.NET.Caching/actions/workflows/intervals-net-caching.yml/badge.svg)](https://github.com/blaze6950/Intervals.NET.Caching/actions/workflows/intervals-net-caching.yml)
+[![CI/CD (SlidingWindow)](https://github.com/blaze6950/Intervals.NET.Caching/actions/workflows/intervals-net-caching-swc.yml/badge.svg)](https://github.com/blaze6950/Intervals.NET.Caching/actions/workflows/intervals-net-caching-swc.yml)
+[![CI/CD (VisitedPlaces)](https://github.com/blaze6950/Intervals.NET.Caching/actions/workflows/intervals-net-caching-vpc.yml/badge.svg)](https://github.com/blaze6950/Intervals.NET.Caching/actions/workflows/intervals-net-caching-vpc.yml)
 [![NuGet](https://img.shields.io/nuget/v/Intervals.NET.Caching.SlidingWindow.svg)](https://www.nuget.org/packages/Intervals.NET.Caching.SlidingWindow/)
 [![NuGet Downloads](https://img.shields.io/nuget/dt/Intervals.NET.Caching.SlidingWindow.svg)](https://www.nuget.org/packages/Intervals.NET.Caching.SlidingWindow/)
 [![codecov](https://codecov.io/gh/blaze6950/Intervals.NET.Caching/graph/badge.svg?token=RFQBNX7MMD)](https://codecov.io/gh/blaze6950/Intervals.NET.Caching)
@@ -14,7 +15,7 @@ A read-only, range-based, sequential-optimized cache with decision-driven backgr
 
 - **`Intervals.NET.Caching`** — shared interfaces, DTOs, layered cache infrastructure
 - **`Intervals.NET.Caching.SlidingWindow`** — sliding window cache implementation (sequential-access optimized)
-- **`Intervals.NET.Caching.VisitedPlaces`** — scaffold only (random-access optimized, not yet implemented)
+- **`Intervals.NET.Caching.VisitedPlaces`** — visited places cache implementation (random-access optimized, with eviction and TTL)
 
 ## What It Is
 

@@ -13,7 +13,7 @@ namespace Intervals.NET.Caching.SlidingWindow.Unit.Tests.Public.Cache;
 /// (which satisfy <see cref="IRangeCache{TRange,TData,TDomain}"/>) to isolate the wrapper
 /// from real cache behavior.
 /// </summary>
-public sealed class LayeredWindowCacheTests
+public sealed class LayeredSlidingWindowCacheTests
 {
     #region Test Infrastructure
 

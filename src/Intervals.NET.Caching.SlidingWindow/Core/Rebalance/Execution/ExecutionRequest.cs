@@ -5,7 +5,7 @@ using Intervals.NET.Caching.SlidingWindow.Core.Rebalance.Intent;
 namespace Intervals.NET.Caching.SlidingWindow.Core.Rebalance.Execution;
 
 /// <summary>
-/// Execution request message sent from IntentController to IRebalanceExecutionController implementations.
+/// Execution request message sent from IntentController to the supersession work scheduler.
 /// Contains all information needed to execute a rebalance operation.
 /// </summary>
 /// <typeparam name="TRange">The type representing the range boundaries.</typeparam>
@@ -21,7 +21,7 @@ namespace Intervals.NET.Caching.SlidingWindow.Core.Rebalance.Execution;
 /// </para>
 /// <para><strong>Lifecycle:</strong></para>
 /// <list type="number">
-/// <item><description>Created by IRebalanceExecutionController.PublishExecutionRequest()</description></item>
+/// <item><description>Created by the supersession work scheduler</description></item>
 /// <item><description>Stored as LastExecutionRequest for cancellation coordination</description></item>
 /// <item><description>Processed by execution strategy (task chain or channel loop)</description></item>
 /// <item><description>Cancelled if superseded by newer request (Cancel() method)</description></item>

@@ -156,8 +156,8 @@ public sealed class TtlExpirationTests : IAsyncDisposable
         // Wait for both TTL expirations to fire
         await Task.Delay(500);
 
-        // ASSERT — both TTL work items executed without throwing; no spurious storage errors
-        Assert.Equal(2, _diagnostics.TtlSegmentExpired);
+        // ASSERT — only the real removal fires TtlSegmentExpired; the already-evicted no-op is silent
+        Assert.Equal(1, _diagnostics.TtlSegmentExpired);
         Assert.Equal(0, _diagnostics.BackgroundOperationFailed);
     }
 

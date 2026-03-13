@@ -18,7 +18,7 @@ namespace Intervals.NET.Caching.SlidingWindow.Unit.Tests.Public.Cache;
 /// Uses <see cref="SimpleTestDataSource{TData}"/> to avoid mocking the complex
 /// <see cref="IDataSource{TRange,TData}"/> interface for these tests.
 /// </summary>
-public sealed class WindowCacheBuilderTests
+public sealed class SlidingWindowCacheBuilderTests
 {
     #region Test Infrastructure
 

@@ -83,11 +83,11 @@ public static class RangeCacheConsistencyExtensions
         where TRange : IComparable<TRange>
         where TDomain : IRangeDomain<TRange>
     {
-        var result = await cache.GetDataAsync(requestedRange, cancellationToken);
+        var result = await cache.GetDataAsync(requestedRange, cancellationToken).ConfigureAwait(false);
 
         try
         {
-            await cache.WaitForIdleAsync(cancellationToken);
+            await cache.WaitForIdleAsync(cancellationToken).ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {
