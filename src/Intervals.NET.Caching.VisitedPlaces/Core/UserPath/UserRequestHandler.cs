@@ -38,14 +38,22 @@ namespace Intervals.NET.Caching.VisitedPlaces.Core.UserPath;
 /// <para><strong>Allocation strategy:</strong></para>
 /// <list type="bullet">
 /// <item><description>
-///   Working buffers (<c>hittingRangeData</c>, merged sources, <c>pieces</c> in <see cref="Assemble"/>)
-///   are rented from <see cref="ArrayPool{T}.Shared"/> and returned in <c>finally</c> blocks.
-///   On WASM (single-threaded), pool-hit rate is ~100% with zero contention.
+///   <c>hittingRangeData</c> and the merged sources buffer are plain heap arrays (<c>new T[]</c>).
+///   Both cross <c>await</c> points, making <c>ArrayPool</c> or <c>ref struct</c> approaches
+///   structurally unsound. In the typical case (1–2 hitting segments) the arrays are tiny and
+///   short-lived (Gen0). If benchmarks reveal pressure at very large segment counts, a
+///   threshold-switched buffer type (plain allocation ≤ N, <see cref="ArrayPool{T}"/> &gt; N)
+///   can be introduced without changing the surrounding logic.
+/// </description></item>
+/// <item><description>
+///   The <c>pieces</c> working buffer inside <see cref="Assemble"/> is rented from
+///   <see cref="ArrayPool{T}.Shared"/> and returned before the method exits — <c>Assemble</c>
+///   is synchronous, so the rental scope is tight and pool overhead is minimal.
 /// </description></item>
 /// <item><description>
 ///   <c>ComputeGaps</c> returns a deferred <see cref="IEnumerable{T}"/>; the caller probes it
 ///   with a single <c>MoveNext()</c> call. On Partial Hit, <c>PrependAndResume</c> resumes the
-///   same enumerator inside <c>FetchAsync</c> — the LINQ chain is walked exactly once, no
+///   same enumerator inside <c>FetchAsync</c> — the chain is walked exactly once, no
 ///   intermediate array is ever materialized for gaps.
 /// </description></item>
 /// <item><description>
@@ -110,7 +118,7 @@ internal sealed class UserRequestHandler<TRange, TData, TDomain>
     /// </description></item>
     /// <item><description>
     ///   Otherwise: map segments to <see cref="RangeData{TRangeType,TDataType,TRangeDomain}"/> into a
-    ///   pooled buffer, compute gaps, and branch on Full Hit vs Partial Hit.
+    ///   heap array, compute gaps, and branch on Full Hit vs Partial Hit.
     /// </description></item>
     /// <item><description>Assemble result data from sources via a pooled buffer</description></item>
     /// <item><description>Publish CacheNormalizationRequest (fire-and-forget)</description></item>
@@ -118,9 +126,9 @@ internal sealed class UserRequestHandler<TRange, TData, TDomain>
     /// </list>
     /// <para><strong>Allocation profile per scenario:</strong></para>
     /// <list type="bullet">
-    /// <item><description><strong>Full Hit:</strong> storage snapshot (irreducible) + result array (irreducible) = 2 allocations</description></item>
+    /// <item><description><strong>Full Hit:</strong> storage snapshot (irreducible) + <c>hittingRangeData</c> array + <c>pieces</c> pool rental + result array = 3 heap allocations (pool rental is bucket-local)</description></item>
     /// <item><description><strong>Full Miss:</strong> storage snapshot + <c>[chunk]</c> wrapper + result data array = 3 allocations</description></item>
-    /// <item><description><strong>Partial Hit:</strong> storage snapshot + <c>PrependAndResume</c> state machine + chunks array + result array = 4 allocations</description></item>
+    /// <item><description><strong>Partial Hit:</strong> storage snapshot + <c>hittingRangeData</c> array + <c>PrependAndResume</c> state machine + chunks array + <c>merged</c> array + <c>pieces</c> pool rental + result array = 6 heap allocations</description></item>
     /// </list>
     /// </remarks>
     public async ValueTask<RangeResult<TRange, TData>> HandleRequestAsync(
@@ -165,88 +173,75 @@ internal sealed class UserRequestHandler<TRange, TData, TDomain>
         }
         else
         {
-            // At least one segment hit: map segments to RangeData into a pooled buffer.
-            // Pool rental: no heap allocation; returned in the finally block below.
-            var rangeDataPool = ArrayPool<RangeData<TRange, TData, TDomain>>.Shared;
-            var hittingRangeData = rangeDataPool.Rent(hittingSegments.Count);
-            try
+            // At least one segment hit: map segments to RangeData.
+            // Plain heap allocation — in the typical case (1–2 hitting segments) the array is tiny
+            // and short-lived (Gen0). ArrayPool would add rental/return overhead and per-closed-generic
+            // pool fragmentation with no structural benefit at this scale. If benchmarks reveal
+            // pressure at very large segment counts, introduce a threshold-switched buffer type then.
+            var hittingRangeData = new RangeData<TRange, TData, TDomain>[hittingSegments.Count];
+
+            // Step 2: Map segments to RangeData — zero-copy via ReadOnlyMemoryEnumerable.
+            var hittingCount = 0;
+            foreach (var s in hittingSegments)
             {
-                // Step 2: Map segments to RangeData — zero-copy via ReadOnlyMemoryEnumerable.
-                var hittingCount = 0;
-                foreach (var s in hittingSegments)
-                {
-                    hittingRangeData[hittingCount++] =
-                        new ReadOnlyMemoryEnumerable<TData>(s.Data).ToRangeData(s.Range, _domain);
-                }
-
-                // Step 3: Probe for coverage gaps using a single enumerator — no array allocation.
-                // MoveNext() is called once here; if there is at least one gap the same enumerator
-                // (with Current already set to the first gap) is resumed inside PrependAndResume,
-                // so the LINQ chain is walked exactly once across both the probe and the fetch.
-                using var gapsEnumerator = ComputeGaps(requestedRange, hittingSegments).GetEnumerator();
-
-                if (!gapsEnumerator.MoveNext())
-                {
-                    // Full Hit: entire requested range is covered by cached segments.
-                    cacheInteraction = CacheInteraction.FullHit;
-                    _diagnostics.UserRequestFullCacheHit();
-
-                    (resultData, actualRange) = Assemble(requestedRange, hittingRangeData, hittingCount);
-                    fetchedChunks = null; // Signal to background: no new data to store
-                }
-                else
-                {
-                    // Partial Hit: some cached data, some gaps to fill.
-                    cacheInteraction = CacheInteraction.PartialHit;
-                    _diagnostics.UserRequestPartialCacheHit();
-
-                    // Fetch all gaps from IDataSource.
-                    // PrependAndResume yields gapsEnumerator.Current first, then resumes MoveNext —
-                    // the LINQ chain is never re-evaluated; FetchAsync walks it in one forward pass.
-                    // Materialize once: chunks array is used both for RangeData mapping below
-                    // and passed to CacheNormalizationRequest for the background path.
-                    // .ToArray() uses SegmentedArrayBuilder internally — 1 allocation.
-                    var chunksArray = (await _dataSource.FetchAsync(
-                            PrependAndResume(gapsEnumerator.Current, gapsEnumerator), cancellationToken)
-                        .ConfigureAwait(false)).ToArray();
-
-                    // Build merged sources (hittingRangeData + chunkRangeData) in a pooled buffer.
-                    // Upper bound: hittingCount segments + at most one RangeData per chunk.
-                    var mergedPool = ArrayPool<RangeData<TRange, TData, TDomain>>.Shared;
-                    var merged = mergedPool.Rent(hittingCount + chunksArray.Length);
-                    try
-                    {
-                        // Copy hitting segments (already mapped to RangeData).
-                        Array.Copy(hittingRangeData, merged, hittingCount);
-                        var mergedCount = hittingCount;
-
-                        // Map fetched chunks to RangeData, append valid ones, and fire the diagnostic
-                        // per chunk — one pass serves both purposes, no separate iteration needed.
-                        foreach (var c in chunksArray)
-                        {
-                            _diagnostics.DataSourceFetchGap();
-                            if (c.Range.HasValue)
-                            {
-                                merged[mergedCount++] = c.Data.ToRangeData(c.Range!.Value, _domain);
-                            }
-                        }
-
-                        (resultData, actualRange) = Assemble(requestedRange, merged, mergedCount);
-                    }
-                    finally
-                    {
-                        // clearArray: true — RangeData is a reference type; stale refs must not linger.
-                        mergedPool.Return(merged, clearArray: true);
-                    }
-
-                    // Pass chunks array directly as IEnumerable — no wrapper needed.
-                    fetchedChunks = chunksArray;
-                }
+                hittingRangeData[hittingCount++] =
+                    new ReadOnlyMemoryEnumerable<TData>(s.Data).ToRangeData(s.Range, _domain);
             }
-            finally
+
+            // Step 3: Probe for coverage gaps using a single enumerator — no array allocation.
+            // MoveNext() is called once here; if there is at least one gap the same enumerator
+            // (with Current already set to the first gap) is resumed inside PrependAndResume,
+            // so the chain is walked exactly once across both the probe and the fetch.
+            using var gapsEnumerator = ComputeGaps(requestedRange, hittingSegments).GetEnumerator();
+
+            if (!gapsEnumerator.MoveNext())
             {
-                // clearArray: true — RangeData is a reference type; stale refs must not linger.
-                rangeDataPool.Return(hittingRangeData, clearArray: true);
+                // Full Hit: entire requested range is covered by cached segments.
+                cacheInteraction = CacheInteraction.FullHit;
+                _diagnostics.UserRequestFullCacheHit();
+
+                (resultData, actualRange) = Assemble(requestedRange, hittingRangeData, hittingCount);
+                fetchedChunks = null; // Signal to background: no new data to store
+            }
+            else
+            {
+                // Partial Hit: some cached data, some gaps to fill.
+                cacheInteraction = CacheInteraction.PartialHit;
+                _diagnostics.UserRequestPartialCacheHit();
+
+                // Fetch all gaps from IDataSource.
+                // PrependAndResume yields gapsEnumerator.Current first, then resumes MoveNext —
+                // the chain is never re-evaluated; FetchAsync walks it in one forward pass.
+                // Materialize once: chunks array is used both for RangeData mapping below
+                // and passed to CacheNormalizationRequest for the background path.
+                // .ToArray() uses SegmentedArrayBuilder internally — 1 allocation.
+                var chunksArray = (await _dataSource.FetchAsync(
+                        PrependAndResume(gapsEnumerator.Current, gapsEnumerator), cancellationToken)
+                    .ConfigureAwait(false)).ToArray();
+
+                // Build merged sources (hittingRangeData + fetched chunks) in a single array.
+                // Same rationale as hittingRangeData: plain allocation, typical count is small.
+                var merged = new RangeData<TRange, TData, TDomain>[hittingCount + chunksArray.Length];
+
+                // Copy hitting segments (already mapped to RangeData).
+                Array.Copy(hittingRangeData, merged, hittingCount);
+                var mergedCount = hittingCount;
+
+                // Map fetched chunks to RangeData, append valid ones, and fire the diagnostic
+                // per chunk — one pass serves both purposes, no separate iteration needed.
+                foreach (var c in chunksArray)
+                {
+                    _diagnostics.DataSourceFetchGap();
+                    if (c.Range.HasValue)
+                    {
+                        merged[mergedCount++] = c.Data.ToRangeData(c.Range!.Value, _domain);
+                    }
+                }
+
+                (resultData, actualRange) = Assemble(requestedRange, merged, mergedCount);
+
+                // Pass chunks array directly as IEnumerable — no wrapper needed.
+                fetchedChunks = chunksArray;
             }
         }
 
