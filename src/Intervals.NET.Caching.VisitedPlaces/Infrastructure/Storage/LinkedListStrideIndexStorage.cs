@@ -1,3 +1,4 @@
+using System.Buffers;
 using Intervals.NET.Extensions;
 using Intervals.NET.Caching.VisitedPlaces.Core;
 
@@ -106,12 +107,16 @@ internal sealed class LinkedListStrideIndexStorage<TRange, TData> : SegmentStora
     ///   the anchor has <c>End &lt; anchor.Start &lt;= range.Start</c> and cannot intersect the query.</description></item>
     /// <item><description>Walk the list forward from the anchor node, collecting intersecting non-removed segments</description></item>
     /// </list>
+    /// <para><strong>Allocation:</strong> The result list is lazily allocated — Full-Miss returns
+    /// the static empty array singleton with zero heap allocation.</para>
     /// </remarks>
     public override IReadOnlyList<CachedSegment<TRange, TData>> FindIntersecting(Range<TRange> range)
     {
         var strideIndex = Volatile.Read(ref _strideIndex);
 
-        var results = new List<CachedSegment<TRange, TData>>();
+        // Lazy-init: only allocate the results list on the first actual match.
+        // Full-Miss path (no intersecting segments) returns the static empty array — zero allocation.
+        List<CachedSegment<TRange, TData>>? results = null;
 
         // Binary search: find the rightmost anchor whose Start <= range.Start.
         // No step-back needed: VPC.C.3 guarantees End[i] < Start[i+1] (strict inequality),
@@ -152,7 +157,7 @@ internal sealed class LinkedListStrideIndexStorage<TRange, TData> : SegmentStora
             // Use IsRemoved flag as the primary soft-delete filter (no shared collection needed).
             if (!seg.IsRemoved && seg.Range.Overlaps(range))
             {
-                results.Add(seg);
+                (results ??= []).Add(seg);
             }
 
             node = node.Next;
@@ -162,7 +167,7 @@ internal sealed class LinkedListStrideIndexStorage<TRange, TData> : SegmentStora
         // _addsSinceLastNormalization only tracks the normalization trigger — all live segments
         // are already in _list and covered by the walk above.
 
-        return results;
+        return (IReadOnlyList<CachedSegment<TRange, TData>>?)results ?? [];
     }
 
     /// <inheritdoc/>
@@ -367,37 +372,60 @@ internal sealed class LinkedListStrideIndexStorage<TRange, TData> : SegmentStora
     /// from a stale anchor could truncate prematurely when it hits a node whose <c>Next</c>
     /// was set to <see langword="null"/> by the physical removal.
     /// </para>
+    /// <para><strong>Allocation:</strong> Uses an <see cref="ArrayPool{T}"/> rental as the
+    /// anchor accumulation buffer (returned immediately after the right-sized index array is
+    /// constructed), eliminating the intermediate <c>List&lt;T&gt;</c> and its <c>ToArray()</c>
+    /// copy. The only heap allocation is the published stride index array itself (unavoidable).</para>
     /// </remarks>
     private void NormalizeStrideIndex()
     {
-        // First pass: walk the full list (including removed nodes), collecting every Nth LIVE
-        // node as a stride anchor. Removed nodes are skipped for anchor selection but are NOT
-        // physically unlinked yet — their Next pointers must remain valid for any concurrent
-        // User Path walk still using the old stride index.
-        var anchorBuffer = new List<LinkedListNode<CachedSegment<TRange, TData>>>();
-        var liveNodeIdx = 0;
+        // Upper bound on anchor count: ceil(liveCount / stride) ≤ ceil(listCount / stride).
+        // Add 1 for safety against off-by-one when listCount is not a multiple of stride.
+        var maxAnchors = (_list.Count / _stride) + 1;
 
-        var current = _list.First;
-        while (current != null)
+        // Rent a buffer large enough to hold all possible anchors.
+        // Returned immediately after we've copied into the right-sized published array.
+        var anchorPool = ArrayPool<LinkedListNode<CachedSegment<TRange, TData>>>.Shared;
+        var anchorBuffer = anchorPool.Rent(maxAnchors);
+        var anchorCount = 0;
+
+        try
         {
-            if (!current.Value.IsRemoved)
+            // First pass: walk the full list (including removed nodes), collecting every Nth LIVE
+            // node as a stride anchor. Removed nodes are skipped for anchor selection but are NOT
+            // physically unlinked yet — their Next pointers must remain valid for any concurrent
+            // User Path walk still using the old stride index.
+            var liveNodeIdx = 0;
+
+            var current = _list.First;
+            while (current != null)
             {
-                if (liveNodeIdx % _stride == 0)
+                if (!current.Value.IsRemoved)
                 {
-                    anchorBuffer.Add(current);
+                    if (liveNodeIdx % _stride == 0)
+                    {
+                        anchorBuffer[anchorCount++] = current;
+                    }
+
+                    liveNodeIdx++;
                 }
 
-                liveNodeIdx++;
+                current = current.Next;
             }
 
-            current = current.Next;
+            // Allocate the exact-sized published stride index and copy anchors into it.
+            var newStrideIndex = new LinkedListNode<CachedSegment<TRange, TData>>[anchorCount];
+            Array.Copy(anchorBuffer, newStrideIndex, anchorCount);
+
+            // Atomically publish the new stride index (release fence).
+            // From this point on, the User Path will use anchors that only reference live nodes.
+            Interlocked.Exchange(ref _strideIndex, newStrideIndex);
         }
-
-        var newStrideIndex = anchorBuffer.ToArray();
-
-        // Atomically publish the new stride index (release fence).
-        // From this point on, the User Path will use anchors that only reference live nodes.
-        Interlocked.Exchange(ref _strideIndex, newStrideIndex);
+        finally
+        {
+            // Clear stale node references so they can be GC'd.
+            anchorPool.Return(anchorBuffer, clearArray: true);
+        }
 
         // Second pass: now that the new stride index is live, physically unlink removed nodes.
         // Any User Path thread that was using the old stride index has already advanced past

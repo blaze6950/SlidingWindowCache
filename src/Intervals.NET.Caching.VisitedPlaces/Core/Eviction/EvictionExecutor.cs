@@ -72,17 +72,32 @@ internal sealed class EvictionExecutor<TRange, TData>
     /// <see cref="Infrastructure.Storage.ISegmentStorage{TRange,TData}"/>.
     /// May yield nothing if all candidates are immune (Invariant VPC.E.3a).
     /// </returns>
+    /// <remarks>
+    /// <para><strong>Lazy immune-set allocation:</strong></para>
+    /// <para>
+    /// The <see cref="HashSet{T}"/> used as the immune set is constructed only when the loop
+    /// body executes for the first time (i.e., only when <c>pressure.IsExceeded</c> is true
+    /// on the first check). When no policy fires or all constraints are already satisfied,
+    /// the HashSet is never allocated — zero cost on the common no-eviction path.
+    /// </para>
+    /// </remarks>
     internal IEnumerable<CachedSegment<TRange, TData>> Execute(
         IEvictionPressure<TRange, TData> pressure,
         IReadOnlyList<CachedSegment<TRange, TData>> justStoredSegments)
     {
-        // Build the immune set from just-stored segments (Invariant VPC.E.3).
-        // Already-selected candidates are added to this set during the loop to prevent
-        // re-selecting the same segment within one eviction pass.
-        var immune = new HashSet<CachedSegment<TRange, TData>>(justStoredSegments);
+        // Lazy-init: only build the HashSet if pressure is actually exceeded.
+        // When no policy fires (NoPressure or all constraints satisfied up-front),
+        // the HashSet is never allocated — zero cost on the common no-eviction path.
+        HashSet<CachedSegment<TRange, TData>>? immune = null;
 
         while (pressure.IsExceeded)
         {
+            // Build the immune set on first use (first eviction iteration).
+            // justStoredSegments immunity (Invariant VPC.E.3) + already-selected candidates
+            // are both tracked here. Constructed from justStoredSegments so all just-stored
+            // entries are immune from the first selection attempt.
+            immune ??= [..justStoredSegments];
+
             if (!_selector.TrySelectCandidate(immune, out var candidate))
             {
                 // No eligible candidates remain (all immune or pool exhausted).

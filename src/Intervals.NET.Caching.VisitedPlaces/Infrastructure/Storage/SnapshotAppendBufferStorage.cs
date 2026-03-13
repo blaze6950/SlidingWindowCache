@@ -85,12 +85,16 @@ internal sealed class SnapshotAppendBufferStorage<TRange, TData> : SegmentStorag
     ///   short-circuit when <c>segment.Start &gt; range.End</c></description></item>
     /// <item><description>Linear scan of append buffer (unsorted, small)</description></item>
     /// </list>
+    /// <para><strong>Allocation:</strong> The result list is lazily allocated — Full-Miss returns
+    /// the static empty array singleton with zero heap allocation.</para>
     /// </remarks>
     public override IReadOnlyList<CachedSegment<TRange, TData>> FindIntersecting(Range<TRange> range)
     {
         var snapshot = Volatile.Read(ref _snapshot);
 
-        var results = new List<CachedSegment<TRange, TData>>();
+        // Lazy-init: only allocate the results list on the first actual match.
+        // Full-Miss path (no intersecting segments) returns the static empty array — zero allocation.
+        List<CachedSegment<TRange, TData>>? results = null;
 
         // Binary search: find the rightmost snapshot entry whose Start <= range.Start.
         // That entry is itself the earliest possible intersector: because segments are
@@ -119,7 +123,7 @@ internal sealed class SnapshotAppendBufferStorage<TRange, TData> : SegmentStorag
             // Use IsRemoved flag as the primary soft-delete filter (no shared collection needed).
             if (!seg.IsRemoved && seg.Range.Overlaps(range))
             {
-                results.Add(seg);
+                (results ??= []).Add(seg);
             }
         }
 
@@ -130,11 +134,11 @@ internal sealed class SnapshotAppendBufferStorage<TRange, TData> : SegmentStorag
             var seg = _appendBuffer[i];
             if (!seg.IsRemoved && seg.Range.Overlaps(range))
             {
-                results.Add(seg);
+                (results ??= []).Add(seg);
             }
         }
 
-        return results;
+        return (IReadOnlyList<CachedSegment<TRange, TData>>?)results ?? [];
     }
 
     /// <inheritdoc/>
@@ -199,41 +203,47 @@ internal sealed class SnapshotAppendBufferStorage<TRange, TData> : SegmentStorag
     /// </summary>
     /// <remarks>
     /// <para><strong>Algorithm:</strong> O(n + m) merge of two sorted sequences (snapshot sorted,
-    /// append buffer unsorted — sort append buffer entries first).</para>
+    /// append buffer sorted in-place on the private backing array).</para>
     /// <para>Resets <c>_appendCount</c> to 0 and publishes via <c>Volatile.Write</c> so User
     /// Path threads atomically see the new snapshot. Removed segments (whose
     /// <see cref="CachedSegment{TRange,TData}.IsRemoved"/> flag is set) are excluded from the
     /// new snapshot and are physically dropped from memory.</para>
+    /// <para><strong>Allocation:</strong> No intermediate <c>List&lt;T&gt;</c> allocations.
+    /// The append buffer is sorted in-place (Background Path owns it exclusively).
+    /// The only allocation is the new merged snapshot array (unavoidable — published to User Path).</para>
     /// </remarks>
     private void Normalize()
     {
         var snapshot = Volatile.Read(ref _snapshot);
 
-        // Collect live snapshot entries (skip removed segments)
-        var liveSnapshot = new List<CachedSegment<TRange, TData>>(snapshot.Length);
-        foreach (var seg in snapshot)
+        // Count live snapshot entries (skip removed segments) without allocating a List.
+        var liveSnapshotCount = 0;
+        for (var i = 0; i < snapshot.Length; i++)
         {
+            var seg = snapshot[i];
             if (!seg.IsRemoved)
             {
-                liveSnapshot.Add(seg);
+                liveSnapshotCount++;
             }
         }
 
-        // Collect live append buffer entries and sort them
-        var appendEntries = new List<CachedSegment<TRange, TData>>(_appendCount);
+        // Sort the append buffer in-place (Background Path owns _appendBuffer exclusively).
+        // MemoryExtensions.Sort operates on a Span — zero allocation.
+        _appendBuffer.AsSpan(0, _appendCount).Sort(
+            static (a, b) => a.Range.Start.Value.CompareTo(b.Range.Start.Value));
+
+        // Count live append buffer entries after sorting.
+        var liveAppendCount = 0;
         for (var i = 0; i < _appendCount; i++)
         {
-            var seg = _appendBuffer[i];
-            if (!seg.IsRemoved)
+            if (!_appendBuffer[i].IsRemoved)
             {
-                appendEntries.Add(seg);
+                liveAppendCount++;
             }
         }
 
-        appendEntries.Sort(static (a, b) => a.Range.Start.Value.CompareTo(b.Range.Start.Value));
-
-        // Merge two sorted sequences
-        var merged = MergeSorted(liveSnapshot, appendEntries);
+        // Merge two sorted sequences directly into the output array — one allocation.
+        var merged = MergeSorted(snapshot, liveSnapshotCount, _appendBuffer, _appendCount, liveAppendCount);
 
         // Reset append buffer
         _appendCount = 0;
@@ -245,27 +255,67 @@ internal sealed class SnapshotAppendBufferStorage<TRange, TData> : SegmentStorag
     }
 
     private static CachedSegment<TRange, TData>[] MergeSorted(
-        List<CachedSegment<TRange, TData>> left,
-        List<CachedSegment<TRange, TData>> right)
+        CachedSegment<TRange, TData>[] left,
+        int liveLeftCount,
+        CachedSegment<TRange, TData>[] right,
+        int rightLength,
+        int liveRightCount)
     {
-        var result = new CachedSegment<TRange, TData>[left.Count + right.Count];
+        var result = new CachedSegment<TRange, TData>[liveLeftCount + liveRightCount];
         int i = 0, j = 0, k = 0;
 
-        while (i < left.Count && j < right.Count)
+        // Advance i to the next live left entry.
+        while (i < left.Length && left[i].IsRemoved)
+        {
+            i++;
+        }
+
+        // Advance j to the next live right entry.
+        while (j < rightLength && right[j].IsRemoved)
+        {
+            j++;
+        }
+
+        while (i < left.Length && j < rightLength)
         {
             var cmp = left[i].Range.Start.Value.CompareTo(right[j].Range.Start.Value);
             if (cmp <= 0)
             {
                 result[k++] = left[i++];
+                while (i < left.Length && left[i].IsRemoved)
+                {
+                    i++;
+                }
             }
             else
             {
                 result[k++] = right[j++];
+                while (j < rightLength && right[j].IsRemoved)
+                {
+                    j++;
+                }
             }
         }
 
-        while (i < left.Count) result[k++] = left[i++];
-        while (j < right.Count) result[k++] = right[j++];
+        while (i < left.Length)
+        {
+            if (!left[i].IsRemoved)
+            {
+                result[k++] = left[i];
+            }
+
+            i++;
+        }
+
+        while (j < rightLength)
+        {
+            if (!right[j].IsRemoved)
+            {
+                result[k++] = right[j];
+            }
+
+            j++;
+        }
 
         return result;
     }

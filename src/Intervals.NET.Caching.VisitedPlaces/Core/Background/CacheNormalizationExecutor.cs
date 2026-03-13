@@ -39,7 +39,8 @@ namespace Intervals.NET.Caching.VisitedPlaces.Core.Background;
 ///   followed immediately by <see cref="EvictionEngine{TRange,TData}.InitializeSegment"/> to
 ///   set up selector metadata and notify stateful policies. If TTL is enabled,
 ///   <see cref="TtlEngine{TRange,TData}.ScheduleExpirationAsync"/> is called to schedule expiration.
-///   Skipped when <c>FetchedChunks</c> is null (full cache hit).
+///   Skipped when <c>FetchedChunks</c> is null (full cache hit — zero allocations for the
+///   just-stored list on the full-hit path via lazy initialisation).
 /// </description></item>
 /// <item><description>
 ///   Evaluate and execute eviction — <see cref="EvictionEngine{TRange,TData}.EvaluateAndExecute"/>
@@ -131,7 +132,9 @@ internal sealed class CacheNormalizationExecutor<TRange, TData, TDomain>
 
             // Step 2: Store freshly fetched data (null FetchedChunks means full cache hit — skip).
             // Track ALL segments stored in this request cycle for just-stored immunity (Invariant VPC.E.3).
-            var justStoredSegments = new List<CachedSegment<TRange, TData>>();
+            // Lazy-init: list is only allocated when at least one segment is actually stored,
+            // so the full-hit path (FetchedChunks == null) pays zero allocation here.
+            List<CachedSegment<TRange, TData>>? justStoredSegments = null;
 
             if (request.FetchedChunks != null)
             {
@@ -164,12 +167,12 @@ internal sealed class CacheNormalizationExecutor<TRange, TData, TDomain>
                         await _ttlEngine.ScheduleExpirationAsync(segment).ConfigureAwait(false);
                     }
 
-                    justStoredSegments.Add(segment);
+                    (justStoredSegments ??= []).Add(segment);
                 }
             }
 
             // Steps 3 & 4: Evaluate and execute eviction only when new data was stored.
-            if (justStoredSegments.Count > 0)
+            if (justStoredSegments != null)
             {
                 // Step 3+4: Evaluate policies and iterate candidates to remove (Invariant VPC.E.2a).
                 // The selector samples directly from its injected storage.

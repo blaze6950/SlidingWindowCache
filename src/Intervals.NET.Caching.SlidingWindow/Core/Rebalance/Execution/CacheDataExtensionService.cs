@@ -157,6 +157,15 @@ internal sealed class CacheDataExtensionService<TRange, TData, TDomain>
     /// those segments are skipped and do not affect the cache. The cache converges to maximum
     /// available data without gaps.
     /// </para>
+    /// <para><strong>Allocation note (architectural limitation):</strong></para>
+    /// <para>
+    /// Each <c>current.Union(...)</c> call builds a new <see cref="Intervals.NET.Data.RangeData{TRange,TData,TDomain}"/>
+    /// chained enumerable wrapper, resulting in N allocations for N fetched chunks on a partial hit.
+    /// This is an inherent constraint of the <see cref="IEnumerable{T}"/>-based
+    /// <c>RangeData</c> contract: zero-copy slice merging without materialisation is not possible
+    /// at this layer. The chain is walked exactly once during <c>Rematerialize</c> on the
+    /// rebalance (background) path and is never on the user path, so the cost is acceptable.
+    /// </para>
     /// </remarks>
     private RangeData<TRange, TData, TDomain> UnionAll(
         RangeData<TRange, TData, TDomain> current,

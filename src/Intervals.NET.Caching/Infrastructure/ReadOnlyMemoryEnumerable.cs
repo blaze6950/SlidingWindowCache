@@ -34,10 +34,22 @@ internal sealed class ReadOnlyMemoryEnumerable<T> : IEnumerable<T>
     /// <summary>
     /// Returns an enumerator that iterates through the memory region.
     /// </summary>
+    /// <remarks>
+    /// Returns the concrete <see cref="Enumerator"/> struct directly — zero allocation.
+    /// Callers using <c>foreach</c> on the concrete type <see cref="ReadOnlyMemoryEnumerable{T}"/>
+    /// (or binding to <c>var</c>) will use this overload and pay no allocation.
+    /// </remarks>
     public Enumerator GetEnumerator() => new(_memory);
 
+    /// <remarks>
+    /// Boxing path: returns <see cref="Enumerator"/> as <see cref="IEnumerator{T}"/>, which boxes
+    /// the struct enumerator. Callers referencing this type via <see cref="IEnumerable{T}"/> will
+    /// use this overload and incur one heap allocation per <c>GetEnumerator()</c> call.
+    /// Prefer holding the concrete type to keep enumeration allocation-free.
+    /// </remarks>
     IEnumerator<T> IEnumerable<T>.GetEnumerator() => new Enumerator(_memory);
 
+    /// <inheritdoc cref="IEnumerable{T}.GetEnumerator"/>
     IEnumerator IEnumerable.GetEnumerator() => new Enumerator(_memory);
 
     /// <summary>
