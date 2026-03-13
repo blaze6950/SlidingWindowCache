@@ -451,26 +451,27 @@ internal sealed class LinkedListStrideIndexStorage<TRange, TData> : SegmentStora
         // This lets reads and removals interleave at node granularity: a removal step waits
         // only for the current read to release the lock, executes one Remove(), then yields
         // the lock so the reader can continue to the next node.
-        var node = _list.First;
-        while (node != null)
+        try
         {
-            LinkedListNode<CachedSegment<TRange, TData>>? next;
-            lock (_listSyncRoot)
+            var node = _list.First;
+            while (node != null)
             {
-                next = node.Next;
-                if (node.Value.IsRemoved)
+                LinkedListNode<CachedSegment<TRange, TData>>? next;
+                lock (_listSyncRoot)
                 {
-                    _list.Remove(node);
+                    next = node.Next;
+                    if (node.Value.IsRemoved)
+                    {
+                        _list.Remove(node);
+                    }
                 }
+
+                node = next;
             }
-
-            node = next;
         }
-
-        // Reset the add counter — always runs, even if unlink loop throws.
-        try { }
         finally
         {
+            // Reset the add counter — always runs, even if unlink loop throws.
             _addsSinceLastNormalization = 0;
         }
     }

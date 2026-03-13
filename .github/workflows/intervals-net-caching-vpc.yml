@@ -28,7 +28,6 @@ on:
 env:
   DOTNET_VERSION: '8.x.x'
   SOLUTION_PATH: 'Intervals.NET.Caching.sln'
-  CORE_PROJECT_PATH: 'src/Intervals.NET.Caching/Intervals.NET.Caching.csproj'
   PROJECT_PATH: 'src/Intervals.NET.Caching.VisitedPlaces/Intervals.NET.Caching.VisitedPlaces.csproj'
   WASM_VALIDATION_PATH: 'src/Intervals.NET.Caching.VisitedPlaces.WasmValidation/Intervals.NET.Caching.VisitedPlaces.WasmValidation.csproj'
   UNIT_TEST_PATH: 'tests/Intervals.NET.Caching.VisitedPlaces.Unit.Tests/Intervals.NET.Caching.VisitedPlaces.Unit.Tests.csproj'
@@ -97,12 +96,6 @@ jobs:
 
       - name: Restore dependencies
         run: dotnet restore ${{ env.SOLUTION_PATH }}
-
-      - name: Build Intervals.NET.Caching
-        run: dotnet build ${{ env.CORE_PROJECT_PATH }} --configuration Release --no-restore
-
-      - name: Pack Intervals.NET.Caching
-        run: dotnet pack ${{ env.CORE_PROJECT_PATH }} --configuration Release --no-build --output ./artifacts
 
       - name: Build Intervals.NET.Caching.VisitedPlaces
         run: dotnet build ${{ env.PROJECT_PATH }} --configuration Release --no-restore

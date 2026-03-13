@@ -5,22 +5,8 @@
         <ImplicitUsings>enable</ImplicitUsings>
         <Nullable>enable</Nullable>
 
-        <!-- NuGet Package Metadata -->
-        <PackageId>Intervals.NET.Caching</PackageId>
-        <Version>0.0.1</Version>
-        <Authors>blaze6950</Authors>
-        <Product>Intervals.NET.Caching</Product>
-        <Description>Shared foundation for Intervals.NET range-based caches: IRangeCache, IDataSource, layered cache infrastructure, shared DTOs, and concurrency primitives.</Description>
-        <PackageLicenseExpression>MIT</PackageLicenseExpression>
-        <PackageProjectUrl>https://github.com/blaze6950/Intervals.NET.Caching</PackageProjectUrl>
-        <RepositoryUrl>https://github.com/blaze6950/Intervals.NET.Caching</RepositoryUrl>
-        <RepositoryType>git</RepositoryType>
-        <PackageTags>cache;range-based;async;intervals</PackageTags>
-        <GeneratePackageOnBuild>false</GeneratePackageOnBuild>
-        <IncludeSymbols>true</IncludeSymbols>
-        <SymbolPackageFormat>snupkg</SymbolPackageFormat>
-        <PublishRepositoryUrl>true</PublishRepositoryUrl>
-        <EmbedUntrackedSources>true</EmbedUntrackedSources>
+        <!-- Shared internal foundation — not a standalone NuGet package -->
+        <IsPackable>false</IsPackable>
     </PropertyGroup>
 
     <ItemGroup>

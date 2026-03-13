@@ -8,7 +8,6 @@ Write-Host ""
 
 # Environment variables (matching GitHub Actions)
 $env:SOLUTION_PATH = "Intervals.NET.Caching.sln"
-$env:CORE_PROJECT_PATH = "src/Intervals.NET.Caching/Intervals.NET.Caching.csproj"
 
 # SlidingWindow
 $env:SWC_PROJECT_PATH = "src/Intervals.NET.Caching.SlidingWindow/Intervals.NET.Caching.SlidingWindow.csproj"
@@ -165,11 +164,6 @@ Write-Host ""
 Write-Host "[Step 12/12] Creating NuGet packages..." -ForegroundColor Yellow
 if (Test-Path "./artifacts") {
     Remove-Item -Path "./artifacts" -Recurse -Force
-}
-dotnet pack $env:CORE_PROJECT_PATH --configuration Release --no-build --output ./artifacts
-if ($LASTEXITCODE -ne 0) {
-    Write-Host "? Package creation failed (Core)" -ForegroundColor Red
-    $failed = $true
 }
 dotnet pack $env:SWC_PROJECT_PATH --configuration Release --no-build --output ./artifacts
 if ($LASTEXITCODE -ne 0) {

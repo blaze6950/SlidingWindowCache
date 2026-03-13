@@ -31,7 +31,7 @@
     </ItemGroup>
 
     <ItemGroup>
-        <ProjectReference Include="..\Intervals.NET.Caching\Intervals.NET.Caching.csproj" />
+        <ProjectReference Include="..\Intervals.NET.Caching\Intervals.NET.Caching.csproj" PrivateAssets="all" />
     </ItemGroup>
 
     <ItemGroup>

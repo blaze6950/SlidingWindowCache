@@ -427,15 +427,15 @@ fix: race condition in intent processing has been resolved
   - Triggers: Push/PR to main/master (paths: Core, SlidingWindow, SWC WasmValidation, SWC tests), manual dispatch
   - Runs: Build solution, SWC WebAssembly validation, SWC test suites (Unit/Integration/Invariants) with coverage
   - Coverage: Uploaded to Codecov
-  - Publish: `Intervals.NET.Caching` + `Intervals.NET.Caching.SlidingWindow` to NuGet.org (on main/master push)
+  - Publish: `Intervals.NET.Caching.SlidingWindow` to NuGet.org (on main/master push)
 
 - **`.github/workflows/intervals-net-caching-vpc.yml`** — VisitedPlaces workflow
   - Triggers: Push/PR to main/master (paths: Core, VisitedPlaces, VPC WasmValidation, VPC tests), manual dispatch
   - Runs: Build solution, VPC WebAssembly validation, VPC test suites (Unit/Integration/Invariants) with coverage
   - Coverage: Uploaded to Codecov
-  - Publish: `Intervals.NET.Caching` + `Intervals.NET.Caching.VisitedPlaces` to NuGet.org (on main/master push)
+  - Publish: `Intervals.NET.Caching.VisitedPlaces` to NuGet.org (on main/master push)
 
-**Note:** Both workflows publish `Intervals.NET.Caching` (core). The `--skip-duplicate` flag on `dotnet nuget push` ensures no conflict if both run concurrently against the same core version.
+**Note:** `Intervals.NET.Caching` (Core) is a non-packable shared foundation (`<IsPackable>false</IsPackable>`). Its types are compiled into the SWC and VPC assemblies via `ProjectReference` with `PrivateAssets="all"` — it is never published as a standalone NuGet package.
 
 **Local CI Testing:**
 ```powershell
