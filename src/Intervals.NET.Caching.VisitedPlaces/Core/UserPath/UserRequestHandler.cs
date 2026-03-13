@@ -316,8 +316,15 @@ internal sealed class UserRequestHandler<TRange, TData, TDomain>
     /// A deferred <see cref="IEnumerable{T}"/> of uncovered sub-ranges. The caller obtains the
     /// enumerator directly via <c>GetEnumerator()</c> and probes with a single <c>MoveNext()</c>
     /// call — no array allocation. On Partial Hit, <see cref="PrependAndResume"/> resumes the
-    /// same enumerator so the LINQ chain is walked exactly once in total.
+    /// same enumerator so the chain is walked exactly once in total.
     /// </returns>
+    /// <remarks>
+    /// <para>
+    /// Each iteration passes the current <c>remaining</c> sequence and the segment range to the
+    /// static local <c>Subtract</c> — no closure is created, eliminating one heap allocation per
+    /// hitting segment compared to an equivalent <c>SelectMany</c> lambda.
+    /// </para>
+    /// </remarks>
     private static IEnumerable<Range<TRange>> ComputeGaps(
         Range<TRange> requestedRange,
         IReadOnlyList<CachedSegment<TRange, TData>> hittingSegments)
@@ -329,17 +336,36 @@ internal sealed class UserRequestHandler<TRange, TData, TDomain>
         // The complexity is O(n*m) where n is the number of hitting segments
         // and m is the number of remaining ranges at each step,
         // but in practice m should be small (often 1) due to the nature of typical cache hits.
-        foreach (var seg in hittingSegments)
+        for (var index = 0; index < hittingSegments.Count; index++)
         {
-            var segRange = seg.Range;
-            remaining = remaining.SelectMany(r =>
-            {
-                var intersection = r.Intersect(segRange);
-                return intersection.HasValue ? r.Except(intersection.Value) : [r];
-            });
+            var seg = hittingSegments[index];
+            remaining = Subtract(remaining, seg.Range);
         }
 
         return remaining;
+
+        // Static: captures nothing — segRange is passed explicitly, eliminating the closure
+        // allocation that a lambda capturing segRange in the loop above would incur.
+        static IEnumerable<Range<TRange>> Subtract(
+            IEnumerable<Range<TRange>> ranges,
+            Range<TRange> segRange)
+        {
+            foreach (var r in ranges)
+            {
+                var intersection = r.Intersect(segRange);
+                if (intersection.HasValue)
+                {
+                    foreach (var gap in r.Except(intersection.Value))
+                    {
+                        yield return gap;
+                    }
+                }
+                else
+                {
+                    yield return r;
+                }
+            }
+        }
     }
 
     /// <summary>

@@ -48,9 +48,15 @@ public sealed class CacheDataSourceInteractionTests : IAsyncDisposable
     private static StorageStrategyOptions<int, int> CreateStrategyFromType(Type strategyType)
     {
         if (strategyType == typeof(SnapshotAppendBufferStorageOptions<int, int>))
+        {
             return SnapshotAppendBufferStorageOptions<int, int>.Default;
+        }
+
         if (strategyType == typeof(LinkedListStrideIndexStorageOptions<int, int>))
+        {
             return LinkedListStrideIndexStorageOptions<int, int>.Default;
+        }
+
         throw new ArgumentException($"Unknown strategy type: {strategyType}", nameof(strategyType));
     }
 
