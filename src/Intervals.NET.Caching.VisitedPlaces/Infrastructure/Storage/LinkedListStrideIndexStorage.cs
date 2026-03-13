@@ -212,6 +212,16 @@ internal sealed class LinkedListStrideIndexStorage<TRange, TData> : SegmentStora
     ///   If the selected segment is soft-deleted, retry (bounded by <c>RandomRetryLimit</c>).
     /// </description></item>
     /// </list>
+    /// <para><strong>Sampling bias (deliberate trade-off):</strong>
+    /// Selection is <em>approximately</em> uniform, not perfectly uniform. A random stride anchor
+    /// is chosen first, then a random offset within that anchor's stride gap. Because the last
+    /// anchor's gap may contain more than <c>_stride</c> nodes (segments added after the last
+    /// normalization accumulate there), segments in the last gap are slightly under-represented
+    /// compared to segments reachable from earlier anchors. This is an intentional O(stride)
+    /// performance trade-off — true uniform selection would require counting all live nodes,
+    /// which is O(n). For eviction the approximate distribution is acceptable; the eviction
+    /// selector samples multiple candidates and chooses the worst, so the slight positional
+    /// bias has negligible impact on overall eviction quality.</para>
     /// </remarks>
     public override CachedSegment<TRange, TData>? TryGetRandomSegment()
     {

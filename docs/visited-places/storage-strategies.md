@@ -222,6 +222,29 @@ Pass 2 — physical cleanup (safe only after new index is live):
 
 **Normalization cost**: O(n) list traversal (two passes) + O(n/N) for new stride array allocation
 
+### Random Segment Sampling and Eviction Bias
+
+Eviction selectors call `TryGetRandomSegment()` to obtain candidates. In `LinkedListStrideIndexStorage` this method:
+
+1. Picks a random stride anchor index from `_strideIndex`
+2. Picks a random offset within that anchor's stride gap (up to `_stride` nodes)
+3. Walks forward from the anchor to the selected node
+
+This produces **approximately** uniform selection, not perfectly uniform:
+
+- Each of the `n/N` anchors is equally likely to be chosen in step 1
+- For interior anchors, the reachable gap is exactly `_stride` nodes — selection within the gap is uniform
+- For the **last anchor**, the gap may contain **more than `_stride` nodes** if segments have been added since the last normalization. Those extra nodes (in the "append tail") are reachable only from the last anchor, so they are slightly under-represented compared to nodes reachable from earlier anchors
+
+**Why this is acceptable:**
+
+This is a deliberate O(stride) performance trade-off. True uniform selection would require counting all live nodes first — O(n). Eviction selectors sample multiple candidates (`EvictionSamplingOptions.SampleSize`) and pick the worst of the sample; a slight positional bias in individual draws has negligible impact on overall eviction quality. The bias diminishes toward zero as the normalization cadence (`AppendBufferSize`) is tuned smaller relative to `stride`.
+
+**When it matters:**
+
+- Very small caches (< 10 segments): bias may be more noticeable; consider using `SnapshotAppendBufferStorage` instead
+- After a burst of rapid adds before normalization: the append tail temporarily grows; effect disappears after the next normalization pass
+
 ### Memory Behavior
 
 - `_list` nodes are individually allocated (generational GC; no LOH pressure regardless of total size)

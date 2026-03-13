@@ -410,10 +410,10 @@ public static class WasmCompilationValidator
             rightThreshold: 0.2
         );
 
-        await using var layered = (LayeredRangeCache<int, int, IntegerFixedStepDomain>)SlidingWindowCacheBuilder.Layered(new SimpleDataSource(), domain)
+        await using var layered = (LayeredRangeCache<int, int, IntegerFixedStepDomain>)await SlidingWindowCacheBuilder.Layered(new SimpleDataSource(), domain)
             .AddSlidingWindowLayer(innerOptions)
             .AddSlidingWindowLayer(outerOptions)
-            .Build();
+            .BuildAsync();
 
         var range = Factories.Range.Closed<int>(0, 10);
         var result = await layered.GetDataAsync(range, CancellationToken.None);

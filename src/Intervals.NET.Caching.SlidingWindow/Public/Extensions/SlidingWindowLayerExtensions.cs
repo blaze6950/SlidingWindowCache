@@ -13,10 +13,10 @@ namespace Intervals.NET.Caching.SlidingWindow.Public.Extensions;
 /// <remarks>
 /// <para><strong>Usage:</strong></para>
 /// <code>
-/// await using var cache = SlidingWindowCacheBuilder.Layered(dataSource, domain)
+/// await using var cache = await SlidingWindowCacheBuilder.Layered(dataSource, domain)
 ///     .AddSlidingWindowLayer(o =&gt; o.WithCacheSize(10.0).WithReadMode(UserCacheReadMode.CopyOnRead))
 ///     .AddSlidingWindowLayer(o =&gt; o.WithCacheSize(0.5))
-///     .Build();
+///     .BuildAsync();
 /// </code>
 /// <para>
 /// Each call wraps the previous layer (or root data source) in a

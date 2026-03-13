@@ -77,6 +77,9 @@ internal abstract class WorkSchedulerBase<TWorkItem> : IWorkScheduler<TWorkItem>
     /// <summary>Activity counter for tracking active operations.</summary>
     private protected readonly AsyncActivityCounter ActivityCounter;
 
+    /// <summary>Time provider used for debounce delays. Enables deterministic testing.</summary>
+    private protected readonly TimeProvider TimeProvider;
+
     // Disposal state: 0 = not disposed, 1 = disposed (lock-free via Interlocked)
     private int _disposeState;
 
@@ -87,7 +90,8 @@ internal abstract class WorkSchedulerBase<TWorkItem> : IWorkScheduler<TWorkItem>
         Func<TWorkItem, CancellationToken, Task> executor,
         Func<TimeSpan> debounceProvider,
         IWorkSchedulerDiagnostics diagnostics,
-        AsyncActivityCounter activityCounter)
+        AsyncActivityCounter activityCounter,
+        TimeProvider? timeProvider = null)
     {
         ArgumentNullException.ThrowIfNull(executor);
         ArgumentNullException.ThrowIfNull(debounceProvider);
@@ -98,6 +102,7 @@ internal abstract class WorkSchedulerBase<TWorkItem> : IWorkScheduler<TWorkItem>
         DebounceProvider = debounceProvider;
         Diagnostics = diagnostics;
         ActivityCounter = activityCounter;
+        TimeProvider = timeProvider ?? TimeProvider.System;
     }
 
     /// <inheritdoc/>
@@ -123,23 +128,26 @@ internal abstract class WorkSchedulerBase<TWorkItem> : IWorkScheduler<TWorkItem>
     /// </remarks>
     private protected async Task ExecuteWorkItemCoreAsync(TWorkItem workItem)
     {
-        Diagnostics.WorkStarted();
-
-        // The work item owns its CancellationTokenSource and exposes the derived token.
-        var cancellationToken = workItem.CancellationToken;
-
-        // Snapshot debounce delay at execution time — picks up any runtime updates
-        // published since this work item was enqueued ("next cycle" semantics).
-        var debounceDelay = DebounceProvider();
-
         try
         {
+            // Step 0: Signal work-started and snapshot configuration.
+            // These are inside the try so that any unexpected throw does not bypass the
+            // finally block — keeping the activity counter balanced (Invariant S.H.2).
+            Diagnostics.WorkStarted();
+
+            // The work item owns its CancellationTokenSource and exposes the derived token.
+            var cancellationToken = workItem.CancellationToken;
+
+            // Snapshot debounce delay at execution time — picks up any runtime updates
+            // published since this work item was enqueued ("next cycle" semantics).
+            var debounceDelay = DebounceProvider();
+
             // Step 1: Apply debounce delay — allows superseded work items to be cancelled.
             // Skipped entirely when debounce is zero (e.g. VPC event processing) to avoid
             // unnecessary task allocation. ConfigureAwait(false) ensures continuation on thread pool.
             if (debounceDelay > TimeSpan.Zero)
             {
-                await Task.Delay(debounceDelay, cancellationToken)
+                await Task.Delay(debounceDelay, TimeProvider, cancellationToken)
                     .ConfigureAwait(false);
 
                 // Step 2: Check cancellation after debounce.

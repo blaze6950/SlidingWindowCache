@@ -26,6 +26,33 @@ namespace Intervals.NET.Caching.VisitedPlaces.Core.Eviction.Selectors;
 /// no collection copying. SampleSize defaults to
 /// <see cref="EvictionSamplingOptions.DefaultSampleSize"/> (32).</para>
 /// </remarks>
+/// <summary>
+/// Non-generic factory companion for <see cref="LruEvictionSelector{TRange,TData}"/>.
+/// Enables type inference at the call site: <c>LruEvictionSelector.Create&lt;int, MyData&gt;()</c>.
+/// </summary>
+public static class LruEvictionSelector
+{
+    /// <summary>
+    /// Creates a new <see cref="LruEvictionSelector{TRange,TData}"/>.
+    /// </summary>
+    /// <typeparam name="TRange">The type representing range boundaries.</typeparam>
+    /// <typeparam name="TData">The type of data being cached.</typeparam>
+    /// <param name="samplingOptions">
+    /// Optional sampling configuration. When <see langword="null"/>,
+    /// <see cref="EvictionSamplingOptions.Default"/> is used (SampleSize = 32).
+    /// </param>
+    /// <param name="timeProvider">
+    /// Optional time provider. When <see langword="null"/>, <see cref="TimeProvider.System"/> is used.
+    /// </param>
+    /// <returns>A new <see cref="LruEvictionSelector{TRange,TData}"/> instance.</returns>
+    public static LruEvictionSelector<TRange, TData> Create<TRange, TData>(
+        EvictionSamplingOptions? samplingOptions = null,
+        TimeProvider? timeProvider = null)
+        where TRange : IComparable<TRange>
+        => new(samplingOptions, timeProvider);
+}
+
+/// <inheritdoc cref="LruEvictionSelector{TRange,TData}"/>
 public sealed class LruEvictionSelector<TRange, TData> : SamplingEvictionSelector<TRange, TData>
     where TRange : IComparable<TRange>
 {

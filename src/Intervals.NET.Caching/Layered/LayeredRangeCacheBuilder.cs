@@ -32,17 +32,17 @@ namespace Intervals.NET.Caching.Layered;
 /// </para>
 /// <para><strong>Example — Two-Layer SlidingWindow cache (via extension method):</strong></para>
 /// <code>
-/// await using var cache = SlidingWindowCacheBuilder.Layered(realDataSource, domain)
+/// await using var cache = await SlidingWindowCacheBuilder.Layered(realDataSource, domain)
 ///     .AddSlidingWindowLayer(o => o.WithCacheSize(10.0).WithReadMode(UserCacheReadMode.CopyOnRead))
 ///     .AddSlidingWindowLayer(o => o.WithCacheSize(0.5))
-///     .Build();
+///     .BuildAsync();
 /// </code>
 /// <para><strong>Direct usage with a custom factory:</strong></para>
 /// <code>
-/// await using var cache = new LayeredRangeCacheBuilder&lt;int, byte[], MyDomain&gt;(rootSource, domain)
+/// await using var cache = await new LayeredRangeCacheBuilder&lt;int, byte[], MyDomain&gt;(rootSource, domain)
 ///     .AddLayer(src => new MyCache(src, myOptions))
 ///     .AddLayer(src => new MyCache(src, outerOptions))
-///     .Build();
+///     .BuildAsync();
 /// </code>
 /// </remarks>
 public sealed class LayeredRangeCacheBuilder<TRange, TData, TDomain>
@@ -97,7 +97,8 @@ public sealed class LayeredRangeCacheBuilder<TRange, TData, TDomain>
     /// that owns all created layers.
     /// </summary>
     /// <returns>
-    /// A <see cref="LayeredRangeCache{TRange,TData,TDomain}"/> whose
+    /// A <see cref="ValueTask{TResult}"/> that completes with a
+    /// <see cref="LayeredRangeCache{TRange,TData,TDomain}"/> whose
     /// <see cref="IRangeCache{TRange,TData,TDomain}.GetDataAsync"/> delegates to the outermost layer.
     /// Dispose the returned instance to release all layer resources.
     /// </returns>
@@ -111,12 +112,12 @@ public sealed class LayeredRangeCacheBuilder<TRange, TData, TDomain>
     /// before the exception propagates, preventing resource leaks.
     /// </para>
     /// </remarks>
-    public IRangeCache<TRange, TData, TDomain> Build()
+    public async ValueTask<IRangeCache<TRange, TData, TDomain>> BuildAsync()
     {
         if (_factories.Count == 0)
         {
             throw new InvalidOperationException(
-                "At least one layer must be added before calling Build(). " +
+                "At least one layer must be added before calling BuildAsync(). " +
                 "Use AddLayer() to configure one or more cache layers.");
         }
 
@@ -138,11 +139,9 @@ public sealed class LayeredRangeCacheBuilder<TRange, TData, TDomain>
         {
             // Dispose all successfully created layers to prevent resource leaks
             // if a factory throws partway through construction.
-            // Note: sync-over-async here is intentional — this is error-path cleanup
-            // inside a synchronous Build() method; there is no ambient async context.
             foreach (var cache in caches)
             {
-                cache.DisposeAsync().AsTask().GetAwaiter().GetResult();
+                await cache.DisposeAsync().ConfigureAwait(false);
             }
 
             throw;

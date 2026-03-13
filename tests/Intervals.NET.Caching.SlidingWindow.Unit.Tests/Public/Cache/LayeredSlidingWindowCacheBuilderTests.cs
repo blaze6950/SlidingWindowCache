@@ -202,14 +202,14 @@ public sealed class LayeredSlidingWindowCacheBuilderTests
     }
 
     [Fact]
-    public void AddSlidingWindowLayer_WithInlineDelegateMissingCacheSize_ThrowsInvalidOperationException()
+    public async Task AddSlidingWindowLayer_WithInlineDelegateMissingCacheSize_ThrowsInvalidOperationException()
     {
         // ARRANGE — delegate does not call WithCacheSize; Build() on the inner builder throws
         var builder = SlidingWindowCacheBuilder.Layered(CreateDataSource(), Domain)
             .AddSlidingWindowLayer(o => o.WithReadMode(UserCacheReadMode.Snapshot));
 
-        // ACT — Build() on the LayeredRangeCacheBuilder triggers the options Build(), which throws
-        var exception = Record.Exception(() => builder.Build());
+        // ACT — BuildAsync() on the LayeredRangeCacheBuilder triggers the options Build(), which throws
+        var exception = await Record.ExceptionAsync(async () => await builder.BuildAsync());
 
         // ASSERT
         Assert.NotNull(exception);
@@ -220,7 +220,7 @@ public sealed class LayeredSlidingWindowCacheBuilderTests
     public async Task AddSlidingWindowLayer_InlineTwoLayers_CanFetchData()
     {
         // ARRANGE
-        await using var cache = SlidingWindowCacheBuilder.Layered(CreateDataSource(), Domain)
+        await using var cache = await SlidingWindowCacheBuilder.Layered(CreateDataSource(), Domain)
             .AddSlidingWindowLayer(o => o
                 .WithCacheSize(2.0)
                 .WithReadMode(UserCacheReadMode.CopyOnRead)
@@ -228,7 +228,7 @@ public sealed class LayeredSlidingWindowCacheBuilderTests
             .AddSlidingWindowLayer(o => o
                 .WithCacheSize(0.5)
                 .WithDebounceDelay(TimeSpan.FromMilliseconds(50)))
-            .Build();
+            .BuildAsync();
 
         var range = Factories.Range.Closed<int>(1, 10);
 
@@ -246,13 +246,13 @@ public sealed class LayeredSlidingWindowCacheBuilderTests
     #region Build() Tests
 
     [Fact]
-    public void Build_WithNoLayers_ThrowsInvalidOperationException()
+    public async Task Build_WithNoLayers_ThrowsInvalidOperationException()
     {
         // ARRANGE
         var builder = SlidingWindowCacheBuilder.Layered(CreateDataSource(), Domain);
 
         // ACT
-        var exception = Record.Exception(() => builder.Build());
+        var exception = await Record.ExceptionAsync(async () => await builder.BuildAsync());
 
         // ASSERT
         Assert.NotNull(exception);
@@ -266,9 +266,9 @@ public sealed class LayeredSlidingWindowCacheBuilderTests
         var builder = SlidingWindowCacheBuilder.Layered(CreateDataSource(), Domain);
 
         // ACT
-        await using var layered = (LayeredRangeCache<int, int, IntegerFixedStepDomain>)builder
+        await using var layered = (LayeredRangeCache<int, int, IntegerFixedStepDomain>)await builder
             .AddSlidingWindowLayer(DefaultOptions())
-            .Build();
+            .BuildAsync();
 
         // ASSERT
         Assert.Equal(1, layered.LayerCount);
@@ -281,10 +281,10 @@ public sealed class LayeredSlidingWindowCacheBuilderTests
         var builder = SlidingWindowCacheBuilder.Layered(CreateDataSource(), Domain);
 
         // ACT
-        await using var layered = (LayeredRangeCache<int, int, IntegerFixedStepDomain>)builder
+        await using var layered = (LayeredRangeCache<int, int, IntegerFixedStepDomain>)await builder
             .AddSlidingWindowLayer(new SlidingWindowCacheOptions(2.0, 2.0, UserCacheReadMode.CopyOnRead))
             .AddSlidingWindowLayer(new SlidingWindowCacheOptions(0.5, 0.5, UserCacheReadMode.Snapshot))
-            .Build();
+            .BuildAsync();
 
         // ASSERT
         Assert.Equal(2, layered.LayerCount);
@@ -297,11 +297,11 @@ public sealed class LayeredSlidingWindowCacheBuilderTests
         var builder = SlidingWindowCacheBuilder.Layered(CreateDataSource(), Domain);
 
         // ACT
-        await using var layered = (LayeredRangeCache<int, int, IntegerFixedStepDomain>)builder
+        await using var layered = (LayeredRangeCache<int, int, IntegerFixedStepDomain>)await builder
             .AddSlidingWindowLayer(new SlidingWindowCacheOptions(5.0, 5.0, UserCacheReadMode.CopyOnRead))
             .AddSlidingWindowLayer(new SlidingWindowCacheOptions(2.0, 2.0, UserCacheReadMode.CopyOnRead))
             .AddSlidingWindowLayer(new SlidingWindowCacheOptions(0.5, 0.5, UserCacheReadMode.Snapshot))
-            .Build();
+            .BuildAsync();
 
         // ASSERT
         Assert.Equal(3, layered.LayerCount);
@@ -311,9 +311,9 @@ public sealed class LayeredSlidingWindowCacheBuilderTests
     public async Task Build_ReturnsIRangeCacheImplementedByLayeredRangeCacheType()
     {
         // ARRANGE & ACT
-        await using var cache = SlidingWindowCacheBuilder.Layered(CreateDataSource(), Domain)
+        await using var cache = await SlidingWindowCacheBuilder.Layered(CreateDataSource(), Domain)
             .AddSlidingWindowLayer(DefaultOptions())
-            .Build();
+            .BuildAsync();
 
         // ASSERT — Build() returns IRangeCache<>; concrete type is LayeredRangeCache<>
         Assert.IsAssignableFrom<IRangeCache<int, int, IntegerFixedStepDomain>>(cache);
@@ -324,9 +324,9 @@ public sealed class LayeredSlidingWindowCacheBuilderTests
     public async Task Build_ReturnedCacheImplementsIRangeCache()
     {
         // ARRANGE & ACT
-        await using var cache = SlidingWindowCacheBuilder.Layered(CreateDataSource(), Domain)
+        await using var cache = await SlidingWindowCacheBuilder.Layered(CreateDataSource(), Domain)
             .AddSlidingWindowLayer(DefaultOptions())
-            .Build();
+            .BuildAsync();
 
         // ASSERT
         Assert.IsAssignableFrom<IRangeCache<int, int, IntegerFixedStepDomain>>(cache);
@@ -340,8 +340,8 @@ public sealed class LayeredSlidingWindowCacheBuilderTests
             .AddSlidingWindowLayer(DefaultOptions());
 
         // ACT
-        await using var cache1 = builder.Build();
-        await using var cache2 = builder.Build();
+        await using var cache1 = await builder.BuildAsync();
+        await using var cache2 = await builder.BuildAsync();
 
         // ASSERT — each build creates a new set of independent cache instances
         Assert.NotSame(cache1, cache2);
@@ -361,9 +361,9 @@ public sealed class LayeredSlidingWindowCacheBuilderTests
             readMode: UserCacheReadMode.Snapshot,
             debounceDelay: TimeSpan.FromMilliseconds(50));
 
-        await using var cache = SlidingWindowCacheBuilder.Layered(CreateDataSource(), Domain)
+        await using var cache = await SlidingWindowCacheBuilder.Layered(CreateDataSource(), Domain)
             .AddSlidingWindowLayer(options)
-            .Build();
+            .BuildAsync();
 
         var range = Factories.Range.Closed<int>(1, 10);
 
@@ -392,10 +392,10 @@ public sealed class LayeredSlidingWindowCacheBuilderTests
             readMode: UserCacheReadMode.Snapshot,
             debounceDelay: TimeSpan.FromMilliseconds(50));
 
-        await using var cache = SlidingWindowCacheBuilder.Layered(CreateDataSource(), Domain)
+        await using var cache = await SlidingWindowCacheBuilder.Layered(CreateDataSource(), Domain)
             .AddSlidingWindowLayer(deepOptions)
             .AddSlidingWindowLayer(userOptions)
-            .Build();
+            .BuildAsync();
 
         var range = Factories.Range.Closed<int>(100, 110);
 
@@ -415,12 +415,12 @@ public sealed class LayeredSlidingWindowCacheBuilderTests
         var deepDiagnostics = new EventCounterCacheDiagnostics();
         var userDiagnostics = new EventCounterCacheDiagnostics();
 
-        await using var cache = SlidingWindowCacheBuilder.Layered(CreateDataSource(), Domain)
+        await using var cache = await SlidingWindowCacheBuilder.Layered(CreateDataSource(), Domain)
             .AddSlidingWindowLayer(new SlidingWindowCacheOptions(2.0, 2.0, UserCacheReadMode.CopyOnRead,
                 debounceDelay: TimeSpan.FromMilliseconds(50)), deepDiagnostics)
             .AddSlidingWindowLayer(new SlidingWindowCacheOptions(0.5, 0.5, UserCacheReadMode.Snapshot,
                 debounceDelay: TimeSpan.FromMilliseconds(50)), userDiagnostics)
-            .Build();
+            .BuildAsync();
 
         var range = Factories.Range.Closed<int>(1, 5);
 

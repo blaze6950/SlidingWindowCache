@@ -80,12 +80,17 @@ internal sealed class ConcurrentWorkScheduler<TWorkItem> : WorkSchedulerBase<TWo
     /// </param>
     /// <param name="diagnostics">Diagnostics for work lifecycle events.</param>
     /// <param name="activityCounter">Activity counter for tracking active operations.</param>
+    /// <param name="timeProvider">
+    /// Time provider for debounce delays. When <see langword="null"/>,
+    /// <see cref="TimeProvider.System"/> is used.
+    /// </param>
     public ConcurrentWorkScheduler(
         Func<TWorkItem, CancellationToken, Task> executor,
         Func<TimeSpan> debounceProvider,
         IWorkSchedulerDiagnostics diagnostics,
-        AsyncActivityCounter activityCounter
-    ) : base(executor, debounceProvider, diagnostics, activityCounter)
+        AsyncActivityCounter activityCounter,
+        TimeProvider? timeProvider = null
+    ) : base(executor, debounceProvider, diagnostics, activityCounter, timeProvider)
     {
     }
 

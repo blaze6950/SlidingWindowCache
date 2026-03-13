@@ -485,10 +485,10 @@ When using `LayeredRangeCacheBuilder`, each layer can have its own independent `
 var l2Diagnostics = new EventCounterCacheDiagnostics();
 var l1Diagnostics = new EventCounterCacheDiagnostics();
 
-await using var cache = SlidingWindowCacheBuilder.Layered(realDataSource, domain)
+await using var cache = await SlidingWindowCacheBuilder.Layered(realDataSource, domain)
     .AddSlidingWindowLayer(deepOptions, l2Diagnostics)   // L2: inner / deep layer
     .AddSlidingWindowLayer(userOptions, l1Diagnostics)   // L1: outermost / user-facing layer
-    .Build();
+    .BuildAsync();
 ```
 
 Omit the second argument (or pass `null`) to use the default `NoOpDiagnostics` for that layer.

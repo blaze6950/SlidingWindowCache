@@ -60,10 +60,10 @@ public sealed class LayeredCacheIntegrationTests
     public async Task TwoLayerCache_GetData_ReturnsCorrectValues()
     {
         // ARRANGE
-        await using var cache = SlidingWindowCacheBuilder.Layered(CreateRealDataSource(), Domain)
+        await using var cache = await SlidingWindowCacheBuilder.Layered(CreateRealDataSource(), Domain)
             .AddSlidingWindowLayer(DeepLayerOptions())
             .AddSlidingWindowLayer(UserLayerOptions())
-            .Build();
+            .BuildAsync();
 
         var range = Factories.Range.Closed<int>(100, 110);
 
@@ -81,11 +81,11 @@ public sealed class LayeredCacheIntegrationTests
     public async Task ThreeLayerCache_GetData_ReturnsCorrectValues()
     {
         // ARRANGE
-        await using var cache = SlidingWindowCacheBuilder.Layered(CreateRealDataSource(), Domain)
+        await using var cache = await SlidingWindowCacheBuilder.Layered(CreateRealDataSource(), Domain)
             .AddSlidingWindowLayer(DeepLayerOptions())
             .AddSlidingWindowLayer(MidLayerOptions())
             .AddSlidingWindowLayer(UserLayerOptions())
-            .Build();
+            .BuildAsync();
 
         var range = Factories.Range.Closed<int>(200, 215);
 
@@ -103,10 +103,10 @@ public sealed class LayeredCacheIntegrationTests
     public async Task TwoLayerCache_SubsequentRequests_ReturnCorrectValues()
     {
         // ARRANGE
-        await using var cache = SlidingWindowCacheBuilder.Layered(CreateRealDataSource(), Domain)
+        await using var cache = await SlidingWindowCacheBuilder.Layered(CreateRealDataSource(), Domain)
             .AddSlidingWindowLayer(DeepLayerOptions())
             .AddSlidingWindowLayer(UserLayerOptions())
-            .Build();
+            .BuildAsync();
 
         // ACT & ASSERT — three sequential non-overlapping requests
         var ranges = new[]
@@ -131,10 +131,10 @@ public sealed class LayeredCacheIntegrationTests
     public async Task TwoLayerCache_SingleElementRange_ReturnsCorrectValue()
     {
         // ARRANGE
-        await using var cache = SlidingWindowCacheBuilder.Layered(CreateRealDataSource(), Domain)
+        await using var cache = await SlidingWindowCacheBuilder.Layered(CreateRealDataSource(), Domain)
             .AddSlidingWindowLayer(DeepLayerOptions())
             .AddSlidingWindowLayer(UserLayerOptions())
-            .Build();
+            .BuildAsync();
 
         // ACT
         var range = Factories.Range.Closed<int>(42, 42);
@@ -154,10 +154,10 @@ public sealed class LayeredCacheIntegrationTests
     public async Task TwoLayerCache_LayerCount_IsTwo()
     {
         // ARRANGE
-        await using var layered = (LayeredRangeCache<int, int, IntegerFixedStepDomain>)SlidingWindowCacheBuilder.Layered(CreateRealDataSource(), Domain)
+        await using var layered = (LayeredRangeCache<int, int, IntegerFixedStepDomain>)await SlidingWindowCacheBuilder.Layered(CreateRealDataSource(), Domain)
             .AddSlidingWindowLayer(DeepLayerOptions())
             .AddSlidingWindowLayer(UserLayerOptions())
-            .Build();
+            .BuildAsync();
 
         // ASSERT
         Assert.Equal(2, layered.LayerCount);
@@ -167,11 +167,11 @@ public sealed class LayeredCacheIntegrationTests
     public async Task ThreeLayerCache_LayerCount_IsThree()
     {
         // ARRANGE
-        await using var layered = (LayeredRangeCache<int, int, IntegerFixedStepDomain>)SlidingWindowCacheBuilder.Layered(CreateRealDataSource(), Domain)
+        await using var layered = (LayeredRangeCache<int, int, IntegerFixedStepDomain>)await SlidingWindowCacheBuilder.Layered(CreateRealDataSource(), Domain)
             .AddSlidingWindowLayer(DeepLayerOptions())
             .AddSlidingWindowLayer(MidLayerOptions())
             .AddSlidingWindowLayer(UserLayerOptions())
-            .Build();
+            .BuildAsync();
 
         // ASSERT
         Assert.Equal(3, layered.LayerCount);
@@ -185,10 +185,10 @@ public sealed class LayeredCacheIntegrationTests
     public async Task TwoLayerCache_WaitForIdleAsync_ConvergesWithoutException()
     {
         // ARRANGE
-        await using var cache = SlidingWindowCacheBuilder.Layered(CreateRealDataSource(), Domain)
+        await using var cache = await SlidingWindowCacheBuilder.Layered(CreateRealDataSource(), Domain)
             .AddSlidingWindowLayer(DeepLayerOptions())
             .AddSlidingWindowLayer(UserLayerOptions())
-            .Build();
+            .BuildAsync();
 
         var range = Factories.Range.Closed<int>(100, 110);
         await cache.GetDataAsync(range, CancellationToken.None);
@@ -204,10 +204,10 @@ public sealed class LayeredCacheIntegrationTests
     public async Task TwoLayerCache_AfterConvergence_DataStillCorrect()
     {
         // ARRANGE
-        await using var cache = SlidingWindowCacheBuilder.Layered(CreateRealDataSource(), Domain)
+        await using var cache = await SlidingWindowCacheBuilder.Layered(CreateRealDataSource(), Domain)
             .AddSlidingWindowLayer(DeepLayerOptions())
             .AddSlidingWindowLayer(UserLayerOptions())
-            .Build();
+            .BuildAsync();
 
         var range = Factories.Range.Closed<int>(50, 60);
 
@@ -232,10 +232,10 @@ public sealed class LayeredCacheIntegrationTests
         var deepDiagnostics = new EventCounterCacheDiagnostics();
         var userDiagnostics = new EventCounterCacheDiagnostics();
 
-        await using var cache = SlidingWindowCacheBuilder.Layered(CreateRealDataSource(), Domain)
+        await using var cache = await SlidingWindowCacheBuilder.Layered(CreateRealDataSource(), Domain)
             .AddSlidingWindowLayer(DeepLayerOptions(), deepDiagnostics)
             .AddSlidingWindowLayer(UserLayerOptions(), userDiagnostics)
-            .Build();
+            .BuildAsync();
 
         var range = Factories.Range.Closed<int>(200, 210);
 
@@ -258,10 +258,10 @@ public sealed class LayeredCacheIntegrationTests
     public async Task TwoLayerCache_GetDataAndWaitForIdleAsync_ReturnsCorrectData()
     {
         // ARRANGE — verify that the strong consistency extension method works on a LayeredSlidingWindowCache
-        await using var cache = SlidingWindowCacheBuilder.Layered(CreateRealDataSource(), Domain)
+        await using var cache = await SlidingWindowCacheBuilder.Layered(CreateRealDataSource(), Domain)
             .AddSlidingWindowLayer(DeepLayerOptions())
             .AddSlidingWindowLayer(UserLayerOptions())
-            .Build();
+            .BuildAsync();
 
         var range = Factories.Range.Closed<int>(300, 315);
 
@@ -279,10 +279,10 @@ public sealed class LayeredCacheIntegrationTests
     public async Task TwoLayerCache_GetDataAndWaitForIdleAsync_SubsequentRequestIsFullHit()
     {
         // ARRANGE
-        await using var cache = SlidingWindowCacheBuilder.Layered(CreateRealDataSource(), Domain)
+        await using var cache = await SlidingWindowCacheBuilder.Layered(CreateRealDataSource(), Domain)
             .AddSlidingWindowLayer(DeepLayerOptions())
             .AddSlidingWindowLayer(UserLayerOptions())
-            .Build();
+            .BuildAsync();
 
         var range = Factories.Range.Closed<int>(400, 410);
 
@@ -308,10 +308,10 @@ public sealed class LayeredCacheIntegrationTests
     public async Task TwoLayerCache_DisposeAsync_CompletesWithoutException()
     {
         // ARRANGE
-        var cache = SlidingWindowCacheBuilder.Layered(CreateRealDataSource(), Domain)
+        var cache = await SlidingWindowCacheBuilder.Layered(CreateRealDataSource(), Domain)
             .AddSlidingWindowLayer(DeepLayerOptions())
             .AddSlidingWindowLayer(UserLayerOptions())
-            .Build();
+            .BuildAsync();
 
         await cache.GetDataAsync(Factories.Range.Closed<int>(1, 10), CancellationToken.None);
 
@@ -326,10 +326,10 @@ public sealed class LayeredCacheIntegrationTests
     public async Task TwoLayerCache_DisposeWithoutAnyRequests_CompletesWithoutException()
     {
         // ARRANGE — build but never use
-        var cache = SlidingWindowCacheBuilder.Layered(CreateRealDataSource(), Domain)
+        var cache = await SlidingWindowCacheBuilder.Layered(CreateRealDataSource(), Domain)
             .AddSlidingWindowLayer(DeepLayerOptions())
             .AddSlidingWindowLayer(UserLayerOptions())
-            .Build();
+            .BuildAsync();
 
         // ACT
         var exception = await Record.ExceptionAsync(() => cache.DisposeAsync().AsTask());
@@ -342,11 +342,11 @@ public sealed class LayeredCacheIntegrationTests
     public async Task ThreeLayerCache_DisposeAsync_CompletesWithoutException()
     {
         // ARRANGE
-        var cache = SlidingWindowCacheBuilder.Layered(CreateRealDataSource(), Domain)
+        var cache = await SlidingWindowCacheBuilder.Layered(CreateRealDataSource(), Domain)
             .AddSlidingWindowLayer(DeepLayerOptions())
             .AddSlidingWindowLayer(MidLayerOptions())
             .AddSlidingWindowLayer(UserLayerOptions())
-            .Build();
+            .BuildAsync();
 
         await cache.GetDataAsync(Factories.Range.Closed<int>(10, 20), CancellationToken.None);
 
@@ -400,10 +400,10 @@ public sealed class LayeredCacheIntegrationTests
         var deepDiagnostics = new EventCounterCacheDiagnostics();
         var userDiagnostics = new EventCounterCacheDiagnostics();
 
-        await using var cache = SlidingWindowCacheBuilder.Layered(CreateRealDataSource(), Domain)
+        await using var cache = await SlidingWindowCacheBuilder.Layered(CreateRealDataSource(), Domain)
             .AddSlidingWindowLayer(DeepLayerOptions(), deepDiagnostics)
             .AddSlidingWindowLayer(UserLayerOptions(), userDiagnostics)
-            .Build();
+            .BuildAsync();
 
         var range = Factories.Range.Closed<int>(100, 110);
 
@@ -431,10 +431,10 @@ public sealed class LayeredCacheIntegrationTests
     public async Task TwoLayerCache_LargeRange_ReturnsCorrectData()
     {
         // ARRANGE
-        await using var cache = SlidingWindowCacheBuilder.Layered(CreateRealDataSource(), Domain)
+        await using var cache = await SlidingWindowCacheBuilder.Layered(CreateRealDataSource(), Domain)
             .AddSlidingWindowLayer(DeepLayerOptions())
             .AddSlidingWindowLayer(UserLayerOptions())
-            .Build();
+            .BuildAsync();
 
         // ACT
         var range = Factories.Range.Closed<int>(0, 999);

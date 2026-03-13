@@ -95,6 +95,10 @@ internal sealed class BoundedSerialWorkScheduler<TWorkItem> : SerialWorkSchedule
     /// <param name="diagnostics">Diagnostics for work lifecycle events.</param>
     /// <param name="activityCounter">Activity counter for tracking active operations.</param>
     /// <param name="capacity">The bounded channel capacity for backpressure control. Must be >= 1.</param>
+    /// <param name="timeProvider">
+    /// Time provider for debounce delays. When <see langword="null"/>,
+    /// <see cref="TimeProvider.System"/> is used.
+    /// </param>
     /// <exception cref="ArgumentOutOfRangeException">Thrown when <paramref name="capacity"/> is less than 1.</exception>
     /// <remarks>
     /// <para><strong>Channel Configuration:</strong></para>
@@ -115,8 +119,9 @@ internal sealed class BoundedSerialWorkScheduler<TWorkItem> : SerialWorkSchedule
         Func<TimeSpan> debounceProvider,
         IWorkSchedulerDiagnostics diagnostics,
         AsyncActivityCounter activityCounter,
-        int capacity
-    ) : base(executor, debounceProvider, diagnostics, activityCounter)
+        int capacity,
+        TimeProvider? timeProvider = null
+    ) : base(executor, debounceProvider, diagnostics, activityCounter, timeProvider)
     {
         if (capacity < 1)
         {

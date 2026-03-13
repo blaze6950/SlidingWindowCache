@@ -51,6 +51,36 @@ namespace Intervals.NET.Caching.VisitedPlaces.Core.Eviction.Policies;
 /// segment's span in the lifecycle hooks. The domain is captured at construction and also passed
 /// to the pressure object for use during <see cref="IEvictionPressure{TRange,TData}.Reduce"/>.</para>
 /// </remarks>
+/// <summary>
+/// Non-generic factory companion for <see cref="MaxTotalSpanPolicy{TRange,TData,TDomain}"/>.
+/// Enables type inference at the call site: <c>MaxTotalSpanPolicy.Create&lt;int, MyData, MyDomain&gt;(1000, domain)</c>.
+/// </summary>
+public static class MaxTotalSpanPolicy
+{
+    /// <summary>
+    /// Creates a new <see cref="MaxTotalSpanPolicy{TRange,TData,TDomain}"/> with the specified maximum total span.
+    /// </summary>
+    /// <typeparam name="TRange">The type representing range boundaries.</typeparam>
+    /// <typeparam name="TData">The type of data being cached.</typeparam>
+    /// <typeparam name="TDomain">The range domain type used to compute spans.</typeparam>
+    /// <param name="maxTotalSpan">The maximum total span (in domain units). Must be &gt;= 1.</param>
+    /// <param name="domain">The range domain used to compute segment spans.</param>
+    /// <returns>A new <see cref="MaxTotalSpanPolicy{TRange,TData,TDomain}"/> instance.</returns>
+    /// <exception cref="ArgumentOutOfRangeException">
+    /// Thrown when <paramref name="maxTotalSpan"/> is less than 1.
+    /// </exception>
+    /// <exception cref="ArgumentNullException">
+    /// Thrown when <paramref name="domain"/> is <see langword="null"/>.
+    /// </exception>
+    public static MaxTotalSpanPolicy<TRange, TData, TDomain> Create<TRange, TData, TDomain>(
+        int maxTotalSpan,
+        TDomain domain)
+        where TRange : IComparable<TRange>
+        where TDomain : IRangeDomain<TRange>
+        => new(maxTotalSpan, domain);
+}
+
+/// <inheritdoc cref="MaxTotalSpanPolicy{TRange,TData,TDomain}"/>
 public sealed class MaxTotalSpanPolicy<TRange, TData, TDomain> : IEvictionPolicy<TRange, TData>
     where TRange : IComparable<TRange>
     where TDomain : IRangeDomain<TRange>
@@ -103,7 +133,13 @@ public sealed class MaxTotalSpanPolicy<TRange, TData, TDomain> : IEvictionPolicy
     /// </remarks>
     public void OnSegmentAdded(CachedSegment<TRange, TData> segment)
     {
-        Interlocked.Add(ref _totalSpan, segment.Range.Span(_domain).Value);
+        var span = segment.Range.Span(_domain);
+        if (!span.IsFinite)
+        {
+            return;
+        }
+
+        Interlocked.Add(ref _totalSpan, span.Value);
     }
 
     /// <inheritdoc/>
@@ -114,7 +150,13 @@ public sealed class MaxTotalSpanPolicy<TRange, TData, TDomain> : IEvictionPolicy
     /// </remarks>
     public void OnSegmentRemoved(CachedSegment<TRange, TData> segment)
     {
-        Interlocked.Add(ref _totalSpan, -segment.Range.Span(_domain).Value);
+        var span = segment.Range.Span(_domain);
+        if (!span.IsFinite)
+        {
+            return;
+        }
+
+        Interlocked.Add(ref _totalSpan, -span.Value);
     }
 
     /// <inheritdoc/>
@@ -180,7 +222,13 @@ public sealed class MaxTotalSpanPolicy<TRange, TData, TDomain> : IEvictionPolicy
         /// <remarks>Subtracts the removed segment's span from the tracked total.</remarks>
         public void Reduce(CachedSegment<TRange, TData> removedSegment)
         {
-            _currentTotalSpan -= removedSegment.Range.Span(_domain).Value;
+            var span = removedSegment.Range.Span(_domain);
+            if (!span.IsFinite)
+            {
+                return;
+            }
+
+            _currentTotalSpan -= span.Value;
         }
     }
 }

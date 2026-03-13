@@ -245,11 +245,11 @@ public static class WasmCompilationValidator
         var domain = new IntegerFixedStepDomain();
 
         await using var layered = (LayeredRangeCache<int, int, IntegerFixedStepDomain>)
-            VisitedPlacesCacheBuilder
+            await VisitedPlacesCacheBuilder
                 .Layered<int, int, IntegerFixedStepDomain>(new SimpleDataSource(), domain)
                 .AddVisitedPlacesLayer(Policies, Selector)
                 .AddVisitedPlacesLayer(Policies, Selector)
-                .Build();
+                .BuildAsync();
 
         var range = Factories.Range.Closed<int>(0, 10);
         var result = await layered.GetDataAsync(range, CancellationToken.None);

@@ -1,3 +1,4 @@
+using Intervals.NET;
 using Intervals.NET.Domain.Default.Numeric;
 using Intervals.NET.Domain.Extensions.Fixed;
 using Intervals.NET.Extensions;
@@ -1482,4 +1483,28 @@ public sealed class SlidingWindowCacheInvariantTests : IAsyncDisposable
     }
 
     #endregion
+
+    // ============================================================
+    // S.R.1 — Infinite Range Rejected at Entry Point
+    // ============================================================
+
+    /// <summary>
+    /// Invariant S.R.1 [Behavioral]: GetDataAsync rejects unbounded ranges by throwing
+    /// <see cref="ArgumentException"/> before any cache logic executes.
+    /// </summary>
+    [Fact]
+    public async Task Invariant_SWC_S_R_1_UnboundedRangeThrowsArgumentException()
+    {
+        // ARRANGE
+        var (cache, _) = TrackCache(TestHelpers.CreateCacheWithDefaults(_domain, _cacheDiagnostics));
+        var infiniteRange = Factories.Range.Closed(RangeValue<int>.NegativeInfinity, RangeValue<int>.PositiveInfinity);
+
+        // ACT
+        var exception = await Record.ExceptionAsync(() =>
+            cache.GetDataAsync(infiniteRange, CancellationToken.None).AsTask());
+
+        // ASSERT
+        Assert.NotNull(exception);
+        Assert.IsType<ArgumentException>(exception);
+    }
 }

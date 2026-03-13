@@ -1,4 +1,5 @@
 using Intervals.NET.Domain.Abstractions;
+using Intervals.NET.Extensions;
 using Intervals.NET.Caching.Dto;
 using Intervals.NET.Caching.Infrastructure.Concurrency;
 using Intervals.NET.Caching.Infrastructure.Scheduling;
@@ -212,6 +213,14 @@ public sealed class SlidingWindowCache<TRange, TData, TDomain>
             throw new ObjectDisposedException(
                 nameof(SlidingWindowCache<TRange, TData, TDomain>),
                 "Cannot retrieve data from a disposed cache.");
+        }
+
+        // Invariant S.R.1: requestedRange must be bounded (finite on both ends).
+        if (!requestedRange.IsBounded())
+        {
+            throw new ArgumentException(
+                "The requested range must be bounded (finite on both ends). Unbounded ranges cannot be fetched or cached.",
+                nameof(requestedRange));
         }
 
         // Delegate to UserRequestHandler (Fast Path Actor)

@@ -201,7 +201,7 @@ lock (_lock)
 
 ```csharp
 // Two-layer cache: L2 (CopyOnRead, large) > L1 (Snapshot, small)
-await using var cache = SlidingWindowCacheBuilder.Layered(slowDataSource, domain)
+await using var cache = await SlidingWindowCacheBuilder.Layered(slowDataSource, domain)
     .AddSlidingWindowLayer(new SlidingWindowCacheOptions(    // L2: deep background cache
         leftCacheSize: 10.0,
         rightCacheSize: 10.0,
@@ -212,7 +212,7 @@ await using var cache = SlidingWindowCacheBuilder.Layered(slowDataSource, domain
         leftCacheSize: 0.5,
         rightCacheSize: 0.5,
         readMode: UserCacheReadMode.Snapshot))    // zero-allocation reads
-    .Build();
+    .BuildAsync();
 ```
 
 ---

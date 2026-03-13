@@ -63,8 +63,9 @@ internal abstract class SupersessionWorkSchedulerBase<TWorkItem>
         Func<TWorkItem, CancellationToken, Task> executor,
         Func<TimeSpan> debounceProvider,
         IWorkSchedulerDiagnostics diagnostics,
-        AsyncActivityCounter activityCounter)
-        : base(executor, debounceProvider, diagnostics, activityCounter)
+        AsyncActivityCounter activityCounter,
+        TimeProvider? timeProvider = null)
+        : base(executor, debounceProvider, diagnostics, activityCounter, timeProvider)
     {
     }
 

@@ -153,6 +153,7 @@ public sealed class VisitedPlacesCacheBuilder<TRange, TData, TDomain>
     private IVisitedPlacesCacheDiagnostics? _diagnostics;
     private IReadOnlyList<IEvictionPolicy<TRange, TData>>? _policies;
     private IEvictionSelector<TRange, TData>? _selector;
+    private bool _built;
 
     internal VisitedPlacesCacheBuilder(IDataSource<TRange, TData> dataSource, TDomain domain)
     {
@@ -246,6 +247,36 @@ public sealed class VisitedPlacesCacheBuilder<TRange, TData, TDomain>
     }
 
     /// <summary>
+    /// Configures the eviction system inline using a fluent <see cref="EvictionConfigBuilder{TRange,TData}"/>.
+    /// Both at least one policy and a selector are required; <see cref="Build"/> throws if this method
+    /// has not been called.
+    /// </summary>
+    /// <param name="configure">
+    /// A delegate that receives an <see cref="EvictionConfigBuilder{TRange,TData}"/> and applies the desired
+    /// eviction policies and selector.
+    /// </param>
+    /// <returns>This builder instance, for fluent chaining.</returns>
+    /// <exception cref="ArgumentNullException">
+    /// Thrown when <paramref name="configure"/> is <c>null</c>.
+    /// </exception>
+    /// <exception cref="InvalidOperationException">
+    /// Thrown when the delegate does not add at least one policy or does not set a selector.
+    /// </exception>
+    public VisitedPlacesCacheBuilder<TRange, TData, TDomain> WithEviction(
+        Action<EvictionConfigBuilder<TRange, TData>> configure)
+    {
+        ArgumentNullException.ThrowIfNull(configure);
+
+        var evictionBuilder = new EvictionConfigBuilder<TRange, TData>();
+        configure(evictionBuilder);
+        var (policies, selector) = evictionBuilder.Build();
+
+        _policies = policies;
+        _selector = selector;
+        return this;
+    }
+
+    /// <summary>
     /// Builds and returns a configured <see cref="IVisitedPlacesCache{TRange,TData,TDomain}"/> instance.
     /// </summary>
     /// <returns>
@@ -255,10 +286,18 @@ public sealed class VisitedPlacesCacheBuilder<TRange, TData, TDomain>
     /// <exception cref="InvalidOperationException">
     /// Thrown when <see cref="WithOptions(VisitedPlacesCacheOptions{TRange,TData})"/> or
     /// <see cref="WithOptions(Action{VisitedPlacesCacheOptionsBuilder{TRange,TData}})"/> has not been called,
-    /// or when <see cref="WithEviction"/> has not been called.
+    /// or when <see cref="WithEviction"/> has not been called,
+    /// or when <see cref="Build"/> has already been called on this builder instance.
     /// </exception>
     public IVisitedPlacesCache<TRange, TData, TDomain> Build()
     {
+        if (_built)
+        {
+            throw new InvalidOperationException(
+                "Build() has already been called on this builder. " +
+                "Each builder instance may only produce one cache.");
+        }
+
         var resolvedOptions = _options;
 
         if (resolvedOptions is null && _configurePending is not null)
@@ -281,6 +320,8 @@ public sealed class VisitedPlacesCacheBuilder<TRange, TData, TDomain>
                 "Eviction must be configured before calling Build(). " +
                 "Use WithEviction() to supply policies and a selector.");
         }
+
+        _built = true;
 
         return new VisitedPlacesCache<TRange, TData, TDomain>(
             _dataSource,

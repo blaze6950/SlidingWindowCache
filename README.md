@@ -335,7 +335,7 @@ cache.UpdateRuntimeOptions(update =>
 - All validation rules from construction still apply (`ArgumentOutOfRangeException` for negative sizes, `ArgumentException` for threshold sum > 1.0, etc.). A failed update leaves the current options unchanged — no partial application.
 - Calling `UpdateRuntimeOptions` on a disposed cache throws `ObjectDisposedException`.
 
-**Note:** `UpdateRuntimeOptions` and `CurrentRuntimeOptions` are `ISlidingWindowCache`-specific — they exist only on individual `SlidingWindowCache` instances. `LayeredRangeCache` implements `IRangeCache` only and does not expose these methods. To update runtime options on a layer, access it via the `Layers` property and cast to `ISlidingWindowCache` (see Multi-Layer Cache below).
+**Note:** `UpdateRuntimeOptions` and `CurrentRuntimeOptions` are `ISlidingWindowCache`-specific — they exist only on individual `SlidingWindowCache` instances. `LayeredRangeCache` implements `IRangeCache` only and does not expose these methods. To update runtime options on a layer, access it via the `Layers` property and cast to `ISlidingWindowCache` (see Multi-Layer Cache section for details).
 
 ## Reading Current Runtime Options
 
@@ -496,23 +496,264 @@ Every `RangeResult` carries a `CacheInteraction` property classifying the reques
 
 This is the per-request programmatic alternative to the `UserRequestFullCacheHit` / `UserRequestPartialCacheHit` / `UserRequestFullCacheMiss` diagnostics callbacks.
 
-## Multi-Layer Cache
+---
 
-For workloads with high-latency data sources, you can compose multiple `SlidingWindowCache` instances into a layered stack. Each layer uses the layer below it as its data source, allowing you to trade memory for reduced data-source I/O.
+# Visited Places Cache
+
+A read-only, range-based, **random-access-optimized** cache with capacity-based eviction, pluggable eviction policies and selectors, optional TTL expiration, and multi-layer composition support.
+
+## Visited Places Cache Concept
+
+Where the Sliding Window Cache is optimized for a single coherent viewport moving predictably through a domain, the Visited Places Cache is optimized for **random-access patterns** — users jumping to arbitrary locations with no predictable direction or stride.
+
+Key design choices:
+
+- Stores **non-contiguous, independent segments** (not a single contiguous window)
+- Each segment is a fetched range; the collection grows as the user visits new areas
+- **Eviction** enforces capacity limits, removing the least valuable segments when limits are exceeded
+- **TTL expiration** optionally removes stale segments after a configurable duration
+- No rebalancing, no threshold geometry — each segment lives independently until evicted or expired
+
+### Visual: Segment Collection
+
+```
+Domain:   [0 ──────────────────────────────────────────────────────────── 1000]
+
+Cached segments (visited areas, non-contiguous):
+            [══100-150══]  [═220-280═]   [═══500-600═══]    [═850-900═]
+                  ↑             ↑               ↑                ↑
+              segment 1     segment 2        segment 3       segment 4
+
+New request to [400, 450] → full miss   → fetch, store as new segment
+New request to [120, 140] → full hit    → serve immediately from segment 1
+New request to [500, 900] → partial hit → calculate gaps, fetch, serve assembled, store as new segment
+```
+
+## Install
+
+```bash
+dotnet add package Intervals.NET.Caching.VisitedPlaces
+```
+
+## Quick Start
 
 ```csharp
-await using var cache = SlidingWindowCacheBuilder.Layered(realDataSource, domain)
-    .AddSlidingWindowLayer(new SlidingWindowCacheOptions(        // L2: deep background cache
-        leftCacheSize: 10.0,
-        rightCacheSize: 10.0,
-        readMode: UserCacheReadMode.CopyOnRead,
-        leftThreshold: 0.3,
-        rightThreshold: 0.3))
-    .AddSlidingWindowLayer(new SlidingWindowCacheOptions(        // L1: user-facing cache
-        leftCacheSize: 0.5,
-        rightCacheSize: 0.5,
-        readMode: UserCacheReadMode.Snapshot))
+using Intervals.NET.Caching;
+using Intervals.NET.Caching.VisitedPlaces.Public.Cache;
+using Intervals.NET.Caching.VisitedPlaces.Public.Configuration;
+using Intervals.NET.Caching.VisitedPlaces.Core.Eviction.Policies;
+using Intervals.NET.Caching.VisitedPlaces.Core.Eviction.Selectors;
+using Intervals.NET;
+using Intervals.NET.Domain.Default.Numeric;
+
+await using var cache = VisitedPlacesCacheBuilder.For(myDataSource, new IntegerFixedStepDomain())
+    .WithOptions(o => o)   // use defaults; or .WithOptions(o => o.WithSegmentTtl(TimeSpan.FromMinutes(10)))
+    .WithEviction(e => e
+        .AddPolicy(MaxSegmentCountPolicy.Create<int, MyData>(maxCount: 50))
+        .WithSelector(LruEvictionSelector.Create<int, MyData>()))
     .Build();
+
+var result = await cache.GetDataAsync(Range.Closed(100, 200), cancellationToken);
+
+foreach (var item in result.Data.Span)
+    Console.WriteLine(item);
+```
+
+## Eviction Policies
+
+Eviction is triggered when **any** configured policy produces a violated constraint (OR semantics). Multiple policies may be active simultaneously; all violated pressures are satisfied in a single eviction pass.
+
+### MaxSegmentCountPolicy
+
+Fires when the total number of cached segments exceeds a limit.
+
+```csharp
+MaxSegmentCountPolicy.Create<int, MyData>(maxCount: 50)
+```
+
+Best for: workloads where all segments are approximately the same size, or where total segment count is the primary memory concern.
+
+### MaxTotalSpanPolicy
+
+Fires when the sum of all segment spans (total domain discrete points) exceeds a limit.
+
+```csharp
+MaxTotalSpanPolicy.Create<int, MyData, IntegerFixedStepDomain>(
+    maxTotalSpan: 5000,
+    domain: new IntegerFixedStepDomain())
+```
+
+Best for: workloads where segments vary significantly in size and total coverage is more meaningful than segment count.
+
+### Combining Policies
+
+```csharp
+.WithEviction(e => e
+    .AddPolicy(MaxSegmentCountPolicy.Create<int, MyData>(maxCount: 50))
+    .AddPolicy(MaxTotalSpanPolicy.Create<int, MyData, IntegerFixedStepDomain>(maxTotalSpan: 10_000, domain))
+    .WithSelector(LruEvictionSelector.Create<int, MyData>()))
+```
+
+Eviction fires when either policy is violated. Both constraints are satisfied in a single pass.
+
+## Eviction Selectors
+
+The selector determines **which segment** to evict from a random sample. All built-in selectors use **random sampling** (O(SampleSize)) rather than sorting the full collection (O(N log N)), keeping eviction cost constant regardless of cache size.
+
+### LruEvictionSelector — Least Recently Used
+
+Evicts the segment from the sample that was **least recently accessed**. Retains recently-used segments.
+
+```csharp
+LruEvictionSelector.Create<int, MyData>()
+```
+
+Best for: workloads where re-access probability correlates with recency (most interactive workloads).
+
+### FifoEvictionSelector — First In, First Out
+
+Evicts the segment from the sample that was **stored earliest**. Ignores access patterns.
+
+```csharp
+FifoEvictionSelector.Create<int, MyData>()
+```
+
+Best for: workloads where all segments have similar re-access probability and simplicity is valued.
+
+### SmallestFirstEvictionSelector — Smallest Span First
+
+Evicts the segment from the sample with the **narrowest domain span**. Retains wide (high-coverage) segments.
+
+```csharp
+SmallestFirstEvictionSelector.Create<int, MyData, IntegerFixedStepDomain>(
+    new IntegerFixedStepDomain())
+```
+
+Best for: workloads where wider segments are more valuable (e.g., broader time ranges, larger geographic areas).
+
+## TTL Expiration
+
+Enable automatic expiration of cached segments after a configurable duration:
+
+```csharp
+await using var cache = VisitedPlacesCacheBuilder.For(dataSource, domain)
+    .WithOptions(o => o.WithSegmentTtl(TimeSpan.FromMinutes(10)))
+    .WithEviction(e => e
+        .AddPolicy(MaxSegmentCountPolicy.Create<int, MyData>(maxCount: 100))
+        .WithSelector(LruEvictionSelector.Create<int, MyData>()))
+    .Build();
+```
+
+When `SegmentTtl` is set, each segment is scheduled for automatic removal after the TTL elapses from the moment it was stored. TTL removal and eviction are independent — a segment may be removed by either mechanism, whichever fires first.
+
+**Idempotent removal:** if a segment is evicted before its TTL fires, the scheduled TTL removal is a no-op.
+
+## Storage Strategy
+
+Two internal storage strategies are available. The default (`SnapshotAppendBufferStorage`) is appropriate for most use cases.
+
+| Strategy                                | Best For                                   | LOH Risk              |
+|-----------------------------------------|--------------------------------------------|-----------------------|
+| `SnapshotAppendBufferStorage` (default) | < 85KB the main array size, < 50K segments | High for large caches |
+| `LinkedListStrideIndexStorage`          | > 50K segments                             | Low (no large array)  |
+
+```csharp
+// Explicit LinkedList strategy for large caches
+.WithOptions(o => o.WithStorageStrategy(LinkedListStrideIndexStorageOptions<int, MyData>.Default))
+```
+
+For detailed guidance, see `docs/visited-places/storage-strategies.md`.
+
+## Diagnostics
+
+⚠️ **CRITICAL: You MUST handle `BackgroundOperationFailed` in production.** Background normalization runs on the thread pool. Without handling this event, failures are silently swallowed.
+
+```csharp
+public class LoggingVpcDiagnostics : IVisitedPlacesCacheDiagnostics
+{
+    private readonly ILogger _logger;
+
+    public LoggingVpcDiagnostics(ILogger logger) => _logger = logger;
+
+    public void BackgroundOperationFailed(Exception ex)
+    {
+        // CRITICAL: always log background failures
+        _logger.LogError(ex, "VPC background operation failed.");
+    }
+
+    // All other methods can be no-op if not needed
+}
+```
+
+If no diagnostics instance is provided, `NoOpDiagnostics` is used — zero overhead, JIT-optimized away completely.
+
+Canonical guide: `docs/shared/diagnostics.md`.
+
+## VPC Documentation
+
+- `docs/visited-places/eviction.md` — eviction architecture, policies, selectors, metadata lifecycle
+- `docs/visited-places/storage-strategies.md` — storage strategy comparison, tuning guide
+- `docs/visited-places/invariants.md` — formal system invariants
+- `docs/visited-places/scenarios.md` — temporal behavior walkthroughs
+- `docs/visited-places/actors.md` — actor responsibilities and execution contexts
+
+---
+
+# Multi-Layer Cache
+
+For workloads with high-latency data sources, compose multiple cache instances into a layered stack. Each layer uses the layer below it as its data source. **Layers can be mixed** — a `VisitedPlacesCache` at the bottom provides random-access buffering while `SlidingWindowCache` layers above serve the sequential user path.
+
+### Visual: Mixed Three-Layer Stack
+
+```
+User
+ │
+ ▼
+┌──────────────────────────────────────────────────────────┐
+│  L1: SlidingWindowCache — 0.5× Snapshot                  │
+│  Small, zero-allocation reads, user-facing               │
+└────────────────────────┬─────────────────────────────────┘
+                         │ cache miss → fetches from L2
+                         ▼
+┌──────────────────────────────────────────────────────────┐
+│  L2: SlidingWindowCache — 10× CopyOnRead                 │
+│  Large prefetch buffer, absorbs L1 rebalance fetches     │
+└────────────────────────┬─────────────────────────────────┘
+                         │ cache miss → fetches from L3
+                         ▼
+┌──────────────────────────────────────────────────────────┐
+│  L3: VisitedPlacesCache — random-access buffer           │
+│  Absorbs random jumps; eviction-based capacity control   │
+└────────────────────────┬─────────────────────────────────┘
+                         │ cache miss → fetches from data source
+                         ▼
+                   Real Data Source
+```
+
+### Mixed-Type Three-Layer Example
+
+```csharp
+using Intervals.NET.Caching.SlidingWindow.Public.Cache;
+using Intervals.NET.Caching.SlidingWindow.Public.Configuration;
+using Intervals.NET.Caching.SlidingWindow.Public.Extensions;
+using Intervals.NET.Caching.VisitedPlaces.Public.Cache;
+using Intervals.NET.Caching.VisitedPlaces.Public.Configuration;
+using Intervals.NET.Caching.VisitedPlaces.Public.Extensions;
+using Intervals.NET.Caching.VisitedPlaces.Core.Eviction.Policies;
+using Intervals.NET.Caching.VisitedPlaces.Core.Eviction.Selectors;
+
+await using var cache = await VisitedPlacesCacheBuilder.Layered(realDataSource, domain)
+    .AddVisitedPlacesLayer(e => e                                    // L3: random-access absorber
+        .AddPolicy(MaxSegmentCountPolicy.Create<int, MyData>(200))
+        .WithSelector(LruEvictionSelector.Create<int, MyData>()))
+    .AddSlidingWindowLayer(o => o                                    // L2: large sequential buffer
+        .WithCacheSize(left: 10.0, right: 10.0)
+        .WithReadMode(UserCacheReadMode.CopyOnRead)
+        .WithThresholds(0.3))
+    .AddSlidingWindowLayer(o => o                                    // L1: user-facing
+        .WithCacheSize(left: 0.5, right: 0.5)
+        .WithReadMode(UserCacheReadMode.Snapshot))
+    .BuildAsync();
 
 var result = await cache.GetDataAsync(range, ct);
 ```
@@ -521,44 +762,48 @@ var result = await cache.GetDataAsync(range, ct);
 
 **Accessing and updating individual layers:**
 
-Use the `Layers` property to access any specific layer by index (0 = innermost, last = outermost). `Layers[i]` is typed as `IRangeCache` — cast to `ISlidingWindowCache` to access `UpdateRuntimeOptions` or `CurrentRuntimeOptions` on a specific layer:
+Use the `Layers` property to access any layer by index (0 = innermost, last = outermost). `Layers[i]` is typed as `IRangeCache` — cast to `ISlidingWindowCache` to access `UpdateRuntimeOptions` or `CurrentRuntimeOptions` on a SlidingWindow layer:
 
 ```csharp
-// Update options on the innermost (deep background) layer
-((ISlidingWindowCache<int, string, IntegerFixedStepDomain>)layeredCache.Layers[0])
+// Update options on L2 (index 1 — second innermost)
+((ISlidingWindowCache<int, string, IntegerFixedStepDomain>)layeredCache.Layers[1])
     .UpdateRuntimeOptions(u => u.WithLeftCacheSize(8.0));
 
-// Inspect the outermost (user-facing) layer's current options
+// Inspect L1 (outermost) current options
 var outerOptions = ((ISlidingWindowCache<int, string, IntegerFixedStepDomain>)layeredCache.Layers[^1])
     .CurrentRuntimeOptions;
 ```
 
 **Recommended layer configuration pattern:**
-- **Inner layers** (closest to the data source): `CopyOnRead`, large buffer sizes (5–10×), handles the heavy prefetching
+- **Innermost layer** (closest to data source): random-access `VisitedPlacesCache` for arbitrary-jump workloads, or large `CopyOnRead` SlidingWindowCache for pure sequential workloads
+- **Middle layers**: `CopyOnRead`, large buffer sizes (5–10×), absorb the layer above's rebalance fetches
 - **Outer (user-facing) layer**: `Snapshot`, small buffer sizes (0.3–1.0×), zero-allocation reads
 
-> **Important — buffer ratio requirement:** Inner layer buffers must be **substantially** larger
-> than outer layer buffers, not merely slightly larger. When the outer layer rebalances, it
-> fetches missing ranges from the inner layer via `GetDataAsync`. Each fetch publishes a
-> rebalance intent on the inner layer. If the inner layer's `NoRebalanceRange` is not wide
-> enough to contain the outer layer's full `DesiredCacheRange`, the inner layer will also
-> rebalance — and re-center toward only one side of the outer layer's gap, leaving it poorly
-> positioned for the next rebalance. With undersized inner buffers this becomes a continuous
-> cycle (cascading rebalance thrashing). Use a 5–10× ratio and `leftThreshold`/`rightThreshold`
-> of 0.2–0.3 on inner layers to ensure the inner layer's stability zone absorbs the outer
-> layer's rebalance fetches. See `docs/sliding-window/architecture.md` (Cascading Rebalance Behavior) and
+> **Important — buffer ratio requirement for SlidingWindow layers:** Inner SlidingWindow layer
+> buffers must be **substantially** larger than outer layer buffers. When the outer layer
+> rebalances, it fetches missing ranges from the inner layer — if the inner layer's
+> `NoRebalanceRange` is not wide enough to contain the outer layer's full `DesiredCacheRange`,
+> the inner layer also rebalances, potentially in the wrong direction. Use a 5–10× ratio and
+> `leftThreshold`/`rightThreshold` of 0.2–0.3 on inner SlidingWindow layers.
+> See `docs/sliding-window/architecture.md` (Cascading Rebalance Behavior) and
 > `docs/sliding-window/scenarios.md` (Scenarios L6 and L7) for the full explanation.
 
-**Three-layer example:**
-```csharp
-await using var cache = SlidingWindowCacheBuilder.Layered(realDataSource, domain)
-    .AddSlidingWindowLayer(l3Options)   // L3: 10× CopyOnRead — network/disk absorber
-    .AddSlidingWindowLayer(l2Options)   // L2: 2× CopyOnRead  — mid-level buffer
-    .AddSlidingWindowLayer(l1Options)   // L1: 0.5× Snapshot  — user-facing
-    .Build();
-```
+## Key Differences: SlidingWindow vs. VisitedPlaces
 
-For detailed guidance see `docs/sliding-window/storage-strategies.md`.
+| Aspect                | SlidingWindowCache               | VisitedPlacesCache            |
+|-----------------------|----------------------------------|-------------------------------|
+| **Access pattern**    | Sequential, coherent viewport    | Random, non-sequential jumps  |
+| **Cache structure**   | Single contiguous window         | Multiple independent segments |
+| **Cache growth**      | Rebalances window position       | Adds new segments per visit   |
+| **Memory control**    | Window size (coefficients)       | Eviction policies             |
+| **Stale data**        | Rebalance replaces window        | TTL expiration per segment    |
+| **Runtime updates**   | `UpdateRuntimeOptions` available | Construction-time only        |
+| **Consistency modes** | Eventual / hybrid / strong       | Eventual only                 |
+| **Best for**          | Time-series, scrollable grids    | Maps, jump navigation, lookup |
+
+When the user has a **single coherent viewport** moving through data, use `SlidingWindowCache`. When the user **jumps freely** to arbitrary locations with no predictable pattern, use `VisitedPlacesCache`.
+
+---
 
 ## License
 

@@ -34,6 +34,37 @@ namespace Intervals.NET.Caching.VisitedPlaces.Core.Eviction.Selectors;
 /// no collection copying. SampleSize defaults to
 /// <see cref="EvictionSamplingOptions.DefaultSampleSize"/> (32).</para>
 /// </remarks>
+/// <summary>
+/// Non-generic factory companion for <see cref="SmallestFirstEvictionSelector{TRange,TData,TDomain}"/>.
+/// Enables type inference at the call site:
+/// <c>SmallestFirstEvictionSelector.Create&lt;int, MyData, MyDomain&gt;(domain)</c>.
+/// </summary>
+public static class SmallestFirstEvictionSelector
+{
+    /// <summary>
+    /// Creates a new <see cref="SmallestFirstEvictionSelector{TRange,TData,TDomain}"/>.
+    /// </summary>
+    /// <typeparam name="TRange">The type representing range boundaries.</typeparam>
+    /// <typeparam name="TData">The type of data being cached.</typeparam>
+    /// <typeparam name="TDomain">The range domain type used to compute segment spans.</typeparam>
+    /// <param name="domain">The range domain used to compute segment spans.</param>
+    /// <param name="samplingOptions">
+    /// Optional sampling configuration. When <see langword="null"/>,
+    /// <see cref="EvictionSamplingOptions.Default"/> is used (SampleSize = 32).
+    /// </param>
+    /// <returns>A new <see cref="SmallestFirstEvictionSelector{TRange,TData,TDomain}"/> instance.</returns>
+    /// <exception cref="ArgumentNullException">
+    /// Thrown when <paramref name="domain"/> is <see langword="null"/>.
+    /// </exception>
+    public static SmallestFirstEvictionSelector<TRange, TData, TDomain> Create<TRange, TData, TDomain>(
+        TDomain domain,
+        EvictionSamplingOptions? samplingOptions = null)
+        where TRange : IComparable<TRange>
+        where TDomain : IRangeDomain<TRange>
+        => new(domain, samplingOptions);
+}
+
+/// <inheritdoc cref="SmallestFirstEvictionSelector{TRange,TData,TDomain}"/>
 public sealed class SmallestFirstEvictionSelector<TRange, TData, TDomain>
     : SamplingEvictionSelector<TRange, TData>
     where TRange : IComparable<TRange>
@@ -109,25 +140,31 @@ public sealed class SmallestFirstEvictionSelector<TRange, TData, TDomain>
     /// If the segment does not carry a <see cref="SmallestFirstMetadata"/> instance, computes
     /// the span from <c>segment.Range.Span(_domain).Value</c> and attaches it. Because segment
     /// ranges are immutable, the computed value is always correct regardless of when the repair
-    /// occurs.
+    /// occurs. If the span is not finite, a span of 0 is stored as a safe fallback — the segment
+    /// will be treated as the worst eviction candidate (smallest span).
     /// </remarks>
     protected override void EnsureMetadata(CachedSegment<TRange, TData> segment)
     {
-        if (segment.EvictionMetadata is not SmallestFirstMetadata)
+        if (segment.EvictionMetadata is SmallestFirstMetadata)
         {
-            segment.EvictionMetadata = new SmallestFirstMetadata(segment.Range.Span(_domain).Value);
+            return;
         }
+
+        var span = segment.Range.Span(_domain);
+        segment.EvictionMetadata = new SmallestFirstMetadata(span.IsFinite ? span.Value : 0L);
     }
 
     /// <inheritdoc/>
     /// <remarks>
     /// Computes <c>segment.Range.Span(domain).Value</c> once and stores it as a
     /// <see cref="SmallestFirstMetadata"/> instance on the segment. Because segment ranges
-    /// are immutable, this value never needs to be recomputed.
+    /// are immutable, this value never needs to be recomputed. If the span is not finite,
+    /// a span of 0 is stored as a safe fallback.
     /// </remarks>
     public override void InitializeMetadata(CachedSegment<TRange, TData> segment)
     {
-        segment.EvictionMetadata = new SmallestFirstMetadata(segment.Range.Span(_domain).Value);
+        var span = segment.Range.Span(_domain);
+        segment.EvictionMetadata = new SmallestFirstMetadata(span.IsFinite ? span.Value : 0L);
     }
 
     /// <inheritdoc/>

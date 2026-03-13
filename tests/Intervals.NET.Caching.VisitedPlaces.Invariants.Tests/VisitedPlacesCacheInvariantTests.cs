@@ -1,3 +1,4 @@
+using Intervals.NET;
 using Intervals.NET.Caching.Dto;
 using Intervals.NET.Caching.Extensions;
 using Intervals.NET.Domain.Default.Numeric;
@@ -552,6 +553,30 @@ public sealed class VisitedPlacesCacheInvariantTests : IAsyncDisposable
         Assert.True(sw.Elapsed < TimeSpan.FromSeconds(2),
             $"User path was blocked: elapsed={sw.Elapsed.TotalMilliseconds:F0}ms");
         Assert.Equal(0, _diagnostics.BackgroundOperationFailed);
+    }
+
+    // ============================================================
+    // S.R.1 — Infinite Range Rejected at Entry Point
+    // ============================================================
+
+    /// <summary>
+    /// Invariant S.R.1 [Behavioral]: GetDataAsync rejects unbounded ranges by throwing
+    /// <see cref="ArgumentException"/> before any cache logic executes.
+    /// </summary>
+    [Fact]
+    public async Task Invariant_VPC_S_R_1_UnboundedRangeThrowsArgumentException()
+    {
+        // ARRANGE
+        var cache = CreateCache();
+        var infiniteRange = Factories.Range.Closed(RangeValue<int>.NegativeInfinity, RangeValue<int>.PositiveInfinity);
+
+        // ACT
+        var exception = await Record.ExceptionAsync(() =>
+            cache.GetDataAsync(infiniteRange, CancellationToken.None).AsTask());
+
+        // ASSERT
+        Assert.NotNull(exception);
+        Assert.IsType<ArgumentException>(exception);
     }
 
     // ============================================================

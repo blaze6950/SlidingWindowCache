@@ -484,10 +484,10 @@ public class RuntimeOptionsUpdateTests
     public async Task LayeredCache_LayersProperty_AllowsPerLayerOptionsUpdate()
     {
         // ARRANGE — build a 2-layer cache
-        await using var layeredCache = (LayeredRangeCache<int, string, IntegerFixedStepDomain>)SlidingWindowCacheBuilder.Layered(CreateDataSource(), new IntegerFixedStepDomain())
+        await using var layeredCache = (LayeredRangeCache<int, string, IntegerFixedStepDomain>)await SlidingWindowCacheBuilder.Layered(CreateDataSource(), new IntegerFixedStepDomain())
             .AddSlidingWindowLayer(new SlidingWindowCacheOptions(1.0, 1.0, UserCacheReadMode.Snapshot))
             .AddSlidingWindowLayer(new SlidingWindowCacheOptions(1.0, 1.0, UserCacheReadMode.Snapshot))
-            .Build();
+            .BuildAsync();
 
         // ACT — update the innermost layer's options via Layers[0] (cast to ISlidingWindowCache)
         var innerLayer = (ISlidingWindowCache<int, string, IntegerFixedStepDomain>)layeredCache.Layers[0];
@@ -502,10 +502,10 @@ public class RuntimeOptionsUpdateTests
     public async Task LayeredCache_LayersProperty_InnerLayerCurrentRuntimeOptions_ReflectsUpdate()
     {
         // ARRANGE
-        await using var layeredCache = (LayeredRangeCache<int, string, IntegerFixedStepDomain>)SlidingWindowCacheBuilder.Layered(CreateDataSource(), new IntegerFixedStepDomain())
+        await using var layeredCache = (LayeredRangeCache<int, string, IntegerFixedStepDomain>)await SlidingWindowCacheBuilder.Layered(CreateDataSource(), new IntegerFixedStepDomain())
             .AddSlidingWindowLayer(new SlidingWindowCacheOptions(1.0, 1.0, UserCacheReadMode.Snapshot))
             .AddSlidingWindowLayer(new SlidingWindowCacheOptions(1.0, 1.0, UserCacheReadMode.Snapshot))
-            .Build();
+            .BuildAsync();
 
         // ACT — cast inner layer to ISlidingWindowCache to access runtime options
         var innerLayer = (ISlidingWindowCache<int, string, IntegerFixedStepDomain>)layeredCache.Layers[0];
@@ -520,10 +520,10 @@ public class RuntimeOptionsUpdateTests
     public async Task LayeredCache_LayersProperty_OuterLayerUpdateDoesNotAffectInnerLayer()
     {
         // ARRANGE
-        await using var layeredCache = (LayeredRangeCache<int, string, IntegerFixedStepDomain>)SlidingWindowCacheBuilder.Layered(CreateDataSource(), new IntegerFixedStepDomain())
+        await using var layeredCache = (LayeredRangeCache<int, string, IntegerFixedStepDomain>)await SlidingWindowCacheBuilder.Layered(CreateDataSource(), new IntegerFixedStepDomain())
             .AddSlidingWindowLayer(new SlidingWindowCacheOptions(1.0, 1.0, UserCacheReadMode.Snapshot))
             .AddSlidingWindowLayer(new SlidingWindowCacheOptions(1.0, 1.0, UserCacheReadMode.Snapshot))
-            .Build();
+            .BuildAsync();
 
         // Cast both layers to ISlidingWindowCache to access runtime options
         var outerLayer = (ISlidingWindowCache<int, string, IntegerFixedStepDomain>)layeredCache.Layers[^1];

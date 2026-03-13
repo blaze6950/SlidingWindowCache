@@ -16,6 +16,18 @@ For implementation-specific invariants, see:
 
 ---
 
+## S.R. Range Request Invariants
+
+**S.R.1** 🟢 **[Behavioral]** **The requested range must be bounded (finite) on both ends.**
+
+`GetDataAsync` rejects any `requestedRange` that is unbounded (i.e., extends to negative or positive infinity) by throwing `ArgumentException`. Both cache implementations enforce this at the public entry point, before any delegation to internal actors.
+
+**Rationale:** Unbounded ranges have no finite span and cannot be fetched, stored, or served. Accepting them would propagate a nonsensical request into the data source and internal planning logic, producing undefined behavior. Validating eagerly at the entry point gives the caller an immediate, actionable error.
+
+**Enforcement:** `SlidingWindowCache.GetDataAsync`, `VisitedPlacesCache.GetDataAsync`
+
+---
+
 ## S.H. Activity Tracking Invariants
 
 These invariants govern `AsyncActivityCounter` — the shared lock-free counter that enables `WaitForIdleAsync`.

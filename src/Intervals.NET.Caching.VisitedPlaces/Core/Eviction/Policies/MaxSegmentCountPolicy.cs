@@ -29,6 +29,28 @@ namespace Intervals.NET.Caching.VisitedPlaces.Core.Eviction.Policies;
 /// because <see cref="OnSegmentRemoved"/> may be called concurrently from the Background Path
 /// and the TTL actor.</para>
 /// </remarks>
+/// <summary>
+/// Non-generic factory companion for <see cref="MaxSegmentCountPolicy{TRange,TData}"/>.
+/// Enables type inference at the call site: <c>MaxSegmentCountPolicy.Create&lt;int, MyData&gt;(50)</c>.
+/// </summary>
+public static class MaxSegmentCountPolicy
+{
+    /// <summary>
+    /// Creates a new <see cref="MaxSegmentCountPolicy{TRange,TData}"/> with the specified maximum segment count.
+    /// </summary>
+    /// <typeparam name="TRange">The type representing range boundaries.</typeparam>
+    /// <typeparam name="TData">The type of data being cached.</typeparam>
+    /// <param name="maxCount">The maximum number of segments. Must be &gt;= 1.</param>
+    /// <returns>A new <see cref="MaxSegmentCountPolicy{TRange,TData}"/> instance.</returns>
+    /// <exception cref="ArgumentOutOfRangeException">
+    /// Thrown when <paramref name="maxCount"/> is less than 1.
+    /// </exception>
+    public static MaxSegmentCountPolicy<TRange, TData> Create<TRange, TData>(int maxCount)
+        where TRange : IComparable<TRange>
+        => new(maxCount);
+}
+
+/// <inheritdoc cref="MaxSegmentCountPolicy{TRange,TData}"/>
 public sealed class MaxSegmentCountPolicy<TRange, TData> : IEvictionPolicy<TRange, TData>
     where TRange : IComparable<TRange>
 {

@@ -431,10 +431,10 @@ These scenarios describe the temporal behavior when `LayeredRangeCacheBuilder` i
 var l2Diagnostics = new EventCounterCacheDiagnostics();
 var l1Diagnostics = new EventCounterCacheDiagnostics();
 
-await using var cache = SlidingWindowCacheBuilder.Layered(dataSource, domain)
+await using var cache = await SlidingWindowCacheBuilder.Layered(dataSource, domain)
     .AddSlidingWindowLayer(deepOptions,  l2Diagnostics)   // L2
     .AddSlidingWindowLayer(userOptions,  l1Diagnostics)   // L1
-    .Build();
+    .BuildAsync();
 ```
 
 **Observation pattern:**

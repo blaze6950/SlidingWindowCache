@@ -438,22 +438,38 @@ Steps 3 and 4 are **skipped entirely** for stats-only events (full-hit events wh
 
 ## Configuration Example
 
+**Using factory methods (recommended for readability):**
+
 ```csharp
 // VPC with LRU eviction, max 50 segments, max total span of 5000 units
-var vpc = VisitedPlacesCacheBuilder
-    .Create(dataSource, domain)
+await using var vpc = VisitedPlacesCacheBuilder
+    .For(dataSource, domain)
+    .WithOptions(o => o.WithSegmentTtl(TimeSpan.FromHours(1)))
+    .WithEviction(e => e
+        .AddPolicy(MaxSegmentCountPolicy.Create<int, MyData>(maxCount: 50))
+        .AddPolicy(MaxTotalSpanPolicy.Create<int, MyData, IntegerFixedStepDomain>(
+            maxTotalSpan: 5000, domain))
+        .WithSelector(LruEvictionSelector.Create<int, MyData>()))
+    .Build();
+```
+
+**Using explicit generic constructors (alternative, fully equivalent):**
+
+```csharp
+await using var vpc = VisitedPlacesCacheBuilder
+    .For(dataSource, domain)
+    .WithOptions(o => o.WithSegmentTtl(TimeSpan.FromHours(1)))
     .WithEviction(
         policies: [
             new MaxSegmentCountPolicy<int, MyData>(maxCount: 50),
             new MaxTotalSpanPolicy<int, MyData, IntegerFixedStepDomain>(
                 maxTotalSpan: 5000, domain)
         ],
-        selector: new LruEvictionSelector<int, MyData>()
-    )
+        selector: new LruEvictionSelector<int, MyData>())
     .Build();
 ```
 
-Both policies are active. The LRU Selector determines eviction order via sampling; the constraint satisfaction loop removes segments until all pressures are satisfied.
+Both policies are active simultaneously. The LRU selector determines eviction order via sampling; the constraint satisfaction loop removes segments until all pressures are satisfied.
 
 ---
 

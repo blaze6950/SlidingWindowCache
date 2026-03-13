@@ -91,6 +91,10 @@ internal sealed class UnboundedSerialWorkScheduler<TWorkItem> : SerialWorkSchedu
     /// </param>
     /// <param name="diagnostics">Diagnostics for work lifecycle events.</param>
     /// <param name="activityCounter">Activity counter for tracking active operations.</param>
+    /// <param name="timeProvider">
+    /// Time provider for debounce delays. When <see langword="null"/>,
+    /// <see cref="TimeProvider.System"/> is used.
+    /// </param>
     /// <remarks>
     /// <para><strong>Initialization:</strong></para>
     /// <para>
@@ -109,8 +113,9 @@ internal sealed class UnboundedSerialWorkScheduler<TWorkItem> : SerialWorkSchedu
         Func<TWorkItem, CancellationToken, Task> executor,
         Func<TimeSpan> debounceProvider,
         IWorkSchedulerDiagnostics diagnostics,
-        AsyncActivityCounter activityCounter
-    ) : base(executor, debounceProvider, diagnostics, activityCounter)
+        AsyncActivityCounter activityCounter,
+        TimeProvider? timeProvider = null
+    ) : base(executor, debounceProvider, diagnostics, activityCounter, timeProvider)
     {
     }
 

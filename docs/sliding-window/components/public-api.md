@@ -266,7 +266,7 @@ A thin wrapper that:
 - Exposes `LayerCount` for inspection.
 - Implements `IRangeCache` only (not `ISlidingWindowCache`); `UpdateRuntimeOptions`/`CurrentRuntimeOptions` are not delegated.
 
-Typically created via `LayeredRangeCacheBuilder.Build()` rather than directly. Constructor is `internal`; use the builder.
+Typically created via `LayeredRangeCacheBuilder.BuildAsync()` rather than directly. Constructor is `internal`; use the builder.
 
 ### LayeredRangeCacheBuilder\<TRange, TData, TDomain\>
 
@@ -275,17 +275,17 @@ Typically created via `LayeredRangeCacheBuilder.Build()` rather than directly. C
 **Type**: `sealed class` — fluent builder
 
 ```csharp
-await using var cache = SlidingWindowCacheBuilder.Layered(realDataSource, domain)
+await using var cache = await SlidingWindowCacheBuilder.Layered(realDataSource, domain)
     .AddSlidingWindowLayer(deepOptions)   // L2: inner layer (CopyOnRead, large buffers)
     .AddSlidingWindowLayer(userOptions)   // L1: outer layer (Snapshot, small buffers)
-    .Build();
+    .BuildAsync();
 ```
 
 - Obtain an instance via `SlidingWindowCacheBuilder.Layered(dataSource, domain)` — enables full generic type inference.
 - `AddLayer(Func<IDataSource, IRangeCache>)` — generic factory-based layer addition.
 - `AddSlidingWindowLayer(options, diagnostics?)` — convenience extension method (in SlidingWindow package); first call = innermost layer, last call = outermost (user-facing). Also accepts `Action<SlidingWindowCacheOptionsBuilder>` for inline configuration.
-- `Build()` — constructs all cache instances, wires them via `RangeCacheDataSourceAdapter`, and wraps them in `LayeredRangeCache`. Returns `IRangeCache<TRange, TData, TDomain>`; concrete type is `LayeredRangeCache<>`.
-- Throws `InvalidOperationException` from `Build()` if no layers were added, or if an inline delegate fails validation.
+- `BuildAsync()` — constructs all cache instances, wires them via `RangeCacheDataSourceAdapter`, and wraps them in `LayeredRangeCache`. Returns `ValueTask<IRangeCache<TRange, TData, TDomain>>`; concrete type is `LayeredRangeCache<>`.
+- Throws `InvalidOperationException` from `BuildAsync()` if no layers were added, or if an inline delegate fails validation.
 
 **See**: `README.md` (Multi-Layer Cache section) and `docs/sliding-window/storage-strategies.md` for recommended layer configuration patterns.
 

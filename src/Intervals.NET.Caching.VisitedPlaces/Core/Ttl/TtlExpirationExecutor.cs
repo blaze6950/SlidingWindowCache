@@ -132,7 +132,7 @@ internal sealed class TtlExpirationExecutor<TRange, TData>
         {
             // Await expiry. OperationCanceledException propagates on cache disposal —
             // handled by the scheduler pipeline (not caught here).
-            await Task.Delay(remaining, cancellationToken).ConfigureAwait(false);
+            await Task.Delay(remaining, _timeProvider, cancellationToken).ConfigureAwait(false);
         }
 
         // Delegate removal to storage, which atomically claims ownership via TryMarkAsRemoved()

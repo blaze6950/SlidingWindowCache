@@ -121,9 +121,11 @@ public interface IDataSource<TRange, TData> where TRange : IComparable<TRange>
     /// <remarks>
     /// <para><strong>Default Behavior:</strong></para>
     /// <para>
-    /// The default implementation fetches each range in parallel by calling
-    /// <see cref="FetchAsync(Range{TRange}, CancellationToken)"/> for each range.
-    /// Override this method if your data source supports true batch optimization.
+    /// The default implementation fetches each range in parallel using
+    /// <see cref="Parallel.ForEachAsync{TSource}"/> with a degree of parallelism equal to
+    /// <see cref="Environment.ProcessorCount"/>. Override this method if your data source supports
+    /// true batch optimization (e.g., a single bulk database query) or if you need finer control
+    /// over parallelism.
     /// </para>
     /// </remarks>
     async Task<IEnumerable<RangeChunk<TRange, TData>>> FetchAsync(
@@ -131,7 +133,21 @@ public interface IDataSource<TRange, TData> where TRange : IComparable<TRange>
         CancellationToken cancellationToken
     )
     {
-        var tasks = ranges.Select(range => FetchAsync(range, cancellationToken));
-        return await Task.WhenAll(tasks);
+        var rangeList = ranges.ToList();
+        var results = new RangeChunk<TRange, TData>[rangeList.Count];
+
+        await Parallel.ForEachAsync(
+            Enumerable.Range(0, rangeList.Count),
+            new ParallelOptions
+            {
+                MaxDegreeOfParallelism = Environment.ProcessorCount,
+                CancellationToken = cancellationToken
+            },
+            async (index, ct) =>
+            {
+                results[index] = await FetchAsync(rangeList[index], ct);
+            });
+
+        return results;
     }
 }
