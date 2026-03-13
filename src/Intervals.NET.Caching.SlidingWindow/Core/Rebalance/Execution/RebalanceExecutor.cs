@@ -17,10 +17,10 @@ namespace Intervals.NET.Caching.SlidingWindow.Core.Rebalance.Execution;
 /// <para><strong>Execution Context:</strong> Background / ThreadPool (via RebalanceExecutionController actor)</para>
 /// <para><strong>Characteristics:</strong> Asynchronous, cancellable, heavyweight</para>
 /// <para><strong>Responsibility:</strong> Cache normalization (expand, trim, recompute NoRebalanceRange)</para>
-    /// <para><strong>Execution Serialization:</strong> Provided by the active supersession work scheduler, which ensures
-    /// only one rebalance execution runs at a time — either via task chaining (<c>UnboundedSupersessionWorkScheduler</c>, default)
-    /// or via bounded channel (<c>BoundedSupersessionWorkScheduler</c>).
-    /// CancellationToken provides early exit signaling. WebAssembly-compatible, async, and lightweight.</para>
+/// <para><strong>Execution Serialization:</strong> Provided by the active supersession work scheduler, which ensures
+/// only one rebalance execution runs at a time — either via task chaining (<c>UnboundedSupersessionWorkScheduler</c>, default)
+/// or via bounded channel (<c>BoundedSupersessionWorkScheduler</c>).
+/// CancellationToken provides early exit signaling. WebAssembly-compatible, async, and lightweight.</para>
 /// </remarks>
 internal sealed class RebalanceExecutor<TRange, TData, TDomain>
     where TRange : IComparable<TRange>

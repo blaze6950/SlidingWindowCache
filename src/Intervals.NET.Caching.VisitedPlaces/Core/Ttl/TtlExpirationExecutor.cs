@@ -28,11 +28,11 @@ namespace Intervals.NET.Caching.VisitedPlaces.Core.Ttl;
 ///   the scheduler's cancellation handler and the segment is NOT removed.
 /// </description></item>
 /// <item><description>
-    ///   Call <see cref="ISegmentStorage{TRange,TData}.TryRemove"/> — which atomically claims
-    ///   ownership via <see cref="CachedSegment{TRange,TData}.TryMarkAsRemoved()"/> internally
-    ///   (<c>Interlocked.CompareExchange</c>) and returns <see langword="true"/> only for the
-    ///   first caller. If it returns <see langword="false"/> the segment was already removed by
-    ///   eviction; return immediately without firing any diagnostic (idempotent no-op for storage and engine).
+///   Call <see cref="ISegmentStorage{TRange,TData}.TryRemove"/> — which atomically claims
+///   ownership via <see cref="CachedSegment{TRange,TData}.TryMarkAsRemoved()"/> internally
+///   (<c>Interlocked.CompareExchange</c>) and returns <see langword="true"/> only for the
+///   first caller. If it returns <see langword="false"/> the segment was already removed by
+///   eviction; return immediately without firing any diagnostic (idempotent no-op for storage and engine).
 /// </description></item>
 /// <item><description>
 ///   Call <see cref="EvictionEngine{TRange,TData}.OnSegmentRemoved"/> to update stateful
@@ -51,10 +51,10 @@ namespace Intervals.NET.Caching.VisitedPlaces.Core.Ttl;
 /// </para>
 /// <list type="bullet">
 /// <item><description>
-    ///   <see cref="ISegmentStorage{TRange,TData}.TryRemove"/> internally calls
-    ///   <see cref="CachedSegment{TRange,TData}.TryMarkAsRemoved()"/> via
-    ///   <c>Interlocked.CompareExchange</c> — exactly one caller wins; the other returns
-    ///   <see langword="false"/> and becomes a no-op.
+///   <see cref="ISegmentStorage{TRange,TData}.TryRemove"/> internally calls
+///   <see cref="CachedSegment{TRange,TData}.TryMarkAsRemoved()"/> via
+///   <c>Interlocked.CompareExchange</c> — exactly one caller wins; the other returns
+///   <see langword="false"/> and becomes a no-op.
 /// </description></item>
 /// <item><description>
 ///   <see cref="EvictionEngine{TRange,TData}.OnSegmentRemoved"/> is only reached by the winner

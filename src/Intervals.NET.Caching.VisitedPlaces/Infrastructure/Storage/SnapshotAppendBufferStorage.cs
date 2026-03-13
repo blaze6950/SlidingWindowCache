@@ -22,8 +22,8 @@ namespace Intervals.NET.Caching.VisitedPlaces.Infrastructure.Storage;
 /// delegates soft-delete tracking entirely to <see cref="CachedSegment{TRange,TData}.IsRemoved"/>.
 /// The flag is set atomically by <see cref="CachedSegment{TRange,TData}.TryMarkAsRemoved"/> and
 /// never reset, so it is safe to read from any thread without a lock.
-    /// All read paths (<see cref="FindIntersecting"/>, <see cref="TryGetRandomSegment"/>,
-    /// <see cref="Normalize"/>) simply skip segments whose <c>IsRemoved</c> flag is set.
+/// All read paths (<see cref="FindIntersecting"/>, <see cref="TryGetRandomSegment"/>,
+/// <see cref="Normalize"/>) simply skip segments whose <c>IsRemoved</c> flag is set.
 /// </para>
 /// <para><strong>RCU semantics (Invariant VPC.B.5):</strong>
 /// User Path threads read a stable snapshot via <c>Volatile.Read</c>. New snapshots are published

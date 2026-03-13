@@ -96,7 +96,7 @@ internal sealed class EvictionExecutor<TRange, TData>
             // justStoredSegments immunity (Invariant VPC.E.3) + already-selected candidates
             // are both tracked here. Constructed from justStoredSegments so all just-stored
             // entries are immune from the first selection attempt.
-            immune ??= [..justStoredSegments];
+            immune ??= [.. justStoredSegments];
 
             if (!_selector.TrySelectCandidate(immune, out var candidate))
             {

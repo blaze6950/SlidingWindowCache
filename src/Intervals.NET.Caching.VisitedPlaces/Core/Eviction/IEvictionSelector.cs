@@ -81,33 +81,33 @@ internal interface IStorageAwareEvictionSelector<TRange, TData>
 public interface IEvictionSelector<TRange, TData>
     where TRange : IComparable<TRange>
 {    /// <summary>
-    /// Selects a single eviction candidate by randomly sampling segments from storage
-    /// and returning the worst according to this selector's strategy.
-    /// </summary>
-    /// <param name="immuneSegments">
-    /// Segments that must not be selected. Includes just-stored segments (Invariant VPC.E.3)
-    /// and any segments already selected for eviction in the current pass.
-    /// May be empty when no segments are immune.
-    /// </param>
-    /// <param name="candidate">
-    /// When this method returns <see langword="true"/>, contains the selected eviction candidate.
-    /// When this method returns <see langword="false"/>, this parameter is undefined.
-    /// </param>
-    /// <returns>
-    /// <see langword="true"/> if a candidate was found; <see langword="false"/> if no eligible
-    /// candidate exists (e.g., all segments are immune, or the segment pool is empty).
-    /// </returns>
-    /// <remarks>
-    /// <para>
-    /// The caller is responsible for looping until pressure is satisfied or this method returns
-    /// <see langword="false"/>. The executor adds each selected candidate to the immune set before
-    /// the next call, preventing the same segment from being selected twice.
-    /// </para>
-    /// <para>
-    /// The selector calls <see cref="ISegmentStorage{TRange,TData}.GetRandomSegment"/> up to
-    /// <c>SampleSize</c> times, skipping segments that are in <paramref name="immuneSegments"/>.
-    /// </para>
-    /// </remarks>
+     /// Selects a single eviction candidate by randomly sampling segments from storage
+     /// and returning the worst according to this selector's strategy.
+     /// </summary>
+     /// <param name="immuneSegments">
+     /// Segments that must not be selected. Includes just-stored segments (Invariant VPC.E.3)
+     /// and any segments already selected for eviction in the current pass.
+     /// May be empty when no segments are immune.
+     /// </param>
+     /// <param name="candidate">
+     /// When this method returns <see langword="true"/>, contains the selected eviction candidate.
+     /// When this method returns <see langword="false"/>, this parameter is undefined.
+     /// </param>
+     /// <returns>
+     /// <see langword="true"/> if a candidate was found; <see langword="false"/> if no eligible
+     /// candidate exists (e.g., all segments are immune, or the segment pool is empty).
+     /// </returns>
+     /// <remarks>
+     /// <para>
+     /// The caller is responsible for looping until pressure is satisfied or this method returns
+     /// <see langword="false"/>. The executor adds each selected candidate to the immune set before
+     /// the next call, preventing the same segment from being selected twice.
+     /// </para>
+     /// <para>
+     /// The selector calls <see cref="ISegmentStorage{TRange,TData}.GetRandomSegment"/> up to
+     /// <c>SampleSize</c> times, skipping segments that are in <paramref name="immuneSegments"/>.
+     /// </para>
+     /// </remarks>
     bool TrySelectCandidate(
         IReadOnlySet<CachedSegment<TRange, TData>> immuneSegments,
         out CachedSegment<TRange, TData> candidate);

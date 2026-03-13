@@ -35,12 +35,12 @@ namespace Intervals.NET.Caching.VisitedPlaces.Core.Eviction.Policies;
 ///   <see cref="OnSegmentRemoved"/> subtracts the segment's span from <c>_totalSpan</c>.
 /// </description></item>
 /// </list>
- /// <para>
- /// Both lifecycle hooks are called by <see cref="EvictionPolicyEvaluator{TRange,TData}"/>
- /// and may also be called by the TTL actor concurrently. <c>_totalSpan</c> is updated via
- /// <see cref="Interlocked.Add(ref long, long)"/> so it is always thread-safe.
- /// <see cref="Evaluate"/> reads it via <see cref="Volatile.Read"/> for an acquire fence.
- /// </para>
+/// <para>
+/// Both lifecycle hooks are called by <see cref="EvictionPolicyEvaluator{TRange,TData}"/>
+/// and may also be called by the TTL actor concurrently. <c>_totalSpan</c> is updated via
+/// <see cref="Interlocked.Add(ref long, long)"/> so it is always thread-safe.
+/// <see cref="Evaluate"/> reads it via <see cref="Volatile.Read"/> for an acquire fence.
+/// </para>
 /// <para><strong>Key improvement over the old stateless design:</strong></para>
 /// <para>
 /// The old implementation iterated <c>allSegments</c> in every <c>Evaluate</c> call and called

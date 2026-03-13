@@ -11,8 +11,8 @@ namespace Intervals.NET.Caching.VisitedPlaces.Infrastructure.Storage;
 /// <remarks>
 /// <para><strong>Threading Model:</strong></para>
 /// <list type="bullet">
-    /// <item><description><see cref="FindIntersecting"/> — User Path; concurrent reads are safe</description></item>
-    /// <item><description><see cref="Add"/>, <see cref="TryRemove"/>, <see cref="TryGetRandomSegment"/> — Background Path only (single writer)</description></item>
+/// <item><description><see cref="FindIntersecting"/> — User Path; concurrent reads are safe</description></item>
+/// <item><description><see cref="Add"/>, <see cref="TryRemove"/>, <see cref="TryGetRandomSegment"/> — Background Path only (single writer)</description></item>
 /// </list>
 /// <para><strong>RCU Semantics (Invariant VPC.B.5):</strong>
 /// User Path reads operate on a stable snapshot published via <c>Volatile.Write</c>.

@@ -21,7 +21,7 @@ namespace Intervals.NET.Caching.VisitedPlaces.Core.Background;
 /// <para><strong>Critical Contract — Background Path is the SINGLE WRITER for <c>Add</c> (Invariant VPC.A.10):</strong></para>
 /// <para>
 /// All <see cref="ISegmentStorage{TRange,TData}.Add"/> calls are made exclusively here.
-    /// <see cref="ISegmentStorage{TRange,TData}.TryRemove"/> may also be called concurrently by the
+/// <see cref="ISegmentStorage{TRange,TData}.TryRemove"/> may also be called concurrently by the
 /// TTL actor; thread safety is guaranteed by <see cref="CachedSegment{TRange,TData}.TryMarkAsRemoved()"/>
 /// (Interlocked.CompareExchange) and <see cref="EvictionEngine{TRange,TData}.OnSegmentRemoved"/>
 /// using atomic operations internally.
@@ -48,15 +48,15 @@ namespace Intervals.NET.Caching.VisitedPlaces.Core.Background;
 ///   of candidates yielded one at a time. Only runs when step 2 stored at least one segment.
 /// </description></item>
 /// <item><description>
-    ///   Remove evicted segments — iterates the enumerable from step 3 and for each candidate
-    ///   calls <see cref="ISegmentStorage{TRange,TData}.TryRemove"/>, which atomically claims
-    ///   ownership via <see cref="CachedSegment{TRange,TData}.TryMarkAsRemoved()"/> internally and
-    ///   returns <see langword="true"/> only for the first caller. For each segment this caller wins,
-    ///   <see cref="EvictionEngine{TRange,TData}.OnSegmentRemoved"/> is called immediately
-    ///   (per-segment — no intermediate list allocation), followed by
-    ///   <see cref="IVisitedPlacesCacheDiagnostics.EvictionSegmentRemoved"/>.
-    ///   After the loop completes, <see cref="IVisitedPlacesCacheDiagnostics.EvictionExecuted"/>
-    ///   is fired once (only when at least one segment was successfully removed).
+///   Remove evicted segments — iterates the enumerable from step 3 and for each candidate
+///   calls <see cref="ISegmentStorage{TRange,TData}.TryRemove"/>, which atomically claims
+///   ownership via <see cref="CachedSegment{TRange,TData}.TryMarkAsRemoved()"/> internally and
+///   returns <see langword="true"/> only for the first caller. For each segment this caller wins,
+///   <see cref="EvictionEngine{TRange,TData}.OnSegmentRemoved"/> is called immediately
+///   (per-segment — no intermediate list allocation), followed by
+///   <see cref="IVisitedPlacesCacheDiagnostics.EvictionSegmentRemoved"/>.
+///   After the loop completes, <see cref="IVisitedPlacesCacheDiagnostics.EvictionExecuted"/>
+///   is fired once (only when at least one segment was successfully removed).
 /// </description></item>
 /// </list>
 /// <para><strong>Activity counter (Invariant S.H.1):</strong></para>

@@ -52,9 +52,9 @@ public sealed class VisitedPlacesCacheOptions<TRange, TData> : IEquatable<Visite
     /// </summary>
     /// <remarks>
     /// <para>
-        /// When set, each segment is scheduled for removal after this duration elapses from the
-        /// moment the segment is stored. The TTL actor fires an independent background removal via
-        /// <c>TtlExpirationExecutor</c>, dispatched fire-and-forget on the thread pool.
+    /// When set, each segment is scheduled for removal after this duration elapses from the
+    /// moment the segment is stored. The TTL actor fires an independent background removal via
+    /// <c>TtlExpirationExecutor</c>, dispatched fire-and-forget on the thread pool.
     /// </para>
     /// <para>
     /// Removal is idempotent: if the segment was already evicted before the TTL fires, the
