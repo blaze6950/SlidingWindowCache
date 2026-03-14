@@ -37,7 +37,7 @@ These invariants govern `AsyncActivityCounter` — the shared lock-free counter 
 At every publication site, the counter increment happens before the visibility event:
 - Before `semaphore.Release()` (intent signalling)
 - Before channel write (`BoundedSerialWorkScheduler`)
-- Before `Volatile.Write` to a task field (`UnboundedSerialWorkScheduler`)
+- Before `lock (_chainLock)` task chain update (`UnboundedSerialWorkScheduler`)
 
 **Rationale:** If the increment came after visibility, a concurrent `WaitForIdleAsync` caller could observe the work, see count = 0, and return before the increment — believing the system is idle when it is not. Increment-before-publish prevents this race.
 

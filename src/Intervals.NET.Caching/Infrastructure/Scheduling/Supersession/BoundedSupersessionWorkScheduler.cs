@@ -29,6 +29,12 @@ internal sealed class BoundedSupersessionWorkScheduler<TWorkItem>
     /// <param name="diagnostics">Diagnostics for work lifecycle events.</param>
     /// <param name="activityCounter">Activity counter for tracking active operations.</param>
     /// <param name="capacity">The bounded channel capacity for backpressure control. Must be >= 1.</param>
+    /// <param name="singleWriter">
+    /// When <see langword="true"/>, the channel is configured for a single writer thread (minor perf hint).
+    /// When <see langword="false"/>, multiple threads may concurrently call <see cref="PublishWorkItemAsync"/>.
+    /// Pass <see langword="true"/> for SWC (IntentController loop is the sole publisher);
+    /// pass <see langword="false"/> when multiple threads may publish concurrently.
+    /// </param>
     /// <param name="timeProvider">
     /// Time provider for debounce delays. When <see langword="null"/>,
     /// <see cref="TimeProvider.System"/> is used.
@@ -40,6 +46,7 @@ internal sealed class BoundedSupersessionWorkScheduler<TWorkItem>
         IWorkSchedulerDiagnostics diagnostics,
         AsyncActivityCounter activityCounter,
         int capacity,
+        bool singleWriter,
         TimeProvider? timeProvider = null
     ) : base(executor, debounceProvider, diagnostics, activityCounter, timeProvider)
     {
@@ -53,7 +60,7 @@ internal sealed class BoundedSupersessionWorkScheduler<TWorkItem>
             new BoundedChannelOptions(capacity)
             {
                 SingleReader = true,
-                SingleWriter = true,
+                SingleWriter = singleWriter,
                 AllowSynchronousContinuations = false,
                 FullMode = BoundedChannelFullMode.Wait
             });

@@ -43,7 +43,7 @@ The `AsyncActivityCounter` (in `Intervals.NET.Caching`) tracks in-flight backgro
 The `IWorkScheduler<TWorkItem>` abstraction (in `Intervals.NET.Caching`) serializes background execution requests, applies debounce delays, and handles cancellation and diagnostics. It is cache-agnostic: all cache-specific logic is injected via delegates.
 
 Two implementations are provided:
-- `UnboundedSerialWorkScheduler` — lock-free task chaining (default)
+- `UnboundedSerialWorkScheduler` — lock-guarded task chaining (default)
 - `BoundedSerialWorkScheduler` — bounded channel with backpressure (optional)
 
 ---

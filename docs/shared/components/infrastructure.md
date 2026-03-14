@@ -264,17 +264,20 @@ Uses the **Template Method pattern** to provide a sealed, invariant execution pi
 
 ### UnboundedSerialWorkScheduler\<TWorkItem\>
 
-**Serialization mechanism:** Lock-free task chaining. Each new work item is chained to await the previous execution's `Task` before starting its own.
+**Serialization mechanism:** Lock-guarded task chaining. Each new work item is chained to await the previous execution's `Task` before starting its own. A `_chainLock` makes the read-chain-write sequence atomic, ensuring serialization is preserved even under concurrent publishers (e.g. multiple VPC user threads calling `GetDataAsync` simultaneously).
 
 ```csharp
 // Conceptual model:
-var previousTask = Volatile.Read(ref _currentExecutionTask);
-var newTask = ChainExecutionAsync(previousTask, workItem);
-Volatile.Write(ref _currentExecutionTask, newTask);
+lock (_chainLock)
+{
+    previousTask = _currentExecutionTask;
+    newTask = ChainExecutionAsync(previousTask, workItem);
+    _currentExecutionTask = newTask;
+}
 // Returns ValueTask.CompletedTask immediately (fire-and-forget)
 ```
 
-The `Volatile.Write` is safe here because `PublishWorkItemAsync` is called from the single-writer intent processing loop only — no lock is needed.
+The lock is held only for the synchronous read-chain-write sequence (no awaits inside), so contention duration is negligible.
 
 **`ChainExecutionAsync` — ThreadPool guarantee via `Task.Yield()`:**
 
@@ -307,7 +310,7 @@ Without `Task.Yield()`, a synchronous executor (e.g. returning `Task.CompletedTa
 
 **When to use:** Standard APIs with typical request patterns; IoT sensor streams; background batch processing; any scenario where request bursts are temporary.
 
-**Disposal teardown (`DisposeSerialAsyncCore`):** reads the current task chain via `Volatile.Read` and awaits it.
+**Disposal teardown (`DisposeSerialAsyncCore`):** captures the current task chain under `_chainLock` and awaits it.
 
 ### SupersessionWorkSchedulerBase\<TWorkItem\>
 
@@ -327,7 +330,7 @@ The hooks are **sealed** here (not just overridden) to prevent the leaf classes 
 
 Extends `SupersessionWorkSchedulerBase`. Implements task-chaining serialization (same mechanism as `UnboundedSerialWorkScheduler`).
 
-**Serialization mechanism:** Lock-free task chaining — identical to `UnboundedSerialWorkScheduler`. Inherits the supersession protocol (`_lastWorkItem`, `LastWorkItem`, `OnBeforeEnqueue`, `OnBeforeSerialDispose`) from `SupersessionWorkSchedulerBase`.
+**Serialization mechanism:** Lock-guarded task chaining — identical to `UnboundedSerialWorkScheduler`. Inherits the supersession protocol (`_lastWorkItem`, `LastWorkItem`, `OnBeforeEnqueue`, `OnBeforeSerialDispose`) from `SupersessionWorkSchedulerBase`.
 
 **Consumer:** SlidingWindow's `IntentController` / `SlidingWindowCache` — latest rebalance intent supersedes all previous ones.
 
@@ -340,7 +343,7 @@ Extends `SupersessionWorkSchedulerBase`. Implements task-chaining serialization 
 _workChannel = Channel.CreateBounded<TWorkItem>(new BoundedChannelOptions(capacity)
 {
     SingleReader = true,
-    SingleWriter = true,
+    SingleWriter = singleWriter,  // false for VPC (concurrent user threads); true for single-writer callers
     FullMode = BoundedChannelFullMode.Wait  // backpressure
 });
 _executionLoopTask = ProcessWorkItemsAsync();
@@ -349,6 +352,8 @@ _executionLoopTask = ProcessWorkItemsAsync();
 await foreach (var item in _workChannel.Reader.ReadAllAsync())
     await ExecuteWorkItemCoreAsync(item);
 ```
+
+**`singleWriter` parameter:** Pass `false` when multiple threads may call `PublishWorkItemAsync` concurrently (e.g. VPC, where concurrent user requests each publish a normalization event). Pass `true` only when the calling context guarantees a single publishing thread. The channel's `SingleWriter` hint is an API contract with the `Channel<T>` implementation — violating it (passing `true` with multiple concurrent writers) is undefined behaviour and could break in future .NET versions.
 
 **Backpressure:** When the channel is at capacity, `PublishWorkItemAsync` awaits `WriteAsync` (using `loopCancellationToken` to unblock during disposal). This throttles the caller's processing loop; user requests continue to be served without blocking.
 

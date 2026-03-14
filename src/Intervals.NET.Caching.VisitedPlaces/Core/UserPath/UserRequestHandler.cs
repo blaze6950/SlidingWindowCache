@@ -217,9 +217,9 @@ internal sealed class UserRequestHandler<TRange, TData, TDomain>
 
     /// <summary>
     /// Lazily computes the gaps in <paramref name="requestedRange"/> not covered by
-    /// <paramref name="hittingSegments"/>.
+    /// <paramref name="hittingSegments"/>, filtered to only real (non-empty) gaps in the domain.
     /// </summary>
-    private static IEnumerable<Range<TRange>> ComputeGaps(
+    private IEnumerable<Range<TRange>> ComputeGaps(
         Range<TRange> requestedRange,
         IReadOnlyList<CachedSegment<TRange, TData>> hittingSegments)
     {
@@ -236,7 +236,19 @@ internal sealed class UserRequestHandler<TRange, TData, TDomain>
             remaining = Subtract(remaining, seg.Range);
         }
 
-        return remaining;
+        // Yield only gaps that contain at least one discrete domain point.
+        // Gaps with span == 0 are phantom artifacts of continuous range algebra (e.g., the open
+        // interval (9, 10) between adjacent integer segments [0,9] and [10,19]).
+        foreach (var gap in remaining)
+        {
+            var span = gap.Span(_domain);
+            if (span is { IsFinite: true, Value: > 0 })
+            {
+                yield return gap;
+            }
+        }
+
+        yield break;
 
         // Static: captures nothing — segRange is passed explicitly, eliminating the closure
         // allocation that a lambda capturing segRange in the loop above would incur.

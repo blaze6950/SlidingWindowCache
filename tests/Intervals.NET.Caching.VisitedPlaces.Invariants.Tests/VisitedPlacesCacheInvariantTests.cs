@@ -11,12 +11,14 @@ using Intervals.NET.Caching.VisitedPlaces.Tests.Infrastructure.Helpers;
 namespace Intervals.NET.Caching.VisitedPlaces.Invariants.Tests;
 
 /// <summary>
-/// Automated tests verifying behavioral invariants of <c>VisitedPlacesCache</c>.
+/// Automated tests verifying system invariants of <c>VisitedPlacesCache</c>.
 /// Each test is named after its invariant ID and description from
-/// <c>docs/visited-places/invariants.md</c>.
+/// <c>docs/visited-places/invariants.md</c> and <c>docs/shared/invariants.md</c>.
 /// 
-/// Only BEHAVIORAL invariants are tested here (observable via public API).
-/// ARCHITECTURAL and CONCEPTUAL invariants are enforced by code structure and are not tested.
+/// This suite tests any invariant whose guarantees are observable through the public API,
+/// regardless of its classification (Behavioral, Architectural, or Conceptual) in the
+/// invariants documentation. The classification describes the nature of the invariant;
+/// it does not restrict testability.
 /// </summary>
 public sealed class VisitedPlacesCacheInvariantTests : IAsyncDisposable
 {
@@ -127,10 +129,14 @@ public sealed class VisitedPlacesCacheInvariantTests : IAsyncDisposable
         var result = await cache.GetDataAsync(range, CancellationToken.None);
         sw.Stop();
 
-        // ASSERT — GetDataAsync should complete within reasonable time
-        // The data source takes 200ms; if user path waited for background, it would be >= 200ms.
-        // We assert it completes in under 750ms (well above the 200ms data-source delay,
-        // well below any scheduler-induced background-wait that would indicate blocking).
+        // ASSERT — GetDataAsync should complete within reasonable time.
+        // The data source takes 200ms and FetchAsync IS called on the User Path (VPC.A.8),
+        // so GetDataAsync legitimately includes the data source delay.
+        // What this test verifies is that GetDataAsync does NOT additionally wait for background
+        // normalization, storage, or eviction — it returns as soon as data is assembled and
+        // the CacheNormalizationRequest is enqueued.
+        // The 750ms threshold accommodates the ~200ms FetchAsync delay plus execution overhead,
+        // while catching any erroneous blocking on background processing.
         Assert.True(sw.ElapsedMilliseconds < 750,
             $"GetDataAsync took {sw.ElapsedMilliseconds}ms — User Path must not block on Background Path.");
 
@@ -291,6 +297,121 @@ public sealed class VisitedPlacesCacheInvariantTests : IAsyncDisposable
     }
 
     // ============================================================
+    // VPC.C.2 — Segments Never Merge
+    // ============================================================
+
+    /// <summary>
+    /// Invariant VPC.C.2 [Architectural]: Segments are never merged, even if two segments are
+    /// adjacent (consecutive in the domain with no gap between them).
+    /// Verifies that two adjacent ranges [0,9] and [10,19] remain as two distinct segments
+    /// after background processing — the cache does not coalesce them.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(StorageStrategyTestData))]
+    public async Task Invariant_VPC_C_2_AdjacentSegmentsNeverMerge(StorageStrategyOptions<int, int> strategy)
+    {
+        // ARRANGE
+        var cache = CreateCache(strategy);
+
+        // ACT — store two adjacent ranges: [0,9] and [10,19] (no gap, no overlap)
+        await cache.GetDataAndWaitForIdleAsync(TestHelpers.CreateRange(0, 9));
+        await cache.GetDataAndWaitForIdleAsync(TestHelpers.CreateRange(10, 19));
+
+        // ASSERT — exactly 2 segments stored (not merged into 1)
+        Assert.Equal(2, _diagnostics.BackgroundSegmentStored);
+
+        // Both original ranges are still individually a FullHit
+        var result1 = await cache.GetDataAsync(TestHelpers.CreateRange(0, 9), CancellationToken.None);
+        var result2 = await cache.GetDataAsync(TestHelpers.CreateRange(10, 19), CancellationToken.None);
+        Assert.Equal(CacheInteraction.FullHit, result1.CacheInteraction);
+        Assert.Equal(CacheInteraction.FullHit, result2.CacheInteraction);
+        TestHelpers.AssertUserDataCorrect(result1.Data, TestHelpers.CreateRange(0, 9));
+        TestHelpers.AssertUserDataCorrect(result2.Data, TestHelpers.CreateRange(10, 19));
+
+        // The combined range [0,19] is also a FullHit (assembled from 2 segments, VPC.C.4)
+        var combinedResult = await cache.GetDataAsync(TestHelpers.CreateRange(0, 19), CancellationToken.None);
+        Assert.Equal(CacheInteraction.FullHit, combinedResult.CacheInteraction);
+        TestHelpers.AssertUserDataCorrect(combinedResult.Data, TestHelpers.CreateRange(0, 19));
+
+        await cache.WaitForIdleAsync();
+    }
+
+    // ============================================================
+    // VPC.C.3 — Segment Non-Overlap
+    // ============================================================
+
+    /// <summary>
+    /// Invariant VPC.C.3 [Architectural]: No two segments may share any discrete domain point.
+    /// When a partial-hit request overlaps an existing segment, only the gap (uncovered sub-range)
+    /// is fetched and stored — the existing segment is not duplicated or extended.
+    /// Verifies via SpyDataSource that only the gap range is fetched from the data source.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(StorageStrategyTestData))]
+    public async Task Invariant_VPC_C_3_OverlappingRequestFetchesOnlyGap(StorageStrategyOptions<int, int> strategy)
+    {
+        // ARRANGE
+        var spy = new SpyDataSource();
+        var cache = TrackCache(TestHelpers.CreateCache(
+            spy, _domain, TestHelpers.CreateDefaultOptions(strategy), _diagnostics));
+
+        // ACT — cache [0,9], then request [5,14] (overlaps [5,9], gap is [10,14])
+        await cache.GetDataAndWaitForIdleAsync(TestHelpers.CreateRange(0, 9));
+        spy.Reset();
+        await cache.GetDataAndWaitForIdleAsync(TestHelpers.CreateRange(5, 14));
+
+        // ASSERT — only the gap [10,14] was fetched (not [5,14] or [0,14])
+        Assert.Equal(1, spy.TotalFetchCount);
+        var fetchedRanges = spy.GetAllRequestedRanges().ToList();
+        Assert.Single(fetchedRanges);
+        Assert.True(spy.WasRangeCovered(10, 14),
+            "Only the gap [10,14] should have been fetched, not the overlapping portion.");
+
+        // The original segment [0,9] and the new gap segment [10,14] are both stored
+        Assert.Equal(2, _diagnostics.BackgroundSegmentStored);
+
+        // Data correctness across both segments
+        TestHelpers.AssertUserDataCorrect(
+            (await cache.GetDataAsync(TestHelpers.CreateRange(0, 14), CancellationToken.None)).Data,
+            TestHelpers.CreateRange(0, 14));
+
+        await cache.WaitForIdleAsync();
+    }
+
+    // ============================================================
+    // VPC.C.4 — Multi-Segment Assembly for FullHit
+    // ============================================================
+
+    /// <summary>
+    /// Invariant VPC.C.4 [Architectural]: The User Path assembles data from all contributing
+    /// segments when their union covers RequestedRange. If the union of two or more segments
+    /// spans RequestedRange with no gaps, CacheInteraction == FullHit.
+    /// Verifies that a request spanning two non-adjacent cached segments (with a filled gap)
+    /// returns a FullHit with correctly assembled data.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(StorageStrategyTestData))]
+    public async Task Invariant_VPC_C_4_MultiSegmentAssemblyProducesFullHit(StorageStrategyOptions<int, int> strategy)
+    {
+        // ARRANGE
+        var cache = CreateCache(strategy);
+
+        // Cache three separate segments: [0,9], [10,19], [20,29]
+        await cache.GetDataAndWaitForIdleAsync(TestHelpers.CreateRange(0, 9));
+        await cache.GetDataAndWaitForIdleAsync(TestHelpers.CreateRange(10, 19));
+        await cache.GetDataAndWaitForIdleAsync(TestHelpers.CreateRange(20, 29));
+
+        // ACT — request [0,29]: spans all three segments with no gaps
+        var result = await cache.GetDataAsync(TestHelpers.CreateRange(0, 29), CancellationToken.None);
+
+        // ASSERT — FullHit (assembled from 3 segments) with correct data
+        Assert.Equal(CacheInteraction.FullHit, result.CacheInteraction);
+        TestHelpers.AssertUserDataCorrect(result.Data, TestHelpers.CreateRange(0, 29));
+
+        await cache.WaitForIdleAsync();
+    }
+
+    // ============================================================
     // VPC.E.3 — Just-Stored Segment Immunity
     // ============================================================
 
@@ -323,30 +444,51 @@ public sealed class VisitedPlacesCacheInvariantTests : IAsyncDisposable
         await cache.WaitForIdleAsync();
     }
 
+    // ============================================================
+    // VPC.D.1 — Concurrent Access Safety
+    // ============================================================
+
     /// <summary>
-    /// Invariant VPC.E.3a [Behavioral]: If the just-stored segment is the ONLY segment in
-    /// CachedSegments when eviction is triggered, the Eviction Executor is a no-op for that event.
-    /// The cache will remain over-limit (count=1 > maxCount=0 is impossible; count=1, maxCount=1
-    /// is at-limit). We test with 1-slot capacity: on the FIRST store, there is only one segment
-    /// (the just-stored, immune one), so nothing is evicted.
+    /// Invariant VPC.D.1 [Architectural]: Multiple concurrent user threads may simultaneously
+    /// read from CachedSegments without corruption. The single-writer model ensures no
+    /// write-write or read-write races on cache state.
+    /// Verifies that rapid concurrent GetDataAsync calls for overlapping ranges produce
+    /// correct data with no exceptions or background failures.
     /// </summary>
-    [Fact]
-    public async Task Invariant_VPC_E_3a_OnlySegmentIsImmuneEvenWhenOverLimit()
+    [Theory]
+    [MemberData(nameof(StorageStrategyTestData))]
+    public async Task Invariant_VPC_D_1_ConcurrentAccessDoesNotCorruptState(StorageStrategyOptions<int, int> strategy)
     {
-        // ARRANGE — exactly 1 slot; after the first store, eviction fires but the only segment is immune
-        var cache = CreateCache(maxSegmentCount: 1);
+        // ARRANGE
+        var cache = CreateCache(strategy);
 
-        // ACT — first request: stores one segment; evaluator fires (count=1 == maxCount=1, not >1, so no eviction)
-        // Actually maxSegmentCount=1 means ShouldEvict fires when count > 1, so the first store doesn't trigger eviction.
-        // Let's use maxSegmentCount=0 which is invalid. Use 1 and verify count stays 1.
-        await cache.GetDataAndWaitForIdleAsync(TestHelpers.CreateRange(0, 9));
+        // ACT — fire 20 concurrent requests with overlapping ranges
+        var tasks = new List<Task<RangeResult<int, int>>>();
+        for (var i = 0; i < 20; i++)
+        {
+            var start = (i % 5) * 10; // ranges: [0,9], [10,19], [20,29], [30,39], [40,49] (cycling)
+            tasks.Add(cache.GetDataAsync(
+                TestHelpers.CreateRange(start, start + 9),
+                CancellationToken.None).AsTask());
+        }
 
-        // ASSERT — segment is stored and no eviction triggered (count=1, limit=1, not exceeded)
-        Assert.Equal(0, _diagnostics.EvictionTriggered);
-        var result = await cache.GetDataAsync(TestHelpers.CreateRange(0, 9), CancellationToken.None);
-        Assert.Equal(CacheInteraction.FullHit, result.CacheInteraction);
+        var results = await Task.WhenAll(tasks);
 
+        // ASSERT — every request returned valid data with no corruption
+        for (var i = 0; i < results.Length; i++)
+        {
+            var start = (i % 5) * 10;
+            var range = TestHelpers.CreateRange(start, start + 9);
+            Assert.Equal(10, results[i].Data.Length);
+            TestHelpers.AssertUserDataCorrect(results[i].Data, range);
+        }
+
+        // Wait for all background processing to settle
         await cache.WaitForIdleAsync();
+
+        // ASSERT — no background failures occurred
+        TestHelpers.AssertNoBackgroundFailures(_diagnostics);
+        TestHelpers.AssertBackgroundLifecycleIntegrity(_diagnostics);
     }
 
     // ============================================================
@@ -376,6 +518,40 @@ public sealed class VisitedPlacesCacheInvariantTests : IAsyncDisposable
         var hitResult = await cache.GetDataAsync(TestHelpers.CreateRange(0, 9), CancellationToken.None);
         Assert.Equal(CacheInteraction.FullHit, hitResult.CacheInteraction);
         Assert.Equal(0, spy.TotalFetchCount);
+
+        await cache.WaitForIdleAsync();
+    }
+
+    /// <summary>
+    /// Invariant VPC.F.1 [Architectural] — enhanced: On a partial hit, the data source is called
+    /// only for the gap sub-ranges, not for the entire RequestedRange.
+    /// Caches [0,9] and [20,29], then requests [0,29]. The only gap is [10,19] — the data source
+    /// must be called exactly once for that gap, not for [0,29].
+    /// </summary>
+    [Fact]
+    public async Task Invariant_VPC_F_1_PartialHitFetchesOnlyGapRanges()
+    {
+        // ARRANGE
+        var spy = new SpyDataSource();
+        var cache = TrackCache(TestHelpers.CreateCache(
+            spy, _domain, TestHelpers.CreateDefaultOptions(), _diagnostics));
+
+        // Warm up: cache [0,9] and [20,29] with a gap at [10,19]
+        await cache.GetDataAndWaitForIdleAsync(TestHelpers.CreateRange(0, 9));
+        await cache.GetDataAndWaitForIdleAsync(TestHelpers.CreateRange(20, 29));
+        spy.Reset();
+
+        // ACT — request [0,29]: partial hit — [0,9] and [20,29] are cached, [10,19] is the gap
+        var result = await cache.GetDataAsync(TestHelpers.CreateRange(0, 29), CancellationToken.None);
+
+        // ASSERT — partial hit with correct data
+        Assert.Equal(CacheInteraction.PartialHit, result.CacheInteraction);
+        TestHelpers.AssertUserDataCorrect(result.Data, TestHelpers.CreateRange(0, 29));
+
+        // ASSERT — only the gap [10,19] was fetched from the data source
+        Assert.Equal(1, spy.TotalFetchCount);
+        Assert.True(spy.WasRangeCovered(10, 19),
+            "Data source should have been called only for gap [10,19].");
 
         await cache.WaitForIdleAsync();
     }

@@ -15,7 +15,10 @@ namespace Intervals.NET.Caching.Infrastructure.Scheduling.Serial;
 internal sealed class UnboundedSerialWorkScheduler<TWorkItem> : SerialWorkSchedulerBase<TWorkItem>
     where TWorkItem : class, ISchedulableWorkItem
 {
-    // Task chaining state (volatile write for single-writer pattern)
+    // Task chaining state — protected by _chainLock for multi-writer safety.
+    // The lock is held only for the duration of the read-chain-write sequence (no awaits),
+    // so contention is negligible even under concurrent publishers.
+    private readonly object _chainLock = new();
     private Task _currentExecutionTask = Task.CompletedTask;
 
     /// <summary>
@@ -42,6 +45,8 @@ internal sealed class UnboundedSerialWorkScheduler<TWorkItem> : SerialWorkSchedu
     /// <summary>
     /// Enqueues the work item by chaining it to the previous execution task.
     /// Returns immediately (fire-and-forget).
+    /// Uses a lock to make the read-chain-write sequence atomic, ensuring serialization
+    /// is preserved even under concurrent publishers.
     /// </summary>
     /// <param name="workItem">The work item to schedule.</param>
     /// <param name="loopCancellationToken">
@@ -50,10 +55,17 @@ internal sealed class UnboundedSerialWorkScheduler<TWorkItem> : SerialWorkSchedu
     /// <returns><see cref="ValueTask.CompletedTask"/> — always completes synchronously.</returns>
     private protected override ValueTask EnqueueWorkItemAsync(TWorkItem workItem, CancellationToken loopCancellationToken)
     {
-        // Chain execution to previous task (lock-free using volatile write — single-writer context)
-        var previousTask = Volatile.Read(ref _currentExecutionTask);
-        var newTask = ChainExecutionAsync(previousTask, workItem);
-        Volatile.Write(ref _currentExecutionTask, newTask);
+        // Atomically read the previous task, chain to it, and write the new task.
+        // The lock guards the non-atomic read-chain-write sequence: without it, two concurrent
+        // publishers can both capture the same previousTask, both chain to it, and the second
+        // Volatile.Write overwrites the first — causing both chained tasks to run concurrently
+        // (breaking serialization) and orphaning the overwritten chain from disposal.
+        // The lock is never held across an await, so contention duration is minimal.
+
+        lock (_chainLock)
+        {
+            _currentExecutionTask = ChainExecutionAsync(_currentExecutionTask, workItem);
+        }
 
         // Return immediately — fire-and-forget execution model
         return ValueTask.CompletedTask;
@@ -102,8 +114,14 @@ internal sealed class UnboundedSerialWorkScheduler<TWorkItem> : SerialWorkSchedu
     /// <inheritdoc/>
     private protected override async ValueTask DisposeSerialAsyncCore()
     {
-        // Capture current task chain reference (volatile read — no lock needed)
-        var currentTask = Volatile.Read(ref _currentExecutionTask);
+        // Capture current task chain reference under the lock so we get the latest chain,
+        // not a stale reference that might be overwritten by a concurrent publisher
+        // racing with disposal.
+        Task currentTask;
+        lock (_chainLock)
+        {
+            currentTask = _currentExecutionTask;
+        }
 
         // Wait for task chain to complete gracefully
         await currentTask.ConfigureAwait(false);

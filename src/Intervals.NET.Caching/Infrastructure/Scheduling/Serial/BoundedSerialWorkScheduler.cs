@@ -28,6 +28,12 @@ internal sealed class BoundedSerialWorkScheduler<TWorkItem> : SerialWorkSchedule
     /// <param name="diagnostics">Diagnostics for work lifecycle events.</param>
     /// <param name="activityCounter">Activity counter for tracking active operations.</param>
     /// <param name="capacity">The bounded channel capacity for backpressure control. Must be >= 1.</param>
+    /// <param name="singleWriter">
+    /// When <see langword="true"/>, the channel is configured for a single writer thread (minor perf hint).
+    /// When <see langword="false"/>, multiple threads may concurrently call <see cref="PublishWorkItemAsync"/>.
+    /// Pass <see langword="false"/> for VPC (concurrent user-thread publishers);
+    /// pass <see langword="true"/> only when the caller guarantees a single publishing thread.
+    /// </param>
     /// <param name="timeProvider">
     /// Time provider for debounce delays. When <see langword="null"/>,
     /// <see cref="TimeProvider.System"/> is used.
@@ -39,6 +45,7 @@ internal sealed class BoundedSerialWorkScheduler<TWorkItem> : SerialWorkSchedule
         IWorkSchedulerDiagnostics diagnostics,
         AsyncActivityCounter activityCounter,
         int capacity,
+        bool singleWriter,
         TimeProvider? timeProvider = null
     ) : base(executor, debounceProvider, diagnostics, activityCounter, timeProvider)
     {
@@ -48,14 +55,15 @@ internal sealed class BoundedSerialWorkScheduler<TWorkItem> : SerialWorkSchedule
                 "Capacity must be greater than or equal to 1.");
         }
 
-        // Initialize bounded channel with single reader/writer semantics.
-        // Bounded capacity enables backpressure on the caller's processing loop.
-        // SingleReader: only execution loop reads; SingleWriter: only caller's loop writes.
+        // Initialize bounded channel with single reader; writer concurrency controlled by singleWriter.
+        // SingleReader: only execution loop reads.
+        // SingleWriter: set by caller — true only when a single thread publishes work items;
+        //               false when multiple threads (e.g. concurrent user requests in VPC) publish concurrently.
         _workChannel = Channel.CreateBounded<TWorkItem>(
             new BoundedChannelOptions(capacity)
             {
                 SingleReader = true,
-                SingleWriter = true,
+                SingleWriter = singleWriter,
                 AllowSynchronousContinuations = false,
                 FullMode = BoundedChannelFullMode.Wait // Block on WriteAsync when full (backpressure)
             });

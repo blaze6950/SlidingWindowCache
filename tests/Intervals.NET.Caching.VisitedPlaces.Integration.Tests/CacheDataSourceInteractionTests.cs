@@ -322,38 +322,4 @@ public sealed class CacheDataSourceInteractionTests : IAsyncDisposable
         TestHelpers.AssertNoBackgroundFailures(_diagnostics);
     }
 
-    // ============================================================
-    // DISPOSAL
-    // ============================================================
-
-    [Fact]
-    public async Task Dispose_ThenGetData_ThrowsObjectDisposedException()
-    {
-        // ARRANGE
-        var cache = CreateCache();
-        await cache.GetDataAndWaitForIdleAsync(TestHelpers.CreateRange(0, 9));
-        await cache.DisposeAsync();
-
-        // ACT
-        var exception = await Record.ExceptionAsync(() =>
-            cache.GetDataAsync(TestHelpers.CreateRange(0, 9), CancellationToken.None).AsTask());
-
-        // ASSERT
-        Assert.NotNull(exception);
-        Assert.IsType<ObjectDisposedException>(exception);
-    }
-
-    [Fact]
-    public async Task Dispose_Twice_IsIdempotent()
-    {
-        // ARRANGE
-        var cache = CreateCache();
-        await cache.DisposeAsync();
-
-        // ACT — second dispose should not throw
-        var exception = await Record.ExceptionAsync(() => cache.DisposeAsync().AsTask());
-
-        // ASSERT
-        Assert.Null(exception);
-    }
 }

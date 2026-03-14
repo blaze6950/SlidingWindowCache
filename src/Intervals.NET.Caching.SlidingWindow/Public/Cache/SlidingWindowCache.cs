@@ -165,7 +165,8 @@ public sealed class SlidingWindowCache<TRange, TData, TDomain>
             debounceProvider,
             schedulerDiagnostics,
             activityCounter,
-            rebalanceQueueCapacity.Value
+            rebalanceQueueCapacity.Value,
+            singleWriter: true // SWC: IntentController loop is the sole publisher
         );
     }
 

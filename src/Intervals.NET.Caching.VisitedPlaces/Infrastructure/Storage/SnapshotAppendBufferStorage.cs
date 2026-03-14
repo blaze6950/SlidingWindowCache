@@ -13,13 +13,21 @@ internal sealed class SnapshotAppendBufferStorage<TRange, TData> : SegmentStorag
 {
     private readonly int _appendBufferSize;
 
-    // Sorted snapshot — published atomically via Volatile.Write on normalization.
-    // User Path reads via Volatile.Read.
+    // Guards the atomic read/write pair of (_snapshot, _appendCount) during normalization.
+    // Held only during Normalize() writes and at the start of FindIntersecting() to capture
+    // a consistent snapshot of both fields. NOT held during the actual search work.
+    private readonly object _normalizeLock = new();
+
+    // Sorted snapshot — mutated only inside _normalizeLock during normalization.
+    // User Path reads the reference inside _normalizeLock (captures a local copy, then searches lock-free).
     private CachedSegment<TRange, TData>[] _snapshot = [];
 
     // Small fixed-size append buffer for recently-added segments (Background Path only).
     // Size is determined by the appendBufferSize constructor parameter.
     private readonly CachedSegment<TRange, TData>[] _appendBuffer;
+
+    // Written by Add() via Volatile.Write (non-normalizing path) and inside _normalizeLock (Normalize).
+    // Read by FindIntersecting() inside _normalizeLock to form a consistent pair with _snapshot.
     private int _appendCount;
 
     /// <summary>
@@ -42,7 +50,16 @@ internal sealed class SnapshotAppendBufferStorage<TRange, TData> : SegmentStorag
     /// <inheritdoc/>
     public override IReadOnlyList<CachedSegment<TRange, TData>> FindIntersecting(Range<TRange> range)
     {
-        var snapshot = Volatile.Read(ref _snapshot);
+        // Capture (_snapshot, _appendCount) as a consistent pair under the normalize lock.
+        // The lock body is two field reads — held for nanoseconds, never contended during
+        // normal operation (Normalize fires only every appendBufferSize additions).
+        CachedSegment<TRange, TData>[] snapshot;
+        int appendCount;
+        lock (_normalizeLock)
+        {
+            snapshot = _snapshot;
+            appendCount = _appendCount;
+        }
 
         // Lazy-init: only allocate the results list on the first actual match.
         // Full-Miss path (no intersecting segments) returns the static empty array — zero allocation.
@@ -79,8 +96,7 @@ internal sealed class SnapshotAppendBufferStorage<TRange, TData> : SegmentStorag
             }
         }
 
-        // Scan append buffer (unsorted, small)
-        var appendCount = Volatile.Read(ref _appendCount); // Acquire fence: ensures visibility of append buffer entries written before this count was published
+        // Scan append buffer (unsorted, small) up to the count captured above.
         for (var i = 0; i < appendCount; i++)
         {
             var seg = _appendBuffer[i];
@@ -97,7 +113,7 @@ internal sealed class SnapshotAppendBufferStorage<TRange, TData> : SegmentStorag
     public override void Add(CachedSegment<TRange, TData> segment)
     {
         _appendBuffer[_appendCount] = segment;
-        Volatile.Write(ref _appendCount, _appendCount + 1); // Release fence: ensures buffer entry is visible before count increment
+        Volatile.Write(ref _appendCount, _appendCount + 1); // Release fence: makes buffer entry visible to readers before count increment is observed
         IncrementCount();
 
         if (_appendCount == _appendBufferSize)
@@ -176,18 +192,19 @@ internal sealed class SnapshotAppendBufferStorage<TRange, TData> : SegmentStorag
         // Merge two sorted sequences directly into the output array — one allocation.
         var merged = MergeSorted(snapshot, liveSnapshotCount, _appendBuffer, _appendCount, liveAppendCount);
 
-        // Atomically publish the new snapshot FIRST (release fence — User Path reads with acquire fence)
-        // Must happen before resetting _appendCount so User Path never sees count==0 with the old snapshot.
-        // NOTE: There is a brief window between publishing the snapshot and resetting _appendCount
-        // where a concurrent User Path could read the new snapshot but also count the same newly-appended
-        // segments via the append buffer (i.e. see them twice). This is an accepted design tradeoff:
-        // over-counting is harmless (TryGetRandomSegment skips IsRemoved segments), and the window
-        // closes as soon as _appendCount is reset below.
-        Volatile.Write(ref _snapshot, merged);
+        // Atomically publish the new snapshot and reset _appendCount under the normalize lock.
+        // FindIntersecting captures both fields under the same lock, so it is guaranteed to see
+        // either (old snapshot, old count) or (new snapshot, 0) — never the mixed state that
+        // previously caused duplicate segment references to appear in query results.
+        lock (_normalizeLock)
+        {
+            _snapshot = merged;
+            _appendCount = 0;
+        }
 
-        // Reset append buffer — after snapshot publication
-        Volatile.Write(ref _appendCount, 0);
-        // Clear stale references in append buffer
+        // Clear stale references in append buffer — safe outside the lock because:
+        // (a) _appendCount is now 0, so FindIntersecting will not scan any buffer slots;
+        // (b) Add() is called only from the Background Path (single writer), which is this thread.
         Array.Clear(_appendBuffer, 0, _appendBufferSize);
     }
 

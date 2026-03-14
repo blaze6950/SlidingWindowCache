@@ -178,6 +178,12 @@ Assert.Equal(expectedCount, cache.SegmentCount);
 
 **VPC.B.6** [Architectural] The Background Path **does not serve user requests directly**; it only maintains the segment collection and statistics for future User Path reads.
 
+**VPC.B.7** [Architectural] `CachedSegment.EvictionMetadata` is **mutable only by the Background Path**.
+
+- `EvictionMetadata` is written by `selector.InitializeMetadata` (on storage) and `selector.UpdateMetadata` (on each event cycle) — both called exclusively from the Background Storage Loop
+- The User Path reads `EvictionMetadata` only indirectly (via the segment's data); it never writes or updates it
+- `EnsureMetadata` in `SamplingEvictionSelector` may also initialize metadata on first access by the eviction loop — still within the Background Path
+
 ---
 
 ## VPC.C. Segment Storage & Non-Contiguity Invariants
@@ -227,6 +233,14 @@ Assert.Equal(expectedCount, cache.SegmentCount);
 - The TTL actor awaits the expiration delay fire-and-forget on the thread pool and then removes the segment directly via `ISegmentStorage`.
 - When `SegmentTtl` is null (default), no TTL work items are scheduled and segments are only evicted by the configured eviction policies.
 
+**VPC.C.7** [Architectural] **`SnapshotAppendBufferStorage` normalizes atomically**: the transition from (old snapshot, non-zero append count) to (new merged snapshot, zero append count) is performed under a lock shared with `FindIntersecting`.
+
+- `FindIntersecting` captures `(_snapshot, _appendCount)` as a consistent pair under `_normalizeLock` before searching. The search itself runs lock-free against the locally-captured values.
+- `Normalize()` publishes the merged snapshot and resets `_appendCount` to zero inside `_normalizeLock`, so readers always see either (old snapshot, old count) or (new snapshot, 0) — never the mixed state.
+- Without this guarantee, `FindIntersecting` could return the same segment reference twice (once from the new snapshot, once from the stale append buffer count), causing `Assemble` to double the data for that segment — silent data corruption.
+- The lock is held for nanoseconds (two field reads on the reader side, two field writes on the writer side). `Normalize` fires at most once per `appendBufferSize` additions, so contention is negligible.
+- `LinkedListStrideIndexStorage` is not affected — it inserts segments directly into the linked list with no dual-source scan.
+
 ---
 
 ## VPC.D. Concurrency Invariants
@@ -255,6 +269,12 @@ Assert.Equal(expectedCount, cache.SegmentCount);
 
 - Under parallel callers, `WaitForIdleAsync`'s "was idle at some point" semantics (Invariant S.H.3) may return after the old TCS completes but before the event from a concurrent request has been processed
 - The method remains safe (no crashes, no hangs) under parallel access, but the guarantee degrades
+
+**VPC.D.6** [Architectural] **Thread-safe eviction policy lifecycle**: `IEvictionPolicy` instances are constructed once at cache initialization and accessed only from the Background Storage Loop.
+
+- No locking or thread-safety is required for policy state
+- Pressure objects (`IEvictionPressure`) are stack-local: created fresh per evaluation cycle by `IEvictionPolicy.Evaluate`, used within a single `EvaluateAndExecute` call, and then discarded
+- The `EvictionEngine` and its subordinates (`EvictionPolicyEvaluator`, `EvictionExecutor`, `IEvictionSelector`) are all single-threaded by design — they inherit the Background Storage Loop's single-writer guarantee (VPC.D.3)
 
 ---
 
@@ -410,8 +430,8 @@ VPC invariant groups:
 |--------|-------------------------------------------|-------|
 | VPC.A  | User Path & Fast User Access              | 12    |
 | VPC.B  | Background Path & Event Processing        | 8     |
-| VPC.C  | Segment Storage & Non-Contiguity          | 6     |
-| VPC.D  | Concurrency                               | 5     |
+| VPC.C  | Segment Storage & Non-Contiguity          | 7     |
+| VPC.D  | Concurrency                               | 6     |
 | VPC.E  | Eviction                                  | 14    |
 | VPC.F  | Data Source & I/O                         | 4     |
 | VPC.T  | TTL (Time-To-Live)                        | 4     |

@@ -100,7 +100,8 @@ public sealed class VisitedPlacesCache<TRange, TData, TDomain>
                     debounceProvider: static () => TimeSpan.Zero,
                     diagnostics: schedulerDiagnostics,
                     activityCounter: _activityCounter,
-                    capacity: capacity)
+                    capacity: capacity,
+                    singleWriter: false) // VPC: multiple user threads may publish concurrently
                 : new UnboundedSerialWorkScheduler<CacheNormalizationRequest<TRange, TData>>(
                     executor: (evt, ct) => executor.ExecuteAsync(evt, ct),
                     debounceProvider: static () => TimeSpan.Zero,
