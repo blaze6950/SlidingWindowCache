@@ -1,450 +1,147 @@
 # Agent Guidelines for Intervals.NET.Caching
 
-This document provides essential information for AI coding agents working on the Intervals.NET.Caching codebase.
+C# .NET 8.0 library implementing read-only, range-based caches with decision-driven background maintenance. Three packages:
 
-## Project Overview
+- **`Intervals.NET.Caching`** — shared foundation: interfaces, DTOs, layered cache infrastructure, concurrency primitives (non-packable)
+- **`Intervals.NET.Caching.SlidingWindow`** — sliding window cache (sequential-access optimized, single contiguous window, prefetch)
+- **`Intervals.NET.Caching.VisitedPlaces`** — visited places cache (random-access optimized, non-contiguous segments, eviction, TTL)
 
-**Intervals.NET.Caching** is a C# .NET 8.0 library implementing read-only, range-based caches with decision-driven background maintenance. It is organized into multiple packages:
+## Build & Test Commands
 
-- **`Intervals.NET.Caching`** — shared foundation: interfaces, DTOs, layered cache infrastructure, concurrency primitives
-- **`Intervals.NET.Caching.SlidingWindow`** — sliding window cache implementation (sequential-access optimized)
-- **`Intervals.NET.Caching.VisitedPlaces`** — visited places cache implementation (random-access optimized, with eviction and TTL)
+Prerequisites: .NET SDK 8.0 (see `global.json`).
 
-This is a production-ready concurrent systems project with extensive architectural documentation.
-
-**Key Architecture Principles:**
-- Single-Writer Architecture: Only rebalance execution mutates cache state
-- Decision-Driven Execution: Multi-stage validation prevents thrashing
-- Smart Eventual Consistency: Converges to optimal state while avoiding unnecessary work
-- Fully Lock-Free Concurrency: Volatile/Interlocked operations, including fully lock-free AsyncActivityCounter
-- User Path Priority: User requests never block on rebalance operations
-
-## Build Commands
-
-### Prerequisites
-- .NET SDK 8.0 (specified in `global.json`)
-
-### Common Build Commands
 ```bash
-# Restore dependencies
-dotnet restore Intervals.NET.Caching.sln
-
-# Build solution (Debug)
 dotnet build Intervals.NET.Caching.sln
-
-# Build solution (Release)
 dotnet build Intervals.NET.Caching.sln --configuration Release
 
-# Build specific project
-dotnet build src/Intervals.NET.Caching.SlidingWindow/Intervals.NET.Caching.SlidingWindow.csproj --configuration Release
-
-# Pack for NuGet
-dotnet pack src/Intervals.NET.Caching.SlidingWindow/Intervals.NET.Caching.SlidingWindow.csproj --configuration Release --output ./artifacts
-```
-
-## Test Commands
-
-### Test Framework: xUnit 2.5.3
-
-```bash
-# Run all tests
+# All tests
 dotnet test Intervals.NET.Caching.sln --configuration Release
 
-# Run specific test project
+# SlidingWindow tests
 dotnet test tests/Intervals.NET.Caching.SlidingWindow.Unit.Tests/Intervals.NET.Caching.SlidingWindow.Unit.Tests.csproj
 dotnet test tests/Intervals.NET.Caching.SlidingWindow.Integration.Tests/Intervals.NET.Caching.SlidingWindow.Integration.Tests.csproj
 dotnet test tests/Intervals.NET.Caching.SlidingWindow.Invariants.Tests/Intervals.NET.Caching.SlidingWindow.Invariants.Tests.csproj
 
-# Run single test by fully qualified name
-dotnet test --filter "FullyQualifiedName=Intervals.NET.Caching.SlidingWindow.Unit.Tests.Public.Configuration.SlidingWindowCacheOptionsTests.Constructor_WithValidParameters_InitializesAllProperties"
-
-# Run tests matching pattern
-dotnet test --filter "FullyQualifiedName~Constructor"
-
-# Run with code coverage
-dotnet test --collect:"XPlat Code Coverage" --results-directory ./TestResults
-```
-
-**Test Projects:**
-- **Unit Tests**: Individual component testing with Moq 4.20.70
-- **Integration Tests**: Component interaction, concurrency, data source interaction
-- **Invariants Tests**: Automated tests validating architectural contracts via public API
-
-## Linting & Formatting
-
-**No explicit linting tools configured.** The codebase relies on:
-- Visual Studio/Rider defaults
-- Nullable reference types enabled (`<Nullable>enable</Nullable>`)
-- Implicit usings enabled (`<ImplicitUsings>enable</ImplicitUsings>`)
-- C# 12 language features
-
-## Code Style Guidelines
-
-### Braces
-
-**Always use braces** for all control flow statements (`if`, `else`, `for`, `foreach`, `while`, `do`, `using`, etc.), even for single-line bodies:
-
-```csharp
-// Correct
-if (condition)
-{
-    DoSomething();
-}
-
-// Incorrect
-if (condition)
-    DoSomething();
-
-// Incorrect
-if (condition) DoSomething();
-```
-
-### Namespace Organization
-```csharp
-// Use file-scoped namespace declarations (C# 10+)
-namespace Intervals.NET.Caching.SlidingWindow.Public;
-namespace Intervals.NET.Caching.SlidingWindow.Core.UserPath;
-namespace Intervals.NET.Caching.SlidingWindow.Infrastructure.Storage;
-```
-
-**Namespace Structure (SlidingWindow):**
-- `Intervals.NET.Caching.SlidingWindow.Public` - Public API surface
-- `Intervals.NET.Caching.SlidingWindow.Core` - Business logic (internal)
-- `Intervals.NET.Caching.SlidingWindow.Infrastructure` - Infrastructure concerns (internal)
-
-**Namespace Structure (Shared Foundation — `Intervals.NET.Caching`):**
-- `Intervals.NET.Caching` - Shared interfaces and DTOs (`IRangeCache`, `IDataSource`, `RangeResult`, etc.)
-
-### Naming Conventions
-
-**Classes:**
-- PascalCase with descriptive role/responsibility suffix
-- Internal classes marked `internal sealed`
-- Examples: `SlidingWindowCache`, `UserRequestHandler`, `RebalanceDecisionEngine`
-
-**Interfaces:**
-- IPascalCase prefix
-- Examples: `IDataSource`, `ICacheDiagnostics`, `ISlidingWindowCache`
-
-**Generic Type Parameters:**
-- `TRange` - Range boundary type
-- `TData` - Cached data type
-- `TDomain` - Range domain type
-- Use consistent generic names across entire codebase
-
-**Fields:**
-- Private readonly: `_fieldName` (underscore prefix)
-- Examples: `_userRequestHandler`, `_cacheExtensionService`, `_state`
-
-**Properties:**
-- PascalCase: `LeftCacheSize`, `CurrentCacheRange`, `NoRebalanceRange`
-- Use `init`/`set` appropriately for immutability
-
-**Methods:**
-- PascalCase with clear verb-noun structure
-- Async methods ALWAYS end with `Async`
-- Examples: `GetDataAsync`, `HandleRequestAsync`, `PublishIntent`
-
-### Import Patterns
-
-**Implicit Usings Enabled** - No need for `System.*` imports.
-
-**Import Order:**
-1. External libraries (e.g., `Intervals.NET`)
-2. Project namespaces (e.g., `Intervals.NET.Caching.*`)
-3. Alphabetically sorted within each group
-
-**Example:**
-```csharp
-using Intervals.NET;
-using Intervals.NET.Domain.Abstractions;
-using Intervals.NET.Caching.SlidingWindow.Core.Planning;
-using Intervals.NET.Caching.SlidingWindow.Core.State;
-using Intervals.NET.Caching.SlidingWindow.Public.Instrumentation;
-```
-
-### XML Documentation
-
-**Required for all public APIs:**
-```csharp
-/// <summary>
-/// Brief description of the component/method.
-/// </summary>
-/// <typeparam name="TRange">Description of type parameter.</typeparam>
-/// <param name="parameter">Description of parameter.</param>
-/// <returns>Description of return value.</returns>
-/// <remarks>
-/// <para><strong>Architectural Context:</strong></para>
-/// <para>Detailed remarks with bullet points...</para>
-/// <list type="bullet">
-/// <item><description>First point</description></item>
-/// </list>
-/// </remarks>
-```
-
-**Internal components should have detailed architectural remarks:**
-- References to invariants (see `docs/sliding-window/invariants.md`)
-- Cross-references to related components
-- Explicit responsibilities and non-responsibilities
-- Execution context (User Thread vs Background Thread)
-
-### Type Guidelines
-
-**Use appropriate types:**
-- `ReadOnlyMemory<T>` for data buffers
-- `ValueTask<T>` for frequently-called async methods
-- `Task` for less frequent async operations
-- `record` types for immutable configuration/DTOs
-- `sealed` for classes that shouldn't be inherited
-
-**Validation:**
-```csharp
-// Constructor validation with descriptive exceptions
-if (leftCacheSize < 0)
-{
-    throw new ArgumentOutOfRangeException(
-        nameof(leftCacheSize),
-        "LeftCacheSize must be greater than or equal to 0."
-    );
-}
-```
-
-### Error Handling
-
-**User Path Exceptions:**
-- Propagate exceptions to caller
-- Use descriptive exception messages
-- Validate parameters early
-
-**Background Path Exceptions:**
-```csharp
-// Fire-and-forget with diagnostics callback
-try
-{
-    // Rebalance execution
-}
-catch (Exception ex)
-{
-    _cacheDiagnostics.BackgroundOperationFailed(ex);
-    // Exception swallowed to prevent background task crashes
-}
-```
-
-**Critical Rule:** Background exceptions must NOT crash the application. Always capture and report via diagnostics interface.
-
-### Concurrency Patterns
-
-**Single-Writer Architecture (CRITICAL):**
-- User Path: READ-ONLY (never mutates Cache, IsInitialized, or NoRebalanceRange)
-- Rebalance Execution: SINGLE WRITER (sole authority for cache mutations)
-- Serialization: Channel-based with single reader/single writer (intent processing loop)
-
-**Threading Model - Single Logical Consumer with Internal Concurrency:**
-- **User-facing model**: One logical consumer per cache (one user, one viewport, coherent access pattern)
-- **Internal implementation**: Multiple threads operate concurrently (User thread + Intent loop + Execution loop)
-- SlidingWindowCache **IS thread-safe** for its internal concurrency (user thread + background threads)
-- SlidingWindowCache is **NOT designed for multiple users sharing one cache** (violates coherent access pattern)
-- Multiple threads from the SAME logical consumer CAN call SlidingWindowCache safely (read-only User Path)
-
-**Consistency Modes (three options):**
-- **Eventual consistency** (default): `GetDataAsync` — returns immediately, cache converges in background
-- **Hybrid consistency**: `GetDataAndWaitOnMissAsync` — waits for idle only on `PartialHit` or `FullMiss`; returns immediately on `FullHit`. Use for warm-cache guarantees without always paying the idle-wait cost.
-- **Strong consistency**: `GetDataAndWaitForIdleAsync` — always waits for idle regardless of `CacheInteraction`
-
-**Serialized Access Requirement for Hybrid/Strong Modes:**
-`GetDataAndWaitOnMissAsync` and `GetDataAndWaitForIdleAsync` provide their warm-cache guarantee only under **serialized (one-at-a-time) access**. Under parallel access, `WaitForIdleAsync`'s "was idle at some point" semantics (Invariant S.H.3) may return the old completed TCS, missing the rebalance triggered by the concurrent request. These methods remain safe (no crashes/hangs) but the guarantee degrades under parallelism.
-
-**Lock-Free Operations:**
-```csharp
-// Intent management using Volatile and Interlocked
-var previousIntent = Interlocked.Exchange(ref _currentIntent, newIntent);
-var currentIntent = Volatile.Read(ref _currentIntent);
-
-// AsyncActivityCounter - fully lock-free
-var newCount = Interlocked.Increment(ref _activityCount);  // Atomic counter
-Volatile.Write(ref _idleTcs, newTcs);  // Publish TCS with release fence
-var tcs = Volatile.Read(ref _idleTcs);  // Observe TCS with acquire fence
-```
-
-**Note**: AsyncActivityCounter is fully lock-free.
-
-### Testing Guidelines
-
-**Test Structure:**
-- Use xUnit `[Fact]` and `[Theory]` attributes
-- Follow Arrange-Act-Assert pattern
-- Use region comments: `#region Constructor - Valid Parameters Tests`
-
-**Test Naming:**
-```csharp
-[Fact]
-public void MethodName_Scenario_ExpectedBehavior()
-{
-    // ARRANGE
-    var options = new SlidingWindowCacheOptions(...);
-    
-    // ACT
-    var result = options.DoSomething();
-    
-    // ASSERT
-    Assert.Equal(expectedValue, result);
-}
-```
-
-**Exception Testing:**
-```csharp
-// Use Record.Exception/ExceptionAsync to separate ACT from ASSERT
-var exception = Record.Exception(() => operation());
-var exceptionAsync = await Record.ExceptionAsync(async () => await operationAsync());
-
-Assert.NotNull(exception);  // Verify exception thrown
-Assert.IsType<ArgumentException>(exception);  // Verify type
-Assert.Null(exception);  // Verify no exception
-```
-
-**WaitForIdleAsync Usage:**
-```csharp
-// Use for testing to wait until system was idle at some point
-await cache.WaitForIdleAsync(); 
-
-// Cache WAS idle (converged state) - assert on that state
-Assert.Equal(expectedRange, actualRange);
-```
-
-**WaitForIdleAsync Semantics:**
-- Completes when system **was idle at some point** (not "is idle now")
-- Uses eventual consistency semantics (correct for testing convergence)
-- New activity may start immediately after completion
-- Re-check state if stronger guarantees needed
-
-**When WaitForIdleAsync is NOT needed**: After normal `GetDataAsync` calls (cache is eventually consistent by design).
-
-## Commit & Documentation Workflow
-
-### Commit Policy
-
-**Commits are made exclusively by a human**, after all changes have been manually reviewed. Agents must NOT create git commits. When work is complete, present a summary of all changes for human review.
-
-### Commit Message Guidelines
-- **Format**: Conventional Commits with passive voice
-- **Multi-type commits allowed**: Combine feat/test/docs/fix in single commit
-
-**Examples:**
-```
-feat: extension method for strong consistency mode has been implemented; test: new method has been covered by unit tests; docs: README.md has been updated with usage examples
-
-fix: race condition in intent processing has been resolved
-```
-
-### Documentation Philosophy
-- **Code is source of truth** - documentation follows code
-- **CRITICAL**: Every implementation MUST be finalized by updating documentation
-
-### Documentation Update Map
-
-| File                                          | Update When                        | Focus                                   |
-|-----------------------------------------------|------------------------------------|-----------------------------------------|
-| `README.md`                                   | Public API changes, new features   | User-facing examples, configuration     |
-| `docs/sliding-window/invariants.md`           | Architectural invariants changed   | System constraints, concurrency rules   |
-| `docs/sliding-window/architecture.md`         | Concurrency mechanisms changed     | Thread safety, coordination model       |
-| `docs/sliding-window/components/overview.md`  | New components, major refactoring  | Component catalog, dependencies         |
-| `docs/sliding-window/actors.md`               | Component responsibilities changed | Actor roles, explicit responsibilities  |
-| `docs/sliding-window/state-machine.md`        | State transitions changed          | State machine specification             |
-| `docs/sliding-window/storage-strategies.md`   | Storage implementation changed     | Strategy comparison, performance        |
-| `docs/sliding-window/scenarios.md`            | Temporal behavior changed          | Scenario walkthroughs, sequences        |
-| `docs/shared/diagnostics.md`                  | New diagnostics events             | Instrumentation guide                   |
-| `docs/shared/glossary.md`                     | Terms or semantics change          | Canonical terminology                   |
-| `benchmarks/*/README.md`                      | Benchmark changes                  | Performance methodology, results        |
-| `tests/*/README.md`                           | Test architecture changes          | Test suite documentation                |
-| XML comments (in code)                        | All code changes                   | Component purpose, invariant references |
-
-## Architecture References
-
-**Before making changes, consult these critical documents:**
-- `docs/sliding-window/invariants.md` - System invariants - READ THIS FIRST
-- `docs/sliding-window/architecture.md` - Architecture and concurrency model
-- `docs/sliding-window/actors.md` - Actor responsibilities and boundaries
-- `docs/sliding-window/components/overview.md` - Component catalog (split by subsystem)
-- `docs/shared/glossary.md` - Canonical terminology
-- `README.md` - User guide and examples
-
-**Key Invariants to NEVER violate:**
-1. Cache Contiguity: No gaps allowed in cached ranges
-2. Single Writer: Only RebalanceExecutor mutates cache state
-3. User Path Priority: User requests never block on rebalance
-4. Intent Semantics: Intents are signals, not commands
-5. Decision Idempotency: Same inputs → same decision
-
-## File Locations
-
-**Public API (Shared Foundation — `Intervals.NET.Caching`):**
-- `src/Intervals.NET.Caching/IRangeCache.cs` - Shared cache interface
-- `src/Intervals.NET.Caching/IDataSource.cs` - Data source contract
-- `src/Intervals.NET.Caching/Dto/` - Shared DTOs (`RangeResult`, `RangeChunk`, `CacheInteraction`)
-- `src/Intervals.NET.Caching/Layered/` - `LayeredRangeCache`, `LayeredRangeCacheBuilder`, `RangeCacheDataSourceAdapter`
-- `src/Intervals.NET.Caching/Extensions/` - `RangeCacheConsistencyExtensions` (strong consistency)
-
-**Public API (SlidingWindow):**
-- `src/Intervals.NET.Caching.SlidingWindow/Public/ISlidingWindowCache.cs` - SlidingWindow-specific interface
-- `src/Intervals.NET.Caching.SlidingWindow/Public/Cache/SlidingWindowCache.cs` - Main cache facade
-- `src/Intervals.NET.Caching.SlidingWindow/Public/Cache/SlidingWindowCacheBuilder.cs` - Builder (includes `Layered()`)
-- `src/Intervals.NET.Caching.SlidingWindow/Public/Configuration/` - Configuration classes
-- `src/Intervals.NET.Caching.SlidingWindow/Public/Instrumentation/` - Diagnostics
-- `src/Intervals.NET.Caching.SlidingWindow/Public/Extensions/` - `SlidingWindowCacheConsistencyExtensions`, `SlidingWindowLayerExtensions`
-
-**Core Logic:**
-- `src/Intervals.NET.Caching.SlidingWindow/Core/UserPath/` - User request handling (read-only)
-- `src/Intervals.NET.Caching.SlidingWindow/Core/Rebalance/Decision/` - Decision engine
-- `src/Intervals.NET.Caching.SlidingWindow/Core/Rebalance/Execution/` - Cache mutations (single writer)
-- `src/Intervals.NET.Caching.SlidingWindow/Core/State/` - State management
-
-**Infrastructure:**
-- `src/Intervals.NET.Caching.SlidingWindow/Infrastructure/Storage/` - Storage strategies
-- `src/Intervals.NET.Caching.SlidingWindow/Infrastructure/Concurrency/` - Async coordination
-- `src/Intervals.NET.Caching/Infrastructure/Concurrency/AsyncActivityCounter.cs` - Shared lock-free activity counter (internal, visible to SWC via InternalsVisibleTo)
-
-**Public API (VisitedPlaces):**
-- `src/Intervals.NET.Caching.VisitedPlaces/Public/IVisitedPlacesCache.cs` - VisitedPlaces-specific interface
-- `src/Intervals.NET.Caching.VisitedPlaces/Public/Cache/VisitedPlacesCache.cs` - Main cache facade
-- `src/Intervals.NET.Caching.VisitedPlaces/Public/Cache/VisitedPlacesCacheBuilder.cs` - Builder (includes `Layered()`)
-- `src/Intervals.NET.Caching.VisitedPlaces/Public/Configuration/` - Configuration classes (`VisitedPlacesCacheOptions`, storage strategies, eviction sampling)
-- `src/Intervals.NET.Caching.VisitedPlaces/Public/Instrumentation/` - Diagnostics
-- `src/Intervals.NET.Caching.VisitedPlaces/Public/Extensions/` - `VisitedPlacesLayerExtensions`
-- `src/Intervals.NET.Caching.VisitedPlaces/Core/Eviction/IEvictionPolicy.cs` - Public eviction policy interface
-- `src/Intervals.NET.Caching.VisitedPlaces/Core/Eviction/IEvictionSelector.cs` - Public eviction selector interface (also exposes `SamplingEvictionSelector<TRange,TData>` abstract base)
-- `src/Intervals.NET.Caching.VisitedPlaces/Core/Eviction/Policies/` - Public concrete policies: `MaxSegmentCountPolicy`, `MaxTotalSpanPolicy`
-- `src/Intervals.NET.Caching.VisitedPlaces/Core/Eviction/Selectors/` - Public concrete selectors: `LruEvictionSelector`, `FifoEvictionSelector`, `SmallestFirstEvictionSelector`
-
-**WebAssembly Validation:**
-- `src/Intervals.NET.Caching.SlidingWindow.WasmValidation/` - Validates Core + SlidingWindow compile for `net8.0-browser`
-- `src/Intervals.NET.Caching.VisitedPlaces.WasmValidation/` - Validates Core + VisitedPlaces compile for `net8.0-browser`
-
-## CI/CD
-
-**GitHub Actions — two package-specific workflows:**
-
-- **`.github/workflows/intervals-net-caching-swc.yml`** — SlidingWindow workflow
-  - Triggers: Push/PR to main/master (paths: Core, SlidingWindow, SWC WasmValidation, SWC tests), manual dispatch
-  - Runs: Build solution, SWC WebAssembly validation, SWC test suites (Unit/Integration/Invariants) with coverage
-  - Coverage: Uploaded to Codecov
-  - Publish: `Intervals.NET.Caching.SlidingWindow` to NuGet.org (on main/master push)
-
-- **`.github/workflows/intervals-net-caching-vpc.yml`** — VisitedPlaces workflow
-  - Triggers: Push/PR to main/master (paths: Core, VisitedPlaces, VPC WasmValidation, VPC tests), manual dispatch
-  - Runs: Build solution, VPC WebAssembly validation, VPC test suites (Unit/Integration/Invariants) with coverage
-  - Coverage: Uploaded to Codecov
-  - Publish: `Intervals.NET.Caching.VisitedPlaces` to NuGet.org (on main/master push)
-
-**Note:** `Intervals.NET.Caching` (Core) is a non-packable shared foundation (`<IsPackable>false</IsPackable>`). Its types are compiled into the SWC and VPC assemblies via `ProjectReference` with `PrivateAssets="all"` — it is never published as a standalone NuGet package.
-
-**Local CI Testing:**
-```powershell
+# VisitedPlaces tests
+dotnet test tests/Intervals.NET.Caching.VisitedPlaces.Unit.Tests/Intervals.NET.Caching.VisitedPlaces.Unit.Tests.csproj
+dotnet test tests/Intervals.NET.Caching.VisitedPlaces.Integration.Tests/Intervals.NET.Caching.VisitedPlaces.Integration.Tests.csproj
+dotnet test tests/Intervals.NET.Caching.VisitedPlaces.Invariants.Tests/Intervals.NET.Caching.VisitedPlaces.Invariants.Tests.csproj
+
+# Single test
+dotnet test --filter "FullyQualifiedName=Full.Test.Name"
+dotnet test --filter "FullyQualifiedName~PartialMatch"
+
+# Local CI validation
 .github/test-ci-locally.ps1
 ```
 
-## Important Notes
+## Commit & Workflow Policy
 
-- **WebAssembly Compatible:** Validated with `net8.0-browser` target
-- **Zero Dependencies (runtime):** Only `Intervals.NET.*` packages
-- **Deterministic Testing:** Use `WaitForIdleAsync()` for predictable test behavior
-- **Immutability:** Prefer `record` types and `init` properties for configuration
+**Commits are made exclusively by a human.** Agents must NOT create git commits. Present a summary of all changes for human review.
+
+- **Format**: Conventional Commits, passive voice, multi-type allowed (e.g., `feat: X; test: Y; docs: Z`)
+- **Documentation follows code**: every implementation MUST be finalized by updating relevant documentation (see Pre-Change Reference Guide below)
+
+## Code Style
+
+Standard C# conventions apply. Below are project-specific rules only:
+
+- **Always use braces** for all control flow (`if`, `else`, `for`, `foreach`, `while`, `do`, `using`), even single-line bodies
+- File-scoped namespace declarations. Internal classes: `internal sealed`
+- Generic type parameters: `TRange` (boundary), `TData` (cached data), `TDomain` (range domain) — use consistently
+- Async methods always end with `Async`. Use `ValueTask<T>` for hot paths if not async possible, `Task` for infrequent operations
+- Prefer `record` types and `init` properties for configuration/DTOs. Use `sealed` for non-inheritable classes
+- XML documentation required on all public APIs. Internal components should reference invariant IDs (e.g., `SWC.A.1`, `VPC.B.1`)
+- **Error handling**: User Path exceptions propagate to caller. Background Path exceptions are swallowed and reported via `ICacheDiagnostics` — background exceptions must NEVER crash the application
+- **Tests**: xUnit with `[Fact]`/`[Theory]`. Naming: `MethodName_Scenario_ExpectedBehavior`. Arrange-Act-Assert pattern with `#region` grouping. Use `Record.Exception`/`Record.ExceptionAsync` to separate ACT from ASSERT
+- **`WaitForIdleAsync` semantics**: completes when the system **was idle at some point**, not "is idle now". New activity may start immediately after completion. Guarantees degrade under parallel access (see invariant S.H.3)
+
+## Project Structure
+
+All three packages follow the same internal layer convention: `Public/` (API surface) → `Core/` (business logic, internal) → `Infrastructure/` (storage, concurrency, internal).
+
+**Core package** (`Intervals.NET.Caching`) is non-packable (`IsPackable=false`). Its types compile into SWC/VPC assemblies via `ProjectReference` with `PrivateAssets="all"`. Internal types shared via `InternalsVisibleTo`.
+
+**Namespace pattern**: `Intervals.NET.Caching.{Package}.{Layer}.{Subsystem}` — e.g., `Intervals.NET.Caching.SlidingWindow.Core.Rebalance.Decision`, `Intervals.NET.Caching.VisitedPlaces.Core.Eviction`.
+
+**Test projects** (Unit, Integration, Invariants for each package) plus shared test infrastructure: `tests/*.Tests.Infrastructure/`. Reuse existing test helpers and builders rather than reinventing.
+
+**CI**: Two GitHub Actions workflows, one per publishable package (`.github/workflows/intervals-net-caching-swc.yml`, `.github/workflows/intervals-net-caching-vpc.yml`). Both validate WebAssembly compilation (`net8.0-browser` target).
+
+## Architectural Invariants
+
+Read `docs/shared/invariants.md`, `docs/sliding-window/invariants.md`, and `docs/visited-places/invariants.md` for full specifications. Below are the invariants most likely to be violated by code changes.
+
+**SlidingWindow (SWC):**
+1. **Single-writer** (SWC.A.1): only `RebalanceExecutor` mutates cache state; User Path is strictly read-only
+2. **Cache contiguity** (SWC.A.12b): `CacheData` must always be a single contiguous range — no gaps, no partial materialization
+3. **Atomic state updates** (SWC.B.2): `CacheData` and `CurrentCacheRange` must change atomically — no intermediate inconsistent states
+4. **Intent = signal, not command** (SWC.C.8): publishing an intent does NOT guarantee rebalance; the Decision Engine may skip it at any of 5 stages
+5. **Multi-stage decision validation** (SWC.D.5): rebalance executes only if ALL stages confirm necessity. Stage 2 MUST evaluate against the pending execution's `DesiredNoRebalanceRange`, not the current cache's
+
+**VisitedPlaces (VPC):**
+1. **Single-writer** (VPC.A.1): only the Background Storage Loop mutates segment collection; User Path is strictly read-only
+2. **Strict FIFO event ordering** (VPC.B.1): every `CacheNormalizationRequest` processed in order — no supersession, no discards. Violating corrupts eviction metadata (e.g., LRU timestamps)
+3. **Segment non-overlap** (VPC.C.3): no two segments share any discrete domain point — `End[i] < Start[i+1]` strictly
+4. **Segments never merge** (VPC.C.2): even adjacent segments remain separate forever
+5. **Just-stored segment immunity** (VPC.E.3): segment stored in the current background step is excluded from eviction candidates. Without this, infinite fetch-store-evict loops occur under LRU
+6. **Idempotent removal** (VPC.T.1): `CachedSegment.MarkAsRemoved()` uses `Interlocked.CompareExchange` — only first caller (TTL or eviction) performs storage removal
+
+**Shared:**
+1. **Activity counter ordering** (S.H.1/S.H.2): increment BEFORE work is made visible; decrement in `finally` blocks ALWAYS. Violating causes `WaitForIdleAsync` to hang or return prematurely
+2. **Disposal** (S.J): post-disposal guard on public methods, idempotent disposal, cooperative cancellation of background ops
+3. **Bounded range requests** (S.R): requested ranges must be finite on both ends; unbounded ranges throw `ArgumentException`
+
+## SWC vs VPC: Key Architectural Differences
+
+These packages share interfaces but have fundamentally different internals. Do NOT apply patterns from one to the other.
+
+| Aspect | SlidingWindow | VisitedPlaces |
+|--------|--------------|---------------|
+| Event processing | Latest-intent-wins (supersession via `Interlocked.Exchange`) | Strict FIFO (every event processed in order) |
+| Cache structure | Single contiguous window; contiguity mandatory | Non-contiguous segment collection; gaps valid |
+| Background I/O | `RebalanceExecutor` calls `IDataSource.FetchAsync` | Background Path does NO I/O; data delivered via User Path events |
+| Prefetch | Geometry-based expansion (`LeftCacheSize`/`RightCacheSize`) | Strictly demand-driven; never prefetches |
+| Cancellation | Rebalance execution is cancellable via CTS | Background events are NOT cancellable |
+| Consistency modes | Eventual, Hybrid, Strong | Eventual, Strong (no Hybrid) |
+| Execution contexts | User Thread + Intent Loop + Execution Loop | User Thread + Background Storage Loop + TTL Loop |
+
+## Dangerous Modifications
+
+These changes appear reasonable but silently violate invariants. Functional tests typically still pass.
+
+- **Adding writes in User Path** (either package): introduces write-write races with Background Path. User Path must be strictly read-only
+- **Changing VPC event processing to supersession**: corrupts eviction metadata (LRU timestamps for skipped events are lost)
+- **Merging VPC segments**: resets eviction metadata, breaks `FindIntersecting` binary search ordering
+- **Moving activity counter increment after publish**: `WaitForIdleAsync` returns prematurely (nanosecond race window, nearly impossible to reproduce)
+- **Removing `finally` from `DecrementActivity` call sites**: any exception leaves counter permanently incremented; `WaitForIdleAsync` hangs forever
+- **Making SWC `Rematerialize()` non-atomic** (split data + range update): User Path reads see inconsistent data/range — silent data corruption
+- **Removing just-stored segment immunity**: causes infinite fetch-store-evict loops under LRU (just-stored segment has earliest `LastAccessedAt`)
+- **Adding `IDataSource` calls to VPC Background Path**: blocks FIFO event processing, delays metadata updates, no cancellation infrastructure for I/O
+- **Publishing intents from SWC Rebalance Execution**: creates positive feedback loop — system never reaches idle, disposal hangs
+- **Using `Volatile.Write` instead of `Interlocked.CompareExchange` in `MarkAsRemoved()`**: both TTL and eviction proceed to remove, corrupting policy aggregates
+- **Swallowing exceptions in User Path**: user receives empty/partial data with no failure signal; `CacheInteraction` classification becomes misleading
+- **Adding locks around SWC `CacheState` reads**: creates lock contention between User Path and Rebalance — violates "user requests never block on rebalance"
+
+## Pre-Change Reference Guide
+
+Before modifying a subsystem, read the relevant docs. After completing changes, update the same docs plus any listed under "Also Update."
+
+| Modification Area | Read Before Changing | Also Update After |
+|---|---|---|
+| SWC rebalance / decision logic | `docs/sliding-window/invariants.md`, `docs/sliding-window/architecture.md` | `docs/sliding-window/state-machine.md`, `docs/sliding-window/scenarios.md` |
+| SWC storage strategies | `docs/sliding-window/storage-strategies.md` | same |
+| SWC components | `docs/sliding-window/components/overview.md`, relevant component doc | `docs/sliding-window/actors.md` |
+| VPC eviction (policy/selector) | `docs/visited-places/eviction.md`, `docs/visited-places/invariants.md` (VPC.E group) | same |
+| VPC TTL | `docs/visited-places/invariants.md` (VPC.T group), `docs/visited-places/architecture.md` | same |
+| VPC background processing | `docs/visited-places/architecture.md`, `docs/visited-places/invariants.md` (VPC.B group) | `docs/visited-places/scenarios.md` |
+| VPC storage strategies | `docs/visited-places/storage-strategies.md` | same |
+| VPC components | `docs/visited-places/components/overview.md` | `docs/visited-places/actors.md` |
+| `IDataSource` contract | `docs/shared/boundary-handling.md` | same |
+| `AsyncActivityCounter` | `docs/shared/invariants.md` (S.H group), `docs/shared/architecture.md` | same |
+| Layered cache | `docs/shared/glossary.md`, `README.md` | same |
+| Public API changes | `README.md` | `README.md` |
+| Diagnostics events | `docs/shared/diagnostics.md` or package-specific diagnostics doc | same |
+| New terms or semantic changes | `docs/shared/glossary.md` or package-specific glossary | same |
+
+**Canonical terminology**: see `docs/shared/glossary.md`, `docs/sliding-window/glossary.md`, `docs/visited-places/glossary.md`. Each includes a "Common Misconceptions" section.
