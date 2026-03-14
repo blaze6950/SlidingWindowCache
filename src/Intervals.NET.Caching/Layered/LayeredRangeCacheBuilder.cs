@@ -21,6 +21,7 @@ public sealed class LayeredRangeCacheBuilder<TRange, TData, TDomain>
     private readonly IDataSource<TRange, TData> _rootDataSource;
     private readonly TDomain _domain;
     private readonly List<Func<IDataSource<TRange, TData>, IRangeCache<TRange, TData, TDomain>>> _factories = new();
+    private bool _built;
 
     /// <summary>
     /// Initializes a new <see cref="LayeredRangeCacheBuilder{TRange,TData,TDomain}"/>.
@@ -73,10 +74,18 @@ public sealed class LayeredRangeCacheBuilder<TRange, TData, TDomain>
     /// <see cref="IRangeCache{TRange,TData,TDomain}.GetDataAsync"/> delegates to the outermost layer.
     /// </returns>
     /// <exception cref="InvalidOperationException">
-    /// Thrown when no layers have been added via <see cref="AddLayer"/>.
+    /// Thrown when no layers have been added via <see cref="AddLayer"/>,
+    /// or when <see cref="BuildAsync"/> has already been called on this builder instance.
     /// </exception>
     public async ValueTask<IRangeCache<TRange, TData, TDomain>> BuildAsync()
     {
+        if (_built)
+        {
+            throw new InvalidOperationException(
+                "BuildAsync() has already been called on this builder instance. " +
+                "Create a new builder to construct another cache stack.");
+        }
+
         if (_factories.Count == 0)
         {
             throw new InvalidOperationException(
@@ -104,12 +113,21 @@ public sealed class LayeredRangeCacheBuilder<TRange, TData, TDomain>
             // if a factory throws partway through construction.
             foreach (var cache in caches)
             {
-                await cache.DisposeAsync().ConfigureAwait(false);
+                try
+                {
+                    await cache.DisposeAsync().ConfigureAwait(false);
+                }
+                catch
+                {
+                    // Best-effort cleanup: continue disposing remaining layers
+                    // even if one layer's disposal fails.
+                }
             }
 
             throw;
         }
 
+        _built = true;
         return new LayeredRangeCache<TRange, TData, TDomain>(caches);
     }
 }

@@ -82,17 +82,30 @@ internal sealed class IntentController<TRange, TData, TDomain>
                 "Cannot publish intent to a disposed controller.");
         }
 
-        // Atomically set the pending intent (latest wins)
-        Interlocked.Exchange(ref _pendingIntent, intent);
-
-        // Increment activity counter for intent processing BEFORE signaling
+        // Increment activity counter BEFORE making the intent visible to any thread,
+        // ensuring WaitForIdleAsync cannot observe zero activity while work is pending.
+        // (Invariant S.H.1: increment before work is made visible.)
         _activityCounter.IncrementActivity();
 
-        // Signal the processing loop to wake up and process the intent
-        // TryRelease returns false if semaphore is already signaled (count at max), which is fine
-        _intentSignal.Release();
+        try
+        {
+            // Atomically set the pending intent (latest wins)
+            Interlocked.Exchange(ref _pendingIntent, intent);
 
-        _cacheDiagnostics.RebalanceIntentPublished();
+            // Signal the processing loop to wake up and process the intent.
+            // Release() may throw ObjectDisposedException in the rare race where disposal
+            // completes (disposes the semaphore) between the disposal guard above and this call.
+            // The try/finally ensures the activity counter is always decremented in that case.
+            _intentSignal.Release();
+
+            _cacheDiagnostics.RebalanceIntentPublished();
+        }
+        catch
+        {
+            // Compensate for the increment above so WaitForIdleAsync does not hang.
+            _activityCounter.DecrementActivity();
+            throw;
+        }
     }
 
     /// <summary>

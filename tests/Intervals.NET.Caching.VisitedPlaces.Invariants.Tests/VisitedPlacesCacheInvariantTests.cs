@@ -1038,6 +1038,73 @@ public sealed class VisitedPlacesCacheInvariantTests : IAsyncDisposable
     }
 
     // ============================================================
+    // VPC.B.1 — Strict FIFO Event Ordering
+    // ============================================================
+
+    /// <summary>
+    /// Invariant VPC.B.1 [Architectural]: Every <c>CacheNormalizationRequest</c> is processed
+    /// in strict FIFO order — no request is superseded, skipped, or discarded.
+    /// Verifies that after N sequential full-miss requests, all N normalization requests are
+    /// received AND processed, and all N segments are present in the cache (as FullHits).
+    /// If any event were superseded (as in SWC's latest-intent-wins model), some segments
+    /// would be missing from cache and subsequent full-hit reads would fail.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(StorageStrategyTestData))]
+    public async Task Invariant_VPC_B_1_StrictFifoOrdering_AllRequestsProcessed(
+        StorageStrategyOptions<int, int> strategy)
+    {
+        #region Arrange
+
+        const int requestCount = 10;
+
+        // Create non-overlapping ranges so each request produces exactly one new segment.
+        // Stride of 20 guarantees no adjacency merging.
+        var ranges = Enumerable.Range(0, requestCount)
+            .Select(i => TestHelpers.CreateRange(i * 20, i * 20 + 9))
+            .ToArray();
+
+        var cache = CreateCache(strategy, maxSegmentCount: requestCount + 10);
+
+        #endregion
+
+        #region Act
+
+        // Issue all requests sequentially, waiting for idle after each one so that
+        // segments are stored before the next request.
+        // This ensures NormalizationRequestReceived == requestCount at the end.
+        foreach (var range in ranges)
+        {
+            await cache.GetDataAndWaitForIdleAsync(range);
+        }
+
+        #endregion
+
+        #region Assert
+
+        // VPC.B.1: every request received must have been processed — no events discarded.
+        Assert.Equal(requestCount, _diagnostics.NormalizationRequestReceived);
+        Assert.Equal(requestCount, _diagnostics.NormalizationRequestProcessed);
+
+        // All requestCount segments must be stored — no segment was superseded.
+        Assert.Equal(requestCount, _diagnostics.BackgroundSegmentStored);
+
+        // Re-read all ranges: every one must be a FullHit, proving the segment was stored and is
+        // retrievable — this would fail if any event had been dropped or processed out of order.
+        foreach (var range in ranges)
+        {
+            var result = await cache.GetDataAsync(range, CancellationToken.None);
+            Assert.Equal(CacheInteraction.FullHit, result.CacheInteraction);
+            TestHelpers.AssertUserDataCorrect(result.Data, range);
+        }
+
+        // No background failures.
+        Assert.Equal(0, _diagnostics.BackgroundOperationFailed);
+
+        #endregion
+    }
+
+    // ============================================================
     // TEST DOUBLES
     // ============================================================
 

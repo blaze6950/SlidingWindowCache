@@ -51,12 +51,22 @@ internal abstract class SerialWorkSchedulerBase<TWorkItem> : WorkSchedulerBase<T
         // after execution completes, cancels, or fails (or in the error path of EnqueueWorkItemAsync).
         ActivityCounter.IncrementActivity();
 
-        // Hook for SupersessionWorkSchedulerBase: cancel previous item, record new item.
-        // No-op for FIFO serial schedulers.
-        OnBeforeEnqueue(workItem);
+        try
+        {
+            // Hook for SupersessionWorkSchedulerBase: cancel previous item, record new item.
+            // No-op for FIFO serial schedulers.
+            OnBeforeEnqueue(workItem);
 
-        // Delegate to the concrete scheduling mechanism (task chaining or channel write).
-        return EnqueueWorkItemAsync(workItem, loopCancellationToken);
+            // Delegate to the concrete scheduling mechanism (task chaining or channel write).
+            return EnqueueWorkItemAsync(workItem, loopCancellationToken);
+        }
+        catch
+        {
+            // If enqueue fails, decrement the activity counter to avoid a permanent leak.
+            // Successful enqueue paths decrement in the processing pipeline's finally block.
+            ActivityCounter.DecrementActivity();
+            throw;
+        }
     }
 
     /// <summary>

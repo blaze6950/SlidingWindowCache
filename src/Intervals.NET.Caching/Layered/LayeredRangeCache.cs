@@ -20,7 +20,8 @@ public sealed class LayeredRangeCache<TRange, TData, TDomain>
     where TRange : IComparable<TRange>
     where TDomain : IRangeDomain<TRange>
 {
-    private readonly IReadOnlyList<IRangeCache<TRange, TData, TDomain>> _layers;
+    private readonly List<IRangeCache<TRange, TData, TDomain>> _layers;
+    private readonly IReadOnlyList<IRangeCache<TRange, TData, TDomain>> _layersReadOnly;
     private readonly IRangeCache<TRange, TData, TDomain> _userFacingLayer;
 
     /// <summary>
@@ -41,8 +42,9 @@ public sealed class LayeredRangeCache<TRange, TData, TDomain>
             throw new ArgumentException("At least one layer is required.", nameof(layers));
         }
 
-        _layers = layers;
-        _userFacingLayer = layers[^1];
+        _layers = [..layers];
+        _layersReadOnly = _layers.AsReadOnly();
+        _userFacingLayer = _layers[^1];
     }
 
     /// <summary>
@@ -53,7 +55,7 @@ public sealed class LayeredRangeCache<TRange, TData, TDomain>
     /// <summary>
     /// Gets the ordered list of all cache layers, from deepest (index 0) to outermost (last index).
     /// </summary>
-    public IReadOnlyList<IRangeCache<TRange, TData, TDomain>> Layers => _layers;
+    public IReadOnlyList<IRangeCache<TRange, TData, TDomain>> Layers => _layersReadOnly;
 
     /// <inheritdoc/>
     public ValueTask<RangeResult<TRange, TData>> GetDataAsync(

@@ -271,11 +271,12 @@ Assert.Equal(expectedCount, cache.SegmentCount);
 - Under parallel callers, `WaitForIdleAsync`'s "was idle at some point" semantics (Invariant S.H.3) may return after the old TCS completes but before the event from a concurrent request has been processed
 - The method remains safe (no crashes, no hangs) under parallel access, but the guarantee degrades
 
-**VPC.D.6** [Architectural] **Thread-safe eviction policy lifecycle**: `IEvictionPolicy` instances are constructed once at cache initialization and accessed only from the Background Storage Loop.
+**VPC.D.6** [Architectural] **Thread-safe eviction policy lifecycle**: `IEvictionPolicy` instances are constructed once at cache initialization and accessed from **two execution contexts**: the Background Storage Loop (for `OnSegmentAdded`, `Evaluate`, and eviction-driven `OnSegmentRemoved`) and the TTL thread pool (for TTL-driven `OnSegmentRemoved`).
 
-- No locking or thread-safety is required for policy state
+- **`OnSegmentRemoved` must be thread-safe**: it can be called from either the Background Storage Loop or the TTL thread (via `TtlExpirationExecutor` → `EvictionEngine.OnSegmentRemoved`). The `Interlocked.CompareExchange` gate in `CachedSegment.TryMarkAsRemoved()` ensures only one caller invokes `OnSegmentRemoved` per segment, but the calling thread varies. Built-in policies use `Interlocked` operations for this reason
+- **`OnSegmentAdded` and `Evaluate` remain single-threaded**: called only from the Background Storage Loop, inheriting VPC.D.3's single-writer guarantee
 - Pressure objects (`IEvictionPressure`) are stack-local: created fresh per evaluation cycle by `IEvictionPolicy.Evaluate`, used within a single `EvaluateAndExecute` call, and then discarded
-- The `EvictionEngine` and its subordinates (`EvictionPolicyEvaluator`, `EvictionExecutor`, `IEvictionSelector`) are all single-threaded by design — they inherit the Background Storage Loop's single-writer guarantee (VPC.D.3)
+- The `EvictionExecutor` and `IEvictionSelector` are single-threaded — they run only within the Background Storage Loop's `EvaluateAndExecute` call
 
 ---
 
@@ -374,14 +375,14 @@ Assert.Equal(expectedCount, cache.SegmentCount);
 
 **VPC.T.1** [Architectural] TTL expiration is **idempotent**: if a segment has already been evicted by a capacity policy when its TTL fires, the removal is a no-op.
 
-- `TtlExpirationExecutor` calls `segment.MarkAsRemoved()` (an `Interlocked.CompareExchange` on the segment's `_isRemoved` field) before performing any storage mutation.
-- If `MarkAsRemoved()` returns `false` (another caller already set the flag), the TTL actor skips `storage.Remove` entirely.
+- `TtlExpirationExecutor` calls `storage.TryRemove(segment)`, which internally calls `segment.TryMarkAsRemoved()` (an `Interlocked.CompareExchange` on the segment's `_isRemoved` field) before performing any storage mutation.
+- If `TryMarkAsRemoved()` returns `false` (another caller already set the flag), `TryRemove` returns `false` and the TTL actor skips removal entirely.
 - This ensures that concurrent eviction and TTL expiration cannot produce a double-remove or corrupt storage state.
 
 **VPC.T.2** [Architectural] The TTL actor **never blocks the User Path**: it runs fire-and-forget on the thread pool via a dedicated `ConcurrentWorkScheduler`.
 
 - `TtlExpirationExecutor` awaits `Task.Delay(ttl - elapsed)` independently on the thread pool; each TTL work item runs concurrently with others.
-- The User Path and the Background Storage Loop are never touched by TTL work items.
+- TTL work items do not interact with the User Path or enqueue work into the Background Storage Loop. They do call `EvictionEngine.OnSegmentRemoved` to update policy aggregates (e.g., segment count), but this is thread-safe via `Interlocked` operations (see VPC.D.6).
 - TTL work items use their own `AsyncActivityCounter` so that `WaitForIdleAsync` does not wait for long-running TTL delays.
 
 **VPC.T.3** [Conceptual] Pending TTL delays are **cancelled on disposal**.

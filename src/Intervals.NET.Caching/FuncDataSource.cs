@@ -25,7 +25,7 @@ namespace Intervals.NET.Caching;
 /// <para>
 /// The batch <c>FetchAsync</c> overload is not overridden here; it falls through to the
 /// <see cref="IDataSource{TRange,TData}"/> default implementation, which parallelizes
-/// calls to the single-range delegate via <c>Task.WhenAll</c>.
+/// calls to the single-range delegate via <c>Parallel.ForEachAsync</c>.
 /// </para>
 /// <para><strong>Example — unbounded integer source:</strong></para>
 /// <code>

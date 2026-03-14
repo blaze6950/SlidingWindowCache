@@ -167,15 +167,16 @@ public static class VisitedPlacesLayerExtensions
     {
         ArgumentNullException.ThrowIfNull(configureEviction);
 
-        var evictionBuilder = new EvictionConfigBuilder<TRange, TData>();
-        configureEviction(evictionBuilder);
-        var (policies, selector) = evictionBuilder.Build();
-
         var domain = builder.Domain;
         var resolvedOptions = options ?? new VisitedPlacesCacheOptions<TRange, TData>();
         return builder.AddLayer(dataSource =>
-            new VisitedPlacesCache<TRange, TData, TDomain>(
-                dataSource, domain, resolvedOptions, policies, selector, diagnostics));
+        {
+            var evictionBuilder = new EvictionConfigBuilder<TRange, TData>();
+            configureEviction(evictionBuilder);
+            var (policies, selector) = evictionBuilder.Build();
+            return new VisitedPlacesCache<TRange, TData, TDomain>(
+                dataSource, domain, resolvedOptions, policies, selector, diagnostics);
+        });
     }
 
     /// <summary>
@@ -216,13 +217,13 @@ public static class VisitedPlacesLayerExtensions
         ArgumentNullException.ThrowIfNull(configureEviction);
         ArgumentNullException.ThrowIfNull(configure);
 
-        var evictionBuilder = new EvictionConfigBuilder<TRange, TData>();
-        configureEviction(evictionBuilder);
-        var (policies, selector) = evictionBuilder.Build();
-
         var domain = builder.Domain;
         return builder.AddLayer(dataSource =>
         {
+            var evictionBuilder = new EvictionConfigBuilder<TRange, TData>();
+            configureEviction(evictionBuilder);
+            var (policies, selector) = evictionBuilder.Build();
+
             var optionsBuilder = new VisitedPlacesCacheOptionsBuilder<TRange, TData>();
             configure(optionsBuilder);
             var options = optionsBuilder.Build();

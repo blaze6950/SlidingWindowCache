@@ -236,15 +236,15 @@ public sealed class VisitedPlacesLayerExtensionsTests
     }
 
     [Fact]
-    public void AddVisitedPlacesLayer_Overload3_IncompleteEviction_ThrowsInvalidOperationException()
+    public async Task AddVisitedPlacesLayer_Overload3_IncompleteEviction_ThrowsInvalidOperationExceptionOnBuild()
     {
-        // ARRANGE
-        var builder = CreateLayeredBuilder();
+        // ARRANGE — delegate adds no selector; EvictionConfigBuilder.Build() throws at BuildAsync() time
+        var builder = CreateLayeredBuilder()
+            .AddVisitedPlacesLayer(
+                b => b.AddPolicy(new MaxSegmentCountPolicy<int, int>(10)));
 
-        // ACT — delegate adds no selector → EvictionConfigBuilder.Build() throws
-        var exception = Record.Exception(
-            () => builder.AddVisitedPlacesLayer(
-                b => b.AddPolicy(new MaxSegmentCountPolicy<int, int>(10))));
+        // ACT — AddVisitedPlacesLayer just registers the factory; the exception is deferred to BuildAsync()
+        var exception = await Record.ExceptionAsync(async () => await builder.BuildAsync());
 
         // ASSERT
         Assert.NotNull(exception);

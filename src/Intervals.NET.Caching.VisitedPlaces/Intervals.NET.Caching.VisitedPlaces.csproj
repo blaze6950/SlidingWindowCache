@@ -21,6 +21,8 @@
         <SymbolPackageFormat>snupkg</SymbolPackageFormat>
         <PublishRepositoryUrl>true</PublishRepositoryUrl>
         <EmbedUntrackedSources>true</EmbedUntrackedSources>
+        <PackageReadmeFile>README.md</PackageReadmeFile>
+        <PackageReleaseNotes>Initial release with visited places cache functionality, pluggable eviction, TTL support, and WebAssembly compatibility.</PackageReleaseNotes>
     </PropertyGroup>
 
     <ItemGroup>
@@ -39,6 +41,10 @@
         <PackageReference Include="Intervals.NET.Domain.Default" Version="0.0.2" />
         <PackageReference Include="Intervals.NET.Domain.Extensions" Version="0.0.3" />
         <PackageReference Include="Microsoft.SourceLink.GitHub" Version="10.0.103" PrivateAssets="All" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <None Include="..\..\README.md" Pack="true" PackagePath="\" />
     </ItemGroup>
 
 </Project>

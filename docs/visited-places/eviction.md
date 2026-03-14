@@ -157,10 +157,11 @@ The core selector API is:
 
 ```csharp
 bool TrySelectCandidate(
-    IReadOnlyList<CachedSegment<TRange, TData>> segments,
     IReadOnlySet<CachedSegment<TRange, TData>> immuneSegments,
     out CachedSegment<TRange, TData> candidate);
 ```
+
+The selector obtains segments from the `ISegmentStorage` instance injected at initialization (via `IStorageAwareEvictionSelector.Initialize`), not from a parameter. This keeps the public API clean and avoids exposing storage internals to callers.
 
 Returns `true` and sets `candidate` if an eligible candidate was found; returns `false` if no eligible candidate exists (all immune or pool exhausted).
 
@@ -182,7 +183,7 @@ Each selector defines its own metadata type (a nested `internal sealed class` im
 
 ### `SamplingEvictionSelector` Base Class
 
-All built-in selectors extend `SamplingEvictionSelector<TRange, TData>` (an `internal abstract` class), which implements `TrySelectCandidate` and provides two extension points for derived classes:
+All built-in selectors extend `SamplingEvictionSelector<TRange, TData>` (a `public abstract` class), which implements `TrySelectCandidate` and provides two extension points for derived classes:
 
 - **`EnsureMetadata(segment)`** — Called inside the sampling loop **before every `IsWorse` comparison**. If the segment's metadata is null or belongs to a different selector type, this method creates and attaches the correct metadata. Repaired metadata persists permanently on the segment; future sampling passes skip the repair.
 - **`IsWorse(candidate, current)`** — Pure comparison of two segments with guaranteed-valid metadata. Implementations can safely cast `segment.EvictionMetadata` without null checks or type-mismatch guards because `EnsureMetadata` has already run on both segments.
@@ -263,7 +264,7 @@ The Eviction Executor is an **internal component of the Eviction Engine**. It ex
 ```
 1. Build immune HashSet from justStoredSegments (Invariant VPC.E.3)
 2. Loop while pressure.IsExceeded:
-   a. selector.TrySelectCandidate(allSegments, immune, out candidate)
+   a. selector.TrySelectCandidate(immune, out candidate)
       → returns false if no eligible candidates remain → break
    b. toRemove.Add(candidate)
    c. immune.Add(candidate)     ← prevents re-selecting same segment

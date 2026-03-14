@@ -24,6 +24,9 @@ public interface IEvictionPolicy<TRange, TData>
     /// Notifies this policy that a segment has been removed from storage.
     /// </summary>
     /// <param name="segment">The segment that was just removed from storage.</param>
+    /// <remarks>
+    /// Implementations must use thread-safe operations. See invariant VPC.D.6.
+    /// </remarks>
     void OnSegmentRemoved(CachedSegment<TRange, TData> segment);
 
     /// <summary>
