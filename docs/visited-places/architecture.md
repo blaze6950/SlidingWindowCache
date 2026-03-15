@@ -55,7 +55,7 @@ Single background task that dequeues `CacheNormalizationRequest`s in **strict FI
 1. **Update metadata** — call `engine.UpdateMetadata(usedSegments)` → `selector.UpdateMetadata(...)`
 2. **Store** — add fetched data as new segment(s); call `engine.InitializeSegment(segment)` per segment; call `storage.TryNormalize(out expiredSegments)` to flush the append buffer and discover TTL-expired segments
 3. **Evaluate + execute eviction** — call `engine.EvaluateAndExecute(allSegments, justStored)`; only if new data was stored
-4. **Post-removal** — call `storage.Remove(segment)` and `engine.OnSegmentRemoved(segment)` per evicted segment
+4. **Post-removal** — call `storage.TryRemove(segment)` and `engine.OnSegmentRemoved(segment)` per evicted segment
 
 **Single writer:** This is the sole context that mutates `CachedSegments`. There is no separate TTL Loop — TTL expiration is a timestamp check performed by the Background Path during `TryNormalize`.
 
@@ -89,7 +89,7 @@ Single background task that dequeues `CacheNormalizationRequest`s in **strict FI
 - No partial states are visible — a segment is either fully present (with valid data and metadata) or absent
 - The Background Storage Loop is the sole writer; reads never contend with writes
 
-**TTL coordination:** When a segment's TTL has expired, `FindIntersecting` filters it from results immediately (lazy expiration on read). The Background Path physically removes it during the next `TryNormalize` pass. If a segment is evicted by a capacity policy before `TryNormalize` discovers its TTL has expired, `TryMarkAsRemoved()` returns `false` for the second caller (no-op). See Invariant VPC.T.1.
+**TTL coordination:** When a segment's TTL has expired, `FindIntersecting` filters it from results immediately (lazy expiration on read). The Background Path physically removes it during the next `TryNormalize` pass. If a segment is evicted by a capacity policy before `TryNormalize` discovers its TTL has expired, `TryRemove()` returns `false` for the second caller (no-op). See Invariant VPC.T.1.
 
 ---
 

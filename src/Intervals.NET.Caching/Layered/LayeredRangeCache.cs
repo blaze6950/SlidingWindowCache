@@ -74,12 +74,28 @@ public sealed class LayeredRangeCache<TRange, TData, TDomain>
 
     /// <summary>
     /// Disposes all layers from outermost to innermost, releasing all background resources.
+    /// If one layer throws during disposal, remaining layers are still disposed (best-effort).
     /// </summary>
     public async ValueTask DisposeAsync()
     {
+        List<Exception>? exceptions = null;
+
         for (var i = _layers.Count - 1; i >= 0; i--)
         {
-            await _layers[i].DisposeAsync().ConfigureAwait(false);
+            try
+            {
+                await _layers[i].DisposeAsync().ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                exceptions ??= [];
+                exceptions.Add(ex);
+            }
+        }
+
+        if (exceptions is not null)
+        {
+            throw new AggregateException("One or more layers failed during disposal.", exceptions);
         }
     }
 }

@@ -28,8 +28,21 @@ internal sealed class LinkedListStrideIndexStorage<TRange, TData> : SegmentStora
     // Sorted linked list — mutated on Background Path only.
     private readonly LinkedList<CachedSegment<TRange, TData>> _list = [];
 
-    // Synchronizes the linked-list walk (User Path) against node unlinking (Background Path).
-    // The stride index binary search is lock-free; only the linked-list portion requires this lock.
+    // Guards structural pointer mutations (AddFirst/AddAfter/AddBefore/Remove) against
+    // concurrent User Path reads of the same Next/Previous pointers inside FindIntersecting.
+    //
+    // Lock scope rule:
+    //   - Background Path: hold the lock ONLY during the _list.Add*/Remove() call itself
+    //     (the structural pointer update). Position-finding walks (node.Next reads) are done
+    //     outside the lock — safe because InsertSorted and NormalizeStrideIndex run exclusively
+    //     on the Background Path, so no concurrent structural mutation can occur during those
+    //     reads.
+    //   - User Path (FindIntersecting): hold the lock for the ENTIRE linked-list walk, so that
+    //     no removal can null out node.Next mid-traversal.
+    //
+    // All other _list accesses (_list.Count, _list.First, node.Next reads in SampleRandomCore,
+    // NormalizeStrideIndex Pass 1, and the position-finding loops in InsertSorted) are Background-
+    // Path-only and therefore do not need synchronization — there is only one writer.
     private readonly object _listSyncRoot = new();
 
     // Stride index: every Nth LinkedListNode in the sorted list as a navigation anchor.
@@ -323,11 +336,30 @@ internal sealed class LinkedListStrideIndexStorage<TRange, TData> : SegmentStora
     /// <summary>
     /// Inserts a segment into the linked list in sorted order by range start.
     /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Synchronization rule</b> (see also <c>_listSyncRoot</c> field comment):
+    /// <c>_listSyncRoot</c> is held only for the structural <c>_list.Add*</c> call — the moment
+    /// that rewrites <c>Next</c>/<c>Previous</c> pointers. <c>FindIntersecting</c> on the User
+    /// Path holds <c>_listSyncRoot</c> for its entire walk, so those pointer writes must be
+    /// atomic with respect to any concurrent read.
+    /// </para>
+    /// <para>
+    /// The position-finding walk (reading <c>node.Next</c> before the lock) does NOT require
+    /// synchronization: <c>InsertSorted</c> runs exclusively on the Background Path. No
+    /// concurrent <c>InsertSorted</c> or <c>AddRangeCore</c> call exists, so no structural
+    /// mutation can race with this walk.
+    /// </para>
+    /// </remarks>
     private void InsertSorted(CachedSegment<TRange, TData> segment)
     {
         if (_list.Count == 0)
         {
-            _list.AddFirst(segment);
+            lock (_listSyncRoot)
+            {
+                _list.AddFirst(segment);
+            }
+
             return;
         }
 
@@ -351,6 +383,7 @@ internal sealed class LinkedListStrideIndexStorage<TRange, TData> : SegmentStora
         }
 
         // Walk forward from anchor (or from head) to find insertion position.
+        // This read-only walk does not require the lock — we are the sole writer.
         var current = insertAfter ?? _list.First;
 
         if (insertAfter != null)
@@ -362,7 +395,11 @@ internal sealed class LinkedListStrideIndexStorage<TRange, TData> : SegmentStora
                 current = current.Next;
             }
 
-            _list.AddAfter(current, segment);
+            // Acquire lock only for the structural mutation (pointer update).
+            lock (_listSyncRoot)
+            {
+                _list.AddAfter(current, segment);
+            }
         }
         else
         {
@@ -371,7 +408,10 @@ internal sealed class LinkedListStrideIndexStorage<TRange, TData> : SegmentStora
                 current.Value.Range.Start.Value.CompareTo(segment.Range.Start.Value) > 0)
             {
                 // Insert before the first node.
-                _list.AddBefore(current, segment);
+                lock (_listSyncRoot)
+                {
+                    _list.AddBefore(current, segment);
+                }
             }
             else
             {
@@ -382,7 +422,11 @@ internal sealed class LinkedListStrideIndexStorage<TRange, TData> : SegmentStora
                     current = current.Next;
                 }
 
-                _list.AddAfter(current, segment);
+                // Acquire lock only for the structural mutation (pointer update).
+                lock (_listSyncRoot)
+                {
+                    _list.AddAfter(current, segment);
+                }
             }
         }
     }

@@ -87,6 +87,7 @@ public sealed class SlidingWindowCacheBuilder<TRange, TData, TDomain>
     private SlidingWindowCacheOptions? _options;
     private Action<SlidingWindowCacheOptionsBuilder>? _configurePending;
     private ISlidingWindowCacheDiagnostics? _diagnostics;
+    private bool _built;
 
     internal SlidingWindowCacheBuilder(IDataSource<TRange, TData> dataSource, TDomain domain)
     {
@@ -151,10 +152,18 @@ public sealed class SlidingWindowCacheBuilder<TRange, TData, TDomain>
     /// </returns>
     /// <exception cref="InvalidOperationException">
     /// Thrown when <see cref="WithOptions(SlidingWindowCacheOptions)"/> or
-    /// <see cref="WithOptions(Action{SlidingWindowCacheOptionsBuilder})"/> has not been called.
+    /// <see cref="WithOptions(Action{SlidingWindowCacheOptionsBuilder})"/> has not been called,
+    /// or when <c>Build()</c> has already been called on this builder instance.
     /// </exception>
     public ISlidingWindowCache<TRange, TData, TDomain> Build()
     {
+        if (_built)
+        {
+            throw new InvalidOperationException(
+                "Build() has already been called on this builder. " +
+                "Each builder instance may only produce one cache.");
+        }
+
         var resolvedOptions = _options;
 
         if (resolvedOptions is null && _configurePending is not null)
@@ -170,6 +179,8 @@ public sealed class SlidingWindowCacheBuilder<TRange, TData, TDomain>
                 "Options must be configured before calling Build(). " +
                 "Use WithOptions() to supply a SlidingWindowCacheOptions instance or configure options inline.");
         }
+
+        _built = true;
 
         return new SlidingWindowCache<TRange, TData, TDomain>(_dataSource, _domain, resolvedOptions, _diagnostics);
     }

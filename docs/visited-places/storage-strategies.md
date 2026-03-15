@@ -46,7 +46,7 @@ Both strategies expose the same internal interface:
 - **`FindIntersecting(RequestedRange)`** — returns all segments whose ranges intersect `RequestedRange` (User Path, read-only)
 - **`TryAdd(Segment)`** — adds a single new segment if no overlap exists (Background Path, write-only); returns `true` if stored, `false` if skipped due to VPC.C.3
 - **`TryAddRange(Segment[])`** — adds multiple segments, skipping any that overlap an existing segment; returns only the stored subset (Background Path, write-only; see [Bulk Storage: TryAddRange](#bulk-storage-tryaddrange) below)
-- **`Remove(Segment)`** — removes a segment, typically during eviction (Background Path, write-only)
+- **`TryRemove(Segment)`** — removes a segment if not already removed (idempotent), typically during eviction (Background Path, write-only); returns `true` if actually removed
 
 ---
 
@@ -91,7 +91,7 @@ Both strategies are designed around VPC's two-thread model:
 - **Background Path** writes are exclusive: only one background thread ever writes (single-writer guarantee)
 - **RCU semantics** (Read-Copy-Update): reads operate on a stable snapshot; the background thread builds a new snapshot and publishes it atomically via `Volatile.Write`
 
-**Logical removal** is used by both storage strategies as an internal optimization: a removed segment is marked via `CachedSegment.IsRemoved` (set atomically with `Interlocked.CompareExchange`) so it is immediately invisible to reads, but its node/slot is only physically removed during the next normalization pass. This allows the background thread to batch physical removal work rather than doing it inline during eviction.
+**Logical removal** is used by both storage strategies as an internal optimization: a removed segment is marked via `CachedSegment.IsRemoved` (set via `Volatile.Write`, with idempotent removal enforced by `SegmentStorageBase.TryRemove`) so it is immediately invisible to reads, but its node/slot is only physically removed during the next normalization pass. This allows the background thread to batch physical removal work rather than doing it inline during eviction.
 
 **Append buffer** is used by both storage strategies: new segments are written to a small fixed-size buffer (Snapshot strategy) or counted toward a threshold (LinkedList strategy) rather than immediately integrated into the main sorted structure. The main structure is rebuilt ("normalized") when the threshold is reached. Normalization is **not triggered by `TryAdd` itself** — the executor calls `TryNormalize` explicitly after each storage step. The buffer size is configurable via `AppendBufferSize` on each options object (default: 8).
 
@@ -124,7 +124,7 @@ SnapshotAppendBufferStorage
 └── _appendCount: int                (count of valid entries in append buffer)
 ```
 
-> Logical removal is tracked via `CachedSegment.IsRemoved` (an `int` field on each segment, set atomically via `Interlocked.CompareExchange`). No separate mask array is maintained; all reads filter out segments where `IsRemoved == true`.
+> Logical removal is tracked via `CachedSegment.IsRemoved` (an `int` field on each segment, set via `Volatile.Write`). No separate mask array is maintained; all reads filter out segments where `IsRemoved == true`.
 
 ### Read Path (User Thread)
 
@@ -147,14 +147,15 @@ SnapshotAppendBufferStorage
 4. Normalization is NOT triggered here — the executor calls `TryNormalize` explicitly after the storage step
 
 **Remove segment (logical removal):**
-1. Call `segment.TryMarkAsRemoved()` — sets `segment.IsRemoved = true` atomically (Interlocked.CompareExchange)
-2. No immediate structural change to snapshot or append buffer
+1. `SegmentStorageBase.TryRemove(segment)` checks `segment.IsRemoved`; if already removed, returns `false` (no-op)
+2. Otherwise calls `segment.MarkAsRemoved()` (`Volatile.Write`) and decrements `_count`; returns `true`
+3. No immediate structural change to snapshot or append buffer
 
 **TryNormalize (called by executor after each storage step):**
 1. Check threshold: if `_appendCount < AppendBufferSize`, return `false` (no-op)
 2. Otherwise, run `Normalize()`:
    1. Count live segments in a first pass to size the output array
-   2. Discover TTL-expired segments: call `seg.TryMarkAsRemoved()` on expired entries; collect them in the `expiredSegments` out list
+   2. Discover TTL-expired segments: call `TryRemove(seg)` on expired entries; collect them in the `expiredSegments` out list
    3. Merge `_snapshot` (excluding `IsRemoved`) and `_appendBuffer[0.._appendCount]` into the new array via merge-sort; re-check `IsRemoved` inline during the merge
    4. Under `_normalizeLock`: atomically publish the new snapshot and reset `_appendCount = 0`
    5. Leave `_appendBuffer` contents in place (see below)
@@ -242,7 +243,7 @@ LinkedListStrideIndexStorage
 └── _addsSinceLastNormalization: int           (counter; triggers stride rebuild at AppendBufferSize threshold)
 ```
 
-> Logical removal is tracked via `CachedSegment.IsRemoved` (an `int` field on each segment, set atomically via `Interlocked.CompareExchange`). No separate mask array is maintained; all reads and stride-index walks filter out segments where `IsRemoved == true`. Physical unlinking of removed nodes from `_list` happens during stride normalization.
+> Logical removal is tracked via `CachedSegment.IsRemoved` (an `int` field on each segment, set via `Volatile.Write`). No separate mask array is maintained; all reads and stride-index walks filter out segments where `IsRemoved == true`. Physical unlinking of removed nodes from `_list` happens during stride normalization.
 
 **No `_nodeMap`:** The stride index stores `LinkedListNode<T>` references directly, eliminating the need for a separate segment-to-node dictionary. Callers use `anchorNode.List != null` to verify the node is still linked before walking from it.
 
@@ -270,8 +271,9 @@ LinkedListStrideIndexStorage
 4. Normalization is NOT triggered here — the executor calls `TryNormalize` explicitly after the storage step
 
 **Remove segment (logical removal):**
-1. Call `segment.TryMarkAsRemoved()` — sets `segment.IsRemoved = true` atomically (Interlocked.CompareExchange)
-2. No immediate structural change to the list or stride index
+1. `SegmentStorageBase.TryRemove(segment)` checks `segment.IsRemoved`; if already removed, returns `false` (no-op)
+2. Otherwise calls `segment.MarkAsRemoved()` (`Volatile.Write`) and decrements `_count`; returns `true`
+3. No immediate structural change to the list or stride index
 
 **TryNormalize (called by executor after each storage step):**
 1. Check threshold: if `_addsSinceLastNormalization < AppendBufferSize`, return `false` (no-op)
@@ -282,7 +284,7 @@ LinkedListStrideIndexStorage
 
 Pass 1 — build new stride index:
 1. Walk `_list` from head to tail
-2. Discover TTL-expired segments: call `seg.TryMarkAsRemoved()` on expired entries; collect them in the `expiredSegments` out list
+2. Discover TTL-expired segments: call `TryRemove(seg)` on expired entries; collect them in the `expiredSegments` out list
 3. For each **live** node (skip `IsRemoved` nodes without unlinking them): if this is the Nth live node seen, add it to the new stride anchor array
 4. Publish new stride index: `Interlocked.Exchange(_strideIndex, newArray)` (release fence)
 

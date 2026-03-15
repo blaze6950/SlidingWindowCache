@@ -40,8 +40,8 @@ CacheNormalizationExecutor
   │         executor.Execute(pressure, allSegments, justStored)
   │              └─ selector.TrySelectCandidate(...)  [loop until satisfied]
   │
-  ├─ [for each toRemove]: storage.Remove(segment)      ← processor is sole storage writer
-  └─ engine.OnSegmentsRemoved(toRemove)
+  ├─ [for each toRemove]: storage.TryRemove(segment)   ← processor is sole storage writer
+  └─ engine.OnSegmentRemoved(segment)  per removed segment
        └─ evaluator.OnSegmentRemoved(...)  per segment
 ```
 
@@ -292,22 +292,22 @@ The Eviction Engine (`EvictionEngine<TRange, TData>`) is the **single eviction f
 ### Responsibilities
 
 - Delegates selector metadata operations (`UpdateMetadata`, `InitializeSegment`) to `IEvictionSelector`.
-- Notifies the `EvictionPolicyEvaluator` of segment lifecycle events via `InitializeSegment` and `OnSegmentsRemoved`, keeping stateful policy aggregates consistent.
+- Notifies the `EvictionPolicyEvaluator` of segment lifecycle events via `InitializeSegment` and `OnSegmentRemoved`, keeping stateful policy aggregates consistent.
 - Evaluates all policies and executes the constraint satisfaction loop via `EvaluateAndExecute`. Returns the list of segments the processor must remove from storage.
 - Fires eviction-specific diagnostics internally.
 
 ### API
 
-| Method                                                | Delegates to                                                                                                 | Called in                             |
-|-------------------------------------------------------|--------------------------------------------------------------------------------------------------------------|---------------------------------------|
-| `UpdateMetadata(usedSegments)`                        | `selector.UpdateMetadata`                                                                                    | Step 1                                |
-| `InitializeSegment(segment)`                          | `selector.InitializeMetadata` + `evaluator.OnSegmentAdded`                                                   | Step 2 (per segment)                  |
-| `EvaluateAndExecute(allSegments, justStoredSegments)` | `evaluator.Evaluate` → if exceeded: `executor.Execute` → returns to-remove list + fires eviction diagnostics | Step 3+4                              |
-| `OnSegmentsRemoved(removedSegments)`                  | `evaluator.OnSegmentRemoved` per segment                                                                     | After processor's storage.Remove loop |
+| Method                                                | Delegates to                                                                                                 | Called in                                |
+|-------------------------------------------------------|--------------------------------------------------------------------------------------------------------------|------------------------------------------|
+| `UpdateMetadata(usedSegments)`                        | `selector.UpdateMetadata`                                                                                    | Step 1                                   |
+| `InitializeSegment(segment)`                          | `selector.InitializeMetadata` + `evaluator.OnSegmentAdded`                                                   | Step 2 (per segment)                     |
+| `EvaluateAndExecute(allSegments, justStoredSegments)` | `evaluator.Evaluate` → if exceeded: `executor.Execute` → returns to-remove list + fires eviction diagnostics | Step 3+4                                 |
+| `OnSegmentRemoved(segment)`                           | `evaluator.OnSegmentRemoved(segment)`                                                                        | After processor's storage.TryRemove loop |
 
 ### Storage Ownership
 
-The engine holds **no reference to `ISegmentStorage`**. All `storage.TryAdd` and `storage.Remove` calls remain exclusively in `CacheNormalizationExecutor` (Invariant VPC.A.10).
+The engine holds **no reference to `ISegmentStorage`**. All `storage.TryAdd` and `storage.TryRemove` calls remain exclusively in `CacheNormalizationExecutor` (Invariant VPC.A.10).
 
 ### Diagnostics Split
 
@@ -421,7 +421,7 @@ Step 3+4: EvaluateAndExecute                     (EvictionEngine)
    |              → selector.TrySelectCandidate(...)  [loop until pressure satisfied]
    |        Returns: toRemove list
    |
-Step 4 (storage): Remove evicted segments        (CacheNormalizationExecutor, sole storage writer)
+Step 4 (storage): TryRemove evicted segments      (CacheNormalizationExecutor, sole storage writer)
    |      + engine.OnSegmentRemoved(segment) per removed segment
    |        → evaluator.OnSegmentRemoved(...)  per segment
 ```

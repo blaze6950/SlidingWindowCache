@@ -56,7 +56,14 @@ internal sealed class SnapshotReadStorage<TRange, TData, TDomain> : ICacheStorag
     /// <inheritdoc />
     public ReadOnlyMemory<TData> Read(Range<TRange> range)
     {
-        if (_storage.Length == 0)
+        // Capture _storage once: this single volatile read provides the acquire fence that
+        // guarantees all writes preceding Rematerialize()'s volatile store are visible —
+        // including the Range write. Using 'storage' for all subsequent accesses avoids a
+        // second volatile read that could see a different (newer) array than the Range value
+        // captured on the same call, which would produce an inconsistent offset calculation.
+        var storage = _storage;
+
+        if (storage.Length == 0)
         {
             return ReadOnlyMemory<TData>.Empty;
         }
@@ -69,7 +76,7 @@ internal sealed class SnapshotReadStorage<TRange, TData, TDomain> : ICacheStorag
         var length = (int)range.Span(_domain);
 
         // Return a view directly over the internal array - zero allocations
-        return new ReadOnlyMemory<TData>(_storage, (int)startOffset, length);
+        return new ReadOnlyMemory<TData>(storage, (int)startOffset, length);
     }
 
     /// <inheritdoc />

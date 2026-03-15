@@ -85,7 +85,7 @@ Read `docs/shared/invariants.md`, `docs/sliding-window/invariants.md`, and `docs
 3. **Segment non-overlap** (VPC.C.3): no two segments share any discrete domain point — `End[i] < Start[i+1]` strictly
 4. **Segments never merge** (VPC.C.2): even adjacent segments remain separate forever
 5. **Just-stored segment immunity** (VPC.E.3): segment stored in the current background step is excluded from eviction candidates. Without this, infinite fetch-store-evict loops occur under LRU
-6. **Idempotent removal** (VPC.T.1): `CachedSegment.MarkAsRemoved()` uses `Interlocked.CompareExchange` — only first caller (TTL or eviction) performs storage removal
+6. **Idempotent removal** (VPC.T.1): `ISegmentStorage.TryRemove()` checks `segment.IsRemoved` before calling `segment.MarkAsRemoved()` (`Volatile.Write`) — only the first caller (TTL normalization or eviction) performs storage removal and decrements the count
 
 **Shared:**
 1. **Activity counter ordering** (S.H.1/S.H.2): increment BEFORE work is made visible; decrement in `finally` blocks ALWAYS. Violating causes `WaitForIdleAsync` to hang or return prematurely
@@ -104,7 +104,7 @@ These packages share interfaces but have fundamentally different internals. Do N
 | Prefetch | Geometry-based expansion (`LeftCacheSize`/`RightCacheSize`) | Strictly demand-driven; never prefetches |
 | Cancellation | Rebalance execution is cancellable via CTS | Background events are NOT cancellable |
 | Consistency modes | Eventual, Hybrid, Strong | Eventual, Strong (no Hybrid) |
-| Execution contexts | User Thread + Intent Loop + Execution Loop | User Thread + Background Storage Loop + TTL Loop |
+| Execution contexts | User Thread + Intent Loop + Execution Loop | User Thread + Background Storage Loop |
 
 ## Dangerous Modifications
 
@@ -119,7 +119,7 @@ These changes appear reasonable but silently violate invariants. Functional test
 - **Removing just-stored segment immunity**: causes infinite fetch-store-evict loops under LRU (just-stored segment has earliest `LastAccessedAt`)
 - **Adding `IDataSource` calls to VPC Background Path**: blocks FIFO event processing, delays metadata updates, no cancellation infrastructure for I/O
 - **Publishing intents from SWC Rebalance Execution**: creates positive feedback loop — system never reaches idle, disposal hangs
-- **Using `Volatile.Write` instead of `Interlocked.CompareExchange` in `MarkAsRemoved()`**: both TTL and eviction proceed to remove, corrupting policy aggregates
+- **Removing the `IsRemoved` check from `SegmentStorageBase.TryRemove()`**: both TTL normalization and eviction proceed to call `MarkAsRemoved()` and decrement the policy aggregate count, corrupting eviction pressure calculations
 - **Swallowing exceptions in User Path**: user receives empty/partial data with no failure signal; `CacheInteraction` classification becomes misleading
 - **Adding locks around SWC `CacheState` reads**: creates lock contention between User Path and Rebalance — violates "user requests never block on rebalance"
 

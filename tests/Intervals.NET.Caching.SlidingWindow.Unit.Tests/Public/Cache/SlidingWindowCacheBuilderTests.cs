@@ -312,18 +312,20 @@ public sealed class SlidingWindowCacheBuilderTests
     }
 
     [Fact]
-    public async Task Build_CanBeCalledMultipleTimes_ReturnsDifferentInstances()
+    public async Task Build_CalledTwice_ThrowsInvalidOperationException()
     {
         // ARRANGE
         var builder = SlidingWindowCacheBuilder.For(CreateDataSource(), Domain)
             .WithOptions(DefaultOptions());
 
-        // ACT
-        await using var cache1 = builder.Build();
-        await using var cache2 = builder.Build();
+        await using var cache1 = builder.Build(); // first call succeeds
 
-        // ASSERT — each Build() call creates a new independent instance
-        Assert.NotSame(cache1, cache2);
+        // ACT — second call should throw
+        var exception = Record.Exception(() => builder.Build());
+
+        // ASSERT
+        Assert.NotNull(exception);
+        Assert.IsType<InvalidOperationException>(exception);
     }
 
     #endregion

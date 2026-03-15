@@ -43,7 +43,7 @@ VisitedPlaces-specific term definitions. Shared terms — `IRangeCache`, `IDataS
 
 **SegmentTtl** — An optional `TimeSpan` configured on `VisitedPlacesCacheOptions`. When set, an `ExpiresAt` timestamp is computed at segment storage time (`now + SegmentTtl`). Expired segments are filtered from reads by `FindIntersecting` (immediate invisibility) and physically removed during the next `TryNormalize` pass on the Background Storage Loop. When null (default), no TTL is applied and segments are only removed by eviction.
 
-**Idempotent Removal** — The safety mechanism applied during TTL normalization and eviction. `ISegmentStorage.Remove(segment)` checks `segment.IsRemoved` before calling `segment.MarkAsRemoved()` (`Volatile.Write`), making double-removal a no-op. This prevents a segment from being counted twice against eviction policy aggregates if both TTL normalization and eviction attempt to remove it in the same normalization pass. See Invariant VPC.T.1.
+**Idempotent Removal** — The safety mechanism applied during TTL normalization and eviction. `ISegmentStorage.TryRemove(segment)` checks `segment.IsRemoved` before calling `segment.MarkAsRemoved()` (`Volatile.Write`), making double-removal a no-op. This prevents a segment from being counted twice against eviction policy aggregates if both TTL normalization and eviction attempt to remove it in the same normalization pass. See Invariant VPC.T.1.
 
 ---
 

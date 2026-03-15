@@ -282,7 +282,7 @@ public sealed class SegmentStorageBaseTests
 
     [Theory]
     [MemberData(nameof(AllStrategies))]
-    public void TryAddRange_IntraBatchOverlap_OnlyFirstOfPairStored(object factoryObj, string strategyName)
+    public void TryAddRange_IntraBatchOverlap_AllAcceptedBecausePeersNotYetVisible(object factoryObj, string strategyName)
     {
         // ARRANGE — [10, 20] and [15, 25] overlap each other (intra-batch).
         // VPC.C.3 is enforced against already-stored segments; intra-batch overlap between

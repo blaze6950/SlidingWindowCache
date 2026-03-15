@@ -1,12 +1,12 @@
 # Diagnostics — VisitedPlaces Cache
 
-For the shared diagnostics pattern (two-tier design, zero-cost abstraction, `BackgroundOperationFailed` critical requirement), see `docs/shared/diagnostics.md`. This document covers the two-level diagnostics hierarchy, all 16 events (5 shared + 11 VPC-specific), and VPC-specific usage patterns.
+For the shared diagnostics pattern (two-tier design, zero-cost abstraction, `BackgroundOperationFailed` critical requirement), see `docs/shared/diagnostics.md`. This document covers the two-level diagnostics hierarchy, all 15 events (5 shared + 10 VPC-specific), and VPC-specific usage patterns.
 
 ---
 
 ## Interfaces: `ICacheDiagnostics` and `IVisitedPlacesCacheDiagnostics`
 
-The diagnostics system uses a two-level hierarchy. The shared `ICacheDiagnostics` interface (in `Intervals.NET.Caching`) defines 5 events common to all cache implementations. `IVisitedPlacesCacheDiagnostics` (in `Intervals.NET.Caching.VisitedPlaces`) extends it with 11 VPC-specific events.
+The diagnostics system uses a two-level hierarchy. The shared `ICacheDiagnostics` interface (in `Intervals.NET.Caching`) defines 5 events common to all cache implementations. `IVisitedPlacesCacheDiagnostics` (in `Intervals.NET.Caching.VisitedPlaces`) extends it with 10 VPC-specific events.
 
 ```csharp
 // Shared foundation — Intervals.NET.Caching
@@ -41,7 +41,6 @@ public interface IVisitedPlacesCacheDiagnostics : ICacheDiagnostics
     void EvictionSegmentRemoved();
 
     // TTL Events
-    void TtlWorkItemScheduled();
     void TtlSegmentExpired();
 }
 ```
@@ -74,7 +73,7 @@ Console.WriteLine($"Eviction passes: {diagnostics.EvictionEvaluated}");
 Features:
 - Thread-safe (`Interlocked.Increment`, `Volatile.Read`)
 - Low overhead (~1–5 ns per event)
-- Read-only properties for all 16 counters (5 shared + 11 VPC-specific)
+- Read-only properties for all 15 counters (5 shared + 10 VPC-specific)
 - `Reset()` method for test isolation
 - `AssertBackgroundLifecycleIntegrity()` helper: verifies `Received == Processed + Failed`
 
@@ -109,11 +108,10 @@ public class PrometheusMetricsDiagnostics : IVisitedPlacesCacheDiagnostics
 
 ## Execution Context Summary
 
-| Thread                                        | Events fired                                                                                                                                                                                                                                                           |
-|-----------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| **User Thread**                               | `UserRequestServed`, `UserRequestFullCacheHit`, `UserRequestPartialCacheHit`, `UserRequestFullCacheMiss`, `DataSourceFetchGap`                                                                                                                                         |
-| **Background Thread (Normalization Loop)**    | `NormalizationRequestReceived`, `NormalizationRequestProcessed`, `BackgroundStatisticsUpdated`, `BackgroundSegmentStored`, `EvictionEvaluated`, `EvictionTriggered`, `EvictionExecuted`, `EvictionSegmentRemoved`, `TtlWorkItemScheduled`, `BackgroundOperationFailed` |
-| **Background Thread (TTL / Fire-and-forget)** | `TtlSegmentExpired`                                                                                                                                                                                                                                                    |
+| Thread                                     | Events fired                                                                                                                                                                                                                                                        |
+|--------------------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| **User Thread**                            | `UserRequestServed`, `UserRequestFullCacheHit`, `UserRequestPartialCacheHit`, `UserRequestFullCacheMiss`, `DataSourceFetchGap`                                                                                                                                      |
+| **Background Thread (Normalization Loop)** | `NormalizationRequestReceived`, `NormalizationRequestProcessed`, `BackgroundStatisticsUpdated`, `BackgroundSegmentStored`, `EvictionEvaluated`, `EvictionTriggered`, `EvictionExecuted`, `EvictionSegmentRemoved`, `TtlSegmentExpired`, `BackgroundOperationFailed` |
 
 All hooks execute **synchronously** on the thread that triggers the event. See `docs/shared/diagnostics.md` for threading rules and what NOT to do inside hooks.
 
@@ -353,7 +351,7 @@ Assert.Equal(1, diagnostics.EvictionExecuted);
 **Location:** `CacheNormalizationExecutor.ExecuteAsync` (step 4 — per-segment removal loop)  
 **Context:** Background Thread (Normalization Loop)  
 **Invariant:** VPC.E.6  
-**Fires once per segment physically removed** — segments that fail `MarkAsRemoved()` (already claimed by TTL) are not counted  
+**Fires once per segment physically removed** — segments where `TryRemove()` returns `false` (already claimed by TTL normalization) are not counted  
 **Relationship:** `EvictionSegmentRemoved >= EvictionExecuted` (multiple segments may be removed per eviction pass)
 
 ```csharp
@@ -368,35 +366,18 @@ Assert.Equal(1, diagnostics.EvictionSegmentRemoved);
 
 ### TTL Events
 
-#### `TtlWorkItemScheduled()`
-**Tracks:** A TTL expiration work item scheduled for a newly stored segment  
-**Location:** `CacheNormalizationExecutor.ExecuteAsync` (step 2 — per segment stored, when TTL enabled)  
-**Context:** Background Thread (Normalization Loop)  
-**Invariant:** VPC.T.2  
-**Fires once per segment stored when `SegmentTtl` is non-null**  
-**Relationship:** `TtlWorkItemScheduled == BackgroundSegmentStored` when TTL is enabled
-
-```csharp
-// TTL-enabled cache
-await cache.GetDataAsync(Range.Closed(100, 200), ct);
-await cache.WaitForIdleAsync();
-Assert.Equal(1, diagnostics.BackgroundSegmentStored);
-Assert.Equal(1, diagnostics.TtlWorkItemScheduled);
-```
-
----
-
 #### `TtlSegmentExpired()`
-**Tracks:** A segment successfully expired and removed by the TTL actor  
-**Location:** `TtlExpirationExecutor.ExecuteAsync` — fires only when `segment.MarkAsRemoved()` returns `true`  
-**Context:** Background Thread (TTL / Fire-and-forget thread pool)  
+**Tracks:** A segment successfully expired and removed during TTL normalization  
+**Location:** `CacheNormalizationExecutor.ExecuteAsync` (step 2b — per expired segment discovered during `TryNormalize`)  
+**Context:** Background Thread (Normalization Loop)  
 **Invariant:** VPC.T.1  
-**Fires only on actual removal** — if the segment was already evicted by a capacity policy before its TTL, `MarkAsRemoved()` returns `false` and this event does NOT fire  
-**Thread note:** TTL work items run concurrently on thread pool threads; multiple `TtlSegmentExpired` events may fire concurrently
+**Fires only on actual removal** — if the segment was already evicted by a capacity policy before its TTL was discovered by `TryNormalize`, `TryRemove()` returns `false` and this event does NOT fire  
 
 ```csharp
-// Wait long enough for TTL expiry
-await Task.Delay(TimeSpan.FromSeconds(31));
+// Advance fake time past TTL, trigger normalization, verify
+fakeTime.Advance(ttl + TimeSpan.FromSeconds(1));
+await cache.GetDataAsync(someRange, ct);  // triggers normalization
+await cache.WaitForIdleAsync();
 Assert.True(diagnostics.TtlSegmentExpired >= 1);
 ```
 
@@ -471,8 +452,8 @@ public static void AssertEvictionLifecycleIntegrity(EventCounterCacheDiagnostics
 [Fact]
 public async Task TtlAndEviction_BothClaimSegment_OnlyOneRemovalCounted()
 {
-    // A segment evicted by capacity BEFORE its TTL fires should not count
-    // in TtlSegmentExpired (MarkAsRemoved returns false for the TTL actor)
+    // A segment evicted by capacity BEFORE its TTL is discovered by TryNormalize should not count
+    // in TtlSegmentExpired (TryRemove returns false for the second caller)
     var diagnostics = new EventCounterCacheDiagnostics();
     // ... scenario setup ...
 
@@ -488,7 +469,7 @@ public async Task TtlAndEviction_BothClaimSegment_OnlyOneRemovalCounted()
 
 | Implementation                 | Per-Event Cost                              | Memory                                              |
 |--------------------------------|---------------------------------------------|-----------------------------------------------------|
-| `EventCounterCacheDiagnostics` | ~1–5 ns (`Interlocked.Increment`, no alloc) | 64 bytes (16 integers: 5 shared + 11 VPC-specific)  |
+| `EventCounterCacheDiagnostics` | ~1–5 ns (`Interlocked.Increment`, no alloc) | 60 bytes (15 integers: 5 shared + 10 VPC-specific)  |
 | `NoOpDiagnostics`              | Zero (JIT-eliminated)                       | 0 bytes                                             |
 
 Recommendation:
