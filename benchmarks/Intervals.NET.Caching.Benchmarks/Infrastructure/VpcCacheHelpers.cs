@@ -80,7 +80,7 @@ public static class VpcCacheHelpers
         int maxSegmentCount,
         EvictionSelectorType selectorType = EvictionSelectorType.Lru,
         int appendBufferSize = 8,
-        int? eventChannelCapacity = 128)
+        int? eventChannelCapacity = null)
     {
         var options = new VisitedPlacesCacheOptions<int, int>(
             storageStrategy: CreateStorageOptions(strategyType, appendBufferSize),
@@ -96,7 +96,9 @@ public static class VpcCacheHelpers
     /// <summary>
     /// Populates a VPC cache with the specified number of adjacent, non-overlapping segments.
     /// Each segment has the specified span, placed adjacently starting from startPosition.
-    /// Uses strong consistency (GetDataAndWaitForIdleAsync) to guarantee segments are stored.
+    /// Fires all GetDataAsync calls in a tight loop, then waits for idle once to flush the
+    /// background storage loop. Requires an unbounded event channel (eventChannelCapacity: null)
+    /// to avoid backpressure blocking on GetDataAsync.
     /// </summary>
     /// <param name="cache">The cache to populate.</param>
     /// <param name="segmentCount">Number of segments to create.</param>
@@ -113,13 +115,18 @@ public static class VpcCacheHelpers
             var start = startPosition + (i * segmentSpan);
             var end = start + segmentSpan - 1;
             var range = Factories.Range.Closed<int>(start, end);
-            cache.GetDataAndWaitForIdleAsync(range).GetAwaiter().GetResult();
+            cache.GetDataAsync(range, CancellationToken.None).GetAwaiter().GetResult();
         }
+
+        cache.WaitForIdleAsync().GetAwaiter().GetResult();
     }
 
     /// <summary>
     /// Populates a VPC cache with segments that have gaps between them.
     /// Each segment has the specified span, separated by gaps of the specified size.
+    /// Fires all GetDataAsync calls in a tight loop, then waits for idle once to flush the
+    /// background storage loop. Requires an unbounded event channel (eventChannelCapacity: null)
+    /// to avoid backpressure blocking on GetDataAsync.
     /// </summary>
     /// <param name="cache">The cache to populate.</param>
     /// <param name="segmentCount">Number of segments to create.</param>
@@ -139,7 +146,9 @@ public static class VpcCacheHelpers
             var start = startPosition + (i * stride);
             var end = start + segmentSpan - 1;
             var range = Factories.Range.Closed<int>(start, end);
-            cache.GetDataAndWaitForIdleAsync(range).GetAwaiter().GetResult();
+            cache.GetDataAsync(range, CancellationToken.None).GetAwaiter().GetResult();
         }
+
+        cache.WaitForIdleAsync().GetAwaiter().GetResult();
     }
 }
