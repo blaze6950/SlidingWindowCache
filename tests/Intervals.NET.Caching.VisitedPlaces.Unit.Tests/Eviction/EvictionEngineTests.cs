@@ -164,7 +164,7 @@ public sealed class EvictionEngineTests
 
         // ACT
         engine.InitializeSegment(segment);
-            storage.TryAdd(segment);
+        storage.TryAdd(segment);
 
         // ASSERT — stateful policy now knows about the segment → evaluates as exceeded
         var toRemove = engine.EvaluateAndExecute([segment]).ToList(); // immune → empty result

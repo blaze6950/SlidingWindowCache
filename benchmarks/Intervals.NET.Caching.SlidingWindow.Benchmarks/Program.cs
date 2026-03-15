@@ -7,7 +7,6 @@ namespace Intervals.NET.Caching.SlidingWindow.Benchmarks;
 /// </summary>
 public class Program
 {
-    // TODO: add benchmakrs for VPC
     public static void Main(string[] args)
     {
         // Run all benchmark classes
