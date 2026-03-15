@@ -466,6 +466,129 @@ public sealed class LinkedListStrideIndexStorageTests
 
     #endregion
 
+    #region AddRange Tests
+
+    [Fact]
+    public void AddRange_WithEmptyArray_DoesNotChangeCount()
+    {
+        // ARRANGE
+        var storage = new LinkedListStrideIndexStorage<int, int>();
+
+        // ACT
+        storage.AddRange([]);
+
+        // ASSERT
+        Assert.Equal(0, storage.Count);
+    }
+
+    [Fact]
+    public void AddRange_WithMultipleSegments_UpdatesCountCorrectly()
+    {
+        // ARRANGE
+        var storage = new LinkedListStrideIndexStorage<int, int>();
+        var segments = new[]
+        {
+            CreateSegment(0, 9),
+            CreateSegment(20, 29),
+            CreateSegment(40, 49),
+        };
+
+        // ACT
+        storage.AddRange(segments);
+
+        // ASSERT
+        Assert.Equal(3, storage.Count);
+    }
+
+    [Fact]
+    public void AddRange_WithMultipleSegments_AllSegmentsFoundByFindIntersecting()
+    {
+        // ARRANGE
+        var storage = new LinkedListStrideIndexStorage<int, int>();
+        var seg1 = CreateSegment(0, 9);
+        var seg2 = CreateSegment(20, 29);
+        var seg3 = CreateSegment(40, 49);
+
+        // ACT
+        storage.AddRange([seg1, seg2, seg3]);
+
+        // ASSERT
+        Assert.Single(storage.FindIntersecting(TestHelpers.CreateRange(0, 9)));
+        Assert.Single(storage.FindIntersecting(TestHelpers.CreateRange(20, 29)));
+        Assert.Single(storage.FindIntersecting(TestHelpers.CreateRange(40, 49)));
+    }
+
+    [Fact]
+    public void AddRange_WithUnsortedInput_SegmentsAreStillFindable()
+    {
+        // ARRANGE — pass segments in reverse order to verify AddRange sorts internally
+        var storage = new LinkedListStrideIndexStorage<int, int>();
+        var seg1 = CreateSegment(40, 49);
+        var seg2 = CreateSegment(0, 9);
+        var seg3 = CreateSegment(20, 29);
+
+        // ACT
+        storage.AddRange([seg1, seg2, seg3]);
+
+        // ASSERT — all three must be findable regardless of insertion order
+        Assert.Single(storage.FindIntersecting(TestHelpers.CreateRange(0, 9)));
+        Assert.Single(storage.FindIntersecting(TestHelpers.CreateRange(20, 29)));
+        Assert.Single(storage.FindIntersecting(TestHelpers.CreateRange(40, 49)));
+    }
+
+    [Fact]
+    public void AddRange_AfterExistingSegments_AllSegmentsFoundByFindIntersecting()
+    {
+        // ARRANGE — add two segments individually first, then bulk-add two more
+        var storage = new LinkedListStrideIndexStorage<int, int>();
+        AddSegment(storage, 0, 9);
+        AddSegment(storage, 20, 29);
+
+        var newSegments = new[]
+        {
+            CreateSegment(40, 49),
+            CreateSegment(60, 69),
+        };
+
+        // ACT
+        storage.AddRange(newSegments);
+
+        // ASSERT — all four segments findable
+        Assert.Equal(4, storage.Count);
+        Assert.Single(storage.FindIntersecting(TestHelpers.CreateRange(0, 9)));
+        Assert.Single(storage.FindIntersecting(TestHelpers.CreateRange(20, 29)));
+        Assert.Single(storage.FindIntersecting(TestHelpers.CreateRange(40, 49)));
+        Assert.Single(storage.FindIntersecting(TestHelpers.CreateRange(60, 69)));
+    }
+
+    [Fact]
+    public void AddRange_NormalizesStrideIndexOnce_NotOncePerSegment()
+    {
+        // ARRANGE — use a stride threshold of 2 so normalization would fire after every 2 Add() calls;
+        // AddRange with 4 segments should trigger exactly one NormalizeStrideIndex, not 4 separate ones.
+        var storage = new LinkedListStrideIndexStorage<int, int>(appendBufferSize: 2, stride: 2);
+        var segments = new[]
+        {
+            CreateSegment(0, 9),
+            CreateSegment(20, 29),
+            CreateSegment(40, 49),
+            CreateSegment(60, 69),
+        };
+
+        // ACT — no exception means normalization completed without intermediate half-normalized states
+        var exception = Record.Exception(() => storage.AddRange(segments));
+
+        // ASSERT — all segments are findable after the single normalization pass
+        Assert.Null(exception);
+        Assert.Equal(4, storage.Count);
+        Assert.Single(storage.FindIntersecting(TestHelpers.CreateRange(0, 9)));
+        Assert.Single(storage.FindIntersecting(TestHelpers.CreateRange(20, 29)));
+        Assert.Single(storage.FindIntersecting(TestHelpers.CreateRange(40, 49)));
+        Assert.Single(storage.FindIntersecting(TestHelpers.CreateRange(60, 69)));
+    }
+
+    #endregion
+
     #region Helpers
 
     private static CachedSegment<int, int> AddSegment(
@@ -479,6 +602,19 @@ public sealed class LinkedListStrideIndexStorageTests
             new ReadOnlyMemory<int>(new int[end - start + 1]));
         storage.Add(segment);
         return segment;
+    }
+
+    /// <summary>
+    /// Creates a <see cref="CachedSegment{TRange,TData}"/> without adding it to storage.
+    /// Use this in <c>AddRange</c> tests to build the input array before calling
+    /// <see cref="LinkedListStrideIndexStorage{TRange,TData}.AddRange"/>.
+    /// </summary>
+    private static CachedSegment<int, int> CreateSegment(int start, int end)
+    {
+        var range = TestHelpers.CreateRange(start, end);
+        return new CachedSegment<int, int>(
+            range,
+            new ReadOnlyMemory<int>(new int[end - start + 1]));
     }
 
     #endregion

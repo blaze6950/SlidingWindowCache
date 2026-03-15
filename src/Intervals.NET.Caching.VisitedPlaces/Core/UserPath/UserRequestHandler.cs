@@ -75,7 +75,7 @@ internal sealed class UserRequestHandler<TRange, TData, TDomain>
         var hittingSegments = _storage.FindIntersecting(requestedRange);
 
         CacheInteraction cacheInteraction;
-        IEnumerable<RangeChunk<TRange, TData>>? fetchedChunks;
+        IReadOnlyList<RangeChunk<TRange, TData>>? fetchedChunks;
         ReadOnlyMemory<TData> resultData;
         Range<TRange>? actualRange;
 

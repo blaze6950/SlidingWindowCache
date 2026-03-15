@@ -123,6 +123,52 @@ internal sealed class SnapshotAppendBufferStorage<TRange, TData> : SegmentStorag
     }
 
     /// <inheritdoc/>
+    /// <remarks>
+    /// Bypasses the append buffer entirely: sorts <paramref name="segments"/>, merges them with the
+    /// current snapshot, and publishes the result atomically via <see cref="Interlocked.Exchange"/>.
+    /// The append buffer is intentionally left untouched — its contents remain visible to
+    /// <see cref="FindIntersecting"/> via the independent buffer scan and will be drained by the
+    /// next <see cref="Normalize"/> triggered by subsequent <see cref="Add"/> calls.
+    /// Using <see cref="Interlocked.Exchange"/> (rather than <c>_normalizeLock</c>) is safe here
+    /// because <c>_appendCount</c> is NOT modified: the lock's purpose is to synchronise the
+    /// atomic update of both <c>_snapshot</c> and <c>_appendCount</c>; since only <c>_snapshot</c>
+    /// changes, a release fence via <see cref="Interlocked.Exchange"/> suffices.
+    /// </remarks>
+    public override void AddRange(CachedSegment<TRange, TData>[] segments)
+    {
+        if (segments.Length == 0)
+        {
+            return;
+        }
+
+        // Sort incoming segments by range start (Background Path owns the array exclusively).
+        segments.AsSpan().Sort(static (a, b) => a.Range.Start.Value.CompareTo(b.Range.Start.Value));
+
+        var snapshot = Volatile.Read(ref _snapshot);
+
+        // Count live entries in the current snapshot (removes do not affect incoming segments).
+        var liveSnapshotCount = 0;
+        for (var i = 0; i < snapshot.Length; i++)
+        {
+            if (!snapshot[i].IsRemoved)
+            {
+                liveSnapshotCount++;
+            }
+        }
+
+        // Merge current snapshot (left) with sorted incoming (right) — one allocation.
+        // Incoming segments are brand-new and therefore never IsRemoved; pass their full length
+        // as both rightLength and liveRightCount.
+        var merged = MergeSorted(snapshot, liveSnapshotCount, segments, segments.Length, segments.Length);
+
+        // Atomically replace the snapshot. _appendCount is NOT touched — the lock guards the
+        // (snapshot, appendCount) pair; since appendCount is unchanged, Interlocked.Exchange suffices.
+        Interlocked.Exchange(ref _snapshot, merged);
+
+        IncrementCount(segments.Length);
+    }
+
+    /// <inheritdoc/>
     public override CachedSegment<TRange, TData>? TryGetRandomSegment()
     {
         var snapshot = Volatile.Read(ref _snapshot);

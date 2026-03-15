@@ -365,6 +365,117 @@ public sealed class CacheNormalizationExecutorTests
 
     #endregion
 
+    #region ExecuteAsync — Bulk Storage Path
+
+    [Fact]
+    public async Task ExecuteAsync_WithTwoFetchedChunks_TakesBulkPath_StoresAllSegments()
+    {
+        // ARRANGE — 2 chunks triggers the bulk path (FetchedChunks.Count > 1)
+        var executor = CreateExecutor(maxSegmentCount: 100);
+        var chunk1 = CreateChunk(0, 9);
+        var chunk2 = CreateChunk(20, 29);
+
+        var request = CreateRequest(
+            requestedRange: TestHelpers.CreateRange(0, 29),
+            usedSegments: [],
+            fetchedChunks: [chunk1, chunk2]);
+
+        // ACT
+        await executor.ExecuteAsync(request, CancellationToken.None);
+
+        // ASSERT — both segments stored and diagnostics reflect 2 stores
+        Assert.Equal(2, _storage.Count);
+        Assert.Equal(2, _diagnostics.BackgroundSegmentStored);
+        Assert.Single(_storage.FindIntersecting(TestHelpers.CreateRange(0, 9)));
+        Assert.Single(_storage.FindIntersecting(TestHelpers.CreateRange(20, 29)));
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WithManyFetchedChunks_BulkPath_AllSegmentsStoredAndFindable()
+    {
+        // ARRANGE — 5 chunks: typical variable-span partial-hit with multiple gaps
+        var executor = CreateExecutor(maxSegmentCount: 100);
+        var chunks = new[]
+        {
+            CreateChunk(0, 9),
+            CreateChunk(20, 29),
+            CreateChunk(40, 49),
+            CreateChunk(60, 69),
+            CreateChunk(80, 89),
+        };
+
+        var request = CreateRequest(
+            requestedRange: TestHelpers.CreateRange(0, 89),
+            usedSegments: [],
+            fetchedChunks: chunks);
+
+        // ACT
+        await executor.ExecuteAsync(request, CancellationToken.None);
+
+        // ASSERT — all 5 segments stored and individually findable
+        Assert.Equal(5, _storage.Count);
+        Assert.Equal(5, _diagnostics.BackgroundSegmentStored);
+        Assert.Single(_storage.FindIntersecting(TestHelpers.CreateRange(0, 9)));
+        Assert.Single(_storage.FindIntersecting(TestHelpers.CreateRange(20, 29)));
+        Assert.Single(_storage.FindIntersecting(TestHelpers.CreateRange(40, 49)));
+        Assert.Single(_storage.FindIntersecting(TestHelpers.CreateRange(60, 69)));
+        Assert.Single(_storage.FindIntersecting(TestHelpers.CreateRange(80, 89)));
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_BulkPath_EvictionStillTriggeredCorrectly()
+    {
+        // ARRANGE — maxSegmentCount=3, pre-populate with 2, then bulk-add 2 more → count=4 > 3 → eviction
+        var (executor, engine) = CreateExecutorWithEngine(maxSegmentCount: 3);
+        AddPreexisting(engine, 0, 9);
+        AddPreexisting(engine, 20, 29);
+
+        var request = CreateRequest(
+            requestedRange: TestHelpers.CreateRange(40, 69),
+            usedSegments: [],
+            fetchedChunks: [CreateChunk(40, 49), CreateChunk(60, 69)]);
+
+        // ACT
+        await executor.ExecuteAsync(request, CancellationToken.None);
+
+        // ASSERT — eviction triggered once (count went from 2→4, one eviction brings it to 3)
+        Assert.Equal(1, _diagnostics.EvictionEvaluated);
+        Assert.Equal(1, _diagnostics.EvictionTriggered);
+        Assert.Equal(1, _diagnostics.EvictionExecuted);
+        Assert.Equal(3, _storage.Count);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_BulkPath_WhenStorageThrows_SwallowsExceptionAndFiresFailedDiagnostic()
+    {
+        // ARRANGE — ThrowingSegmentStorage.AddRange throws; verify Background Path swallows it
+        var throwingStorage = new ThrowingSegmentStorage();
+        var evictionEngine = new EvictionEngine<int, int>(
+            [new MaxSegmentCountPolicy<int, int>(100)],
+            new LruEvictionSelector<int, int>(),
+            _diagnostics);
+        var executor = new CacheNormalizationExecutor<int, int, IntegerFixedStepDomain>(
+            throwingStorage,
+            evictionEngine,
+            _diagnostics);
+
+        var request = CreateRequest(
+            requestedRange: TestHelpers.CreateRange(0, 29),
+            usedSegments: [],
+            fetchedChunks: [CreateChunk(0, 9), CreateChunk(20, 29)]);
+
+        // ACT
+        var ex = await Record.ExceptionAsync(() =>
+            executor.ExecuteAsync(request, CancellationToken.None));
+
+        // ASSERT — no exception propagated; failed diagnostic incremented
+        Assert.Null(ex);
+        Assert.Equal(1, _diagnostics.BackgroundOperationFailed);
+        Assert.Equal(0, _diagnostics.NormalizationRequestProcessed);
+    }
+
+    #endregion
+
     #region Helpers — Factories
 
     private (CacheNormalizationExecutor<int, int, IntegerFixedStepDomain> Executor,
@@ -460,6 +571,9 @@ public sealed class CacheNormalizationExecutorTests
         public IReadOnlyList<CachedSegment<int, int>> FindIntersecting(Range<int> range) => [];
 
         public void Add(CachedSegment<int, int> segment) =>
+            throw new InvalidOperationException("Simulated storage failure.");
+
+        public void AddRange(CachedSegment<int, int>[] segments) =>
             throw new InvalidOperationException("Simulated storage failure.");
 
         public bool TryRemove(CachedSegment<int, int> segment) => false;

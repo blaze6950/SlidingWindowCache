@@ -152,7 +152,7 @@ Assert.Equal(expectedCount, cache.SegmentCount);
 **VPC.B.3** [Architectural] Each `CacheNormalizationRequest` is processed in the following **fixed sequence**:
 
 1. Update metadata for all `UsedSegments` by delegating to the `EvictionEngine` (`engine.UpdateMetadata` → `selector.UpdateMetadata`)
-2. Store `FetchedData` as new segment(s), if present; call `engine.InitializeSegment(segment)` after each store
+2. Store `FetchedData` as new segment(s), if present. When `FetchedChunks.Count == 1`, a single `storage.Add` call is made. When `FetchedChunks.Count > 1` (multi-gap partial hit), `storage.AddRange` is used to insert all segments in a single structural update (see `docs/visited-places/storage-strategies.md` — Bulk Storage: AddRange). Call `engine.InitializeSegment(segment)` after each stored segment.
 3. Evaluate all Eviction Policies and execute eviction if any policy is exceeded (`engine.EvaluateAndExecute`), only if new data was stored in step 2
 4. Remove evicted segments from storage (`storage.Remove` per segment); call `engine.OnSegmentRemoved(segment)` after each removal
 
@@ -334,7 +334,8 @@ Assert.Equal(expectedCount, cache.SegmentCount);
 
 - When `EvictionEngine.EvaluateAndExecute` is invoked, the `justStoredSegments` list is passed to `EvictionExecutor.Execute`, which seeds the immune `HashSet` from it before the selection loop begins
 - The selector skips immune segments inline during sampling (the immune set is passed as a parameter to `TrySelectCandidate`)
-- The immune segment is the exact segment added in step 2 of the current event's processing sequence
+- For bulk stores (`AddRange`, when `FetchedChunks.Count > 1`), **all** segments stored in the current event cycle are in the immune set — not just the last one. This prevents any of the newly-stored gap segments from being immediately re-evicted in the same event cycle.
+- The immune segments are the exact segments added in step 2 of the current event's processing sequence
 
 **Rationale:** Without immunity, a newly-stored segment could be immediately evicted (e.g., by LRU, since its `LastAccessedAt` is the earliest among all segments). Immediate eviction of just-stored data would cause an infinite fetch-store-evict loop on every new access to an uncached range.
 
@@ -355,7 +356,7 @@ Assert.Equal(expectedCount, cache.SegmentCount);
 
 **VPC.E.4a** [Architectural] Per-segment metadata is initialized when the segment is stored:
 
-- `engine.InitializeSegment(segment)` is called by `CacheNormalizationExecutor` immediately after `_storage.Add(segment)`, which in turn calls `selector.InitializeMetadata(segment)`
+- `engine.InitializeSegment(segment)` is called by `CacheNormalizationExecutor` immediately after each `_storage.Add(segment)` or, for bulk stores, after each segment stored via `_storage.AddRange(segments[])`, which in turn calls `selector.InitializeMetadata(segment)`
 - Example: `LruMetadata { LastAccessedAt = TimeProvider.GetUtcNow().UtcDateTime }`, `FifoMetadata { CreatedAt = TimeProvider.GetUtcNow().UtcDateTime }`, `SmallestFirstMetadata { Span = segment.Range.Span(domain).Value }`
 
 **VPC.E.4b** [Architectural] Per-segment metadata is updated when the segment appears in a `CacheNormalizationRequest`'s `UsedSegments` list:

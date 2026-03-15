@@ -151,6 +151,37 @@ internal sealed class LinkedListStrideIndexStorage<TRange, TData> : SegmentStora
     }
 
     /// <inheritdoc/>
+    /// <remarks>
+    /// Inserts each segment via <see cref="InsertSorted"/> (O(log(n/N) + N) each), then runs a
+    /// single <see cref="NormalizeStrideIndex"/> pass after all insertions.  Compared to calling
+    /// <see cref="Add"/> in a loop, this defers stride-index rebuilds until all segments are in
+    /// the list — reducing normalization passes from O(count/appendBufferSize) down to one.
+    /// </remarks>
+    public override void AddRange(CachedSegment<TRange, TData>[] segments)
+    {
+        if (segments.Length == 0)
+        {
+            return;
+        }
+
+        // Sort incoming segments so each InsertSorted call starts from a reasonably close anchor.
+        segments.AsSpan().Sort(static (a, b) => a.Range.Start.Value.CompareTo(b.Range.Start.Value));
+
+        foreach (var segment in segments)
+        {
+            InsertSorted(segment);
+        }
+
+        IncrementCount(segments.Length);
+
+        // A single normalization after all insertions replaces the O(count/appendBufferSize)
+        // normalizations that would occur when calling Add() in a loop. NormalizeStrideIndex also
+        // resets _addsSinceLastNormalization = 0 in its finally block, so the next Add() call
+        // starts a fresh normalization cycle.
+        NormalizeStrideIndex();
+    }
+
+    /// <inheritdoc/>
     public override CachedSegment<TRange, TData>? TryGetRandomSegment()
     {
         if (_list.Count == 0)

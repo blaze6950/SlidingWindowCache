@@ -242,15 +242,19 @@ TTL Loop (only when SegmentTtl is configured)         [fire-and-forget per segme
 **Preconditions**:
 - User Path fetched multiple disjoint gap ranges from `IDataSource` to serve a `PartialHit`
 - Event has `UsedSegments: [S₁, ...]` and `FetchedData: <multiple gap ranges>`
+- `FetchedChunks.Count > 1` (two or more gap chunks in the request)
 
 **Sequence**:
 1. Background Path dequeues the event
 2. Update metadata for used segments: `engine.UpdateMetadata(usedSegments)`
-3. Store each gap range as a separate new `Segment` in `CachedSegments`
-   - Each stored segment is added independently; no merging with existing segments
-   - `engine.InitializeSegment(segment)` is called for each new segment
-4. `engine.EvaluateAndExecute(allSegments, justStoredSegments)` (after all new segments are stored)
+3. `CacheNormalizationExecutor` detects `FetchedChunks.Count > 1` and dispatches to `StoreBulkAsync`:
+   - Validate and wrap all fetched chunks into `CachedSegment` instances (`ValidateChunks`)
+   - Call `storage.AddRange(segments[])` — all N gap segments inserted in a single structural update
+   - For each stored segment: `engine.InitializeSegment(segment)` — attaches fresh metadata and notifies stateful policies
+4. `engine.EvaluateAndExecute(allSegments, justStoredSegments)` — `justStoredSegments` contains **all** segments from the bulk store; all are immune from eviction in this cycle (see VPC.E.3)
 5. If any policy fires: processor removes returned segments; calls `engine.OnSegmentRemoved(segment)` per removed segment
+
+**Why `AddRange` instead of N × `Add`:** For `SnapshotAppendBufferStorage`, N calls to `Add()` can trigger up to ⌈N/AppendBufferSize⌉ normalization passes, each O(n) — quadratic total cost for large caches with many gaps. `AddRange` performs a single O(n + N log N) structural update regardless of N. See `docs/visited-places/storage-strategies.md` — Bulk Storage: AddRange.
 
 **Note**: Gaps are stored as distinct segments. Segments are never merged, even when adjacent. Each independently-fetched sub-range occupies its own entry in `CachedSegments`. This preserves independent statistics per fetched unit.
 

@@ -36,6 +36,9 @@ internal abstract class SegmentStorageBase<TRange, TData> : ISegmentStorage<TRan
     public abstract void Add(CachedSegment<TRange, TData> segment);
 
     /// <inheritdoc/>
+    public abstract void AddRange(CachedSegment<TRange, TData>[] segments);
+
+    /// <inheritdoc/>
     public bool TryRemove(CachedSegment<TRange, TData> segment)
     {
         if (segment.TryMarkAsRemoved())
@@ -56,6 +59,15 @@ internal abstract class SegmentStorageBase<TRange, TData> : ISegmentStorage<TRan
     protected void IncrementCount()
     {
         Interlocked.Increment(ref _count);
+    }
+
+    /// <summary>
+    /// Atomically increments the live segment count by <paramref name="amount"/>.
+    /// Called by subclass <c>AddRange</c> implementations.
+    /// </summary>
+    protected void IncrementCount(int amount)
+    {
+        Interlocked.Add(ref _count, amount);
     }
 
     // -------------------------------------------------------------------------

@@ -240,7 +240,7 @@ CacheNormalizationExecutor
 
 | File                                                                | Type             | Visibility | Role                                                                                                                                      |
 |---------------------------------------------------------------------|------------------|------------|-------------------------------------------------------------------------------------------------------------------------------------------|
-| `Infrastructure/Storage/ISegmentStorage<TRange,TData>`              | interface        | internal   | Core storage contract: `Add`, `Remove`, `FindIntersecting`, `GetAll`, `GetRandomSegment`, `Count`                                         |
+| `Infrastructure/Storage/ISegmentStorage<TRange,TData>`              | interface        | internal   | Core storage contract: `Add`, `AddRange`, `Remove`, `FindIntersecting`, `GetAll`, `GetRandomSegment`, `Count`                             |
 | `Infrastructure/Storage/SegmentStorageBase<TRange,TData>`           | `abstract class` | internal   | Shared base for both strategies; implements `FindIntersecting` binary search anchor                                                       |
 | `Infrastructure/Storage/SnapshotAppendBufferStorage<TRange,TData>`  | `sealed class`   | internal   | Default; sorted snapshot + unsorted append buffer; User Path reads snapshot; Background Path normalizes buffer into snapshot periodically |
 | `Infrastructure/Storage/LinkedListStrideIndexStorage<TRange,TData>` | `sealed class`   | internal   | Alternative; doubly-linked list + stride index; O(log N) insertion + O(k) range query; better for high segment counts                     |
@@ -251,6 +251,7 @@ For performance characteristics and trade-offs, see `docs/visited-places/storage
 
 ```csharp
 void Add(CachedSegment<TRange, TData> segment);
+void AddRange(CachedSegment<TRange, TData>[] segments);  // Bulk insert for multi-gap events (FetchedChunks.Count > 1)
 void Remove(CachedSegment<TRange, TData> segment);
 IReadOnlyList<CachedSegment<TRange, TData>> FindIntersecting(Range<TRange> range);
 IReadOnlyList<CachedSegment<TRange, TData>> GetAll();

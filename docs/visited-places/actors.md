@@ -151,6 +151,7 @@ GetDataAsync()
 **Responsibilities**
 - Process each `CacheNormalizationRequest` in the fixed four-step sequence (Invariant VPC.B.3): (1) metadata update, (2) storage, (3) eviction evaluation + execution, (4) post-removal notification. See `docs/visited-places/architecture.md` — Threading Model, Context 2 for the authoritative step-by-step description.
 - Perform all `storage.Add` and `storage.Remove` calls (sole storage writer on the add path).
+- Use `storage.AddRange` for multi-gap events (`FetchedChunks.Count > 1`) to avoid quadratic normalization cost (see `docs/visited-places/storage-strategies.md` — Bulk Storage: AddRange).
 - Delegate all eviction concerns through `EvictionEngine` (sole eviction dependency).
 
 **Non-responsibilities**
@@ -179,7 +180,7 @@ GetDataAsync()
 **Responsibilities**
 - Maintain `CachedSegments` as a sorted, searchable, non-contiguous collection.
 - Support efficient range intersection queries for User Path reads.
-- Support efficient segment insertion for Background Path writes.
+- Support efficient segment insertion for Background Path writes, via both `Add` (single segment) and `AddRange` (bulk insert for multi-gap events).
 - Implement the selected storage strategy (Snapshot + Append Buffer, or LinkedList + Stride Index).
 
 **Non-responsibilities**

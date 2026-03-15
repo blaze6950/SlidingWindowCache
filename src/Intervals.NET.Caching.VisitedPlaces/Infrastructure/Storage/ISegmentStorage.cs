@@ -25,6 +25,18 @@ internal interface ISegmentStorage<TRange, TData>
     void Add(CachedSegment<TRange, TData> segment);
 
     /// <summary>
+    /// Adds multiple pre-validated, pre-sorted segments to the storage in a single bulk operation
+    /// (Background Path only). Reduces normalization overhead from O(count/bufferSize) normalizations
+    /// to a single pass — beneficial when a multi-gap partial-hit request produces many new segments.
+    /// </summary>
+    /// <remarks>
+    /// The caller is responsible for ensuring all segments in <paramref name="segments"/> are
+    /// non-overlapping and sorted by range start (Invariant VPC.C.3). Each segment must already
+    /// have passed the overlap pre-check against current storage contents.
+    /// </remarks>
+    void AddRange(CachedSegment<TRange, TData>[] segments);
+
+    /// <summary>
     /// Atomically removes a segment from the storage.
     /// </summary>
     /// <returns>

@@ -44,8 +44,41 @@ await using var cache = VisitedPlacesCacheBuilder.For(dataSource, domain)
 
 Both strategies expose the same internal interface:
 - **`FindIntersecting(RequestedRange)`** — returns all segments whose ranges intersect `RequestedRange` (User Path, read-only)
-- **`Add(Segment)`** — adds a new segment (Background Path, write-only)
+- **`Add(Segment)`** — adds a single new segment (Background Path, write-only)
+- **`AddRange(Segment[])`** — adds multiple new segments atomically in one operation (Background Path, write-only; see [Bulk Storage: AddRange](#bulk-storage-addrange) below)
 - **`Remove(Segment)`** — removes a segment, typically during eviction (Background Path, write-only)
+
+---
+
+## Bulk Storage: AddRange
+
+### Why AddRange Exists
+
+When a user requests a **variable-span range** that partially hits the cache, the User Path computes all uncovered gaps and fetches them from `IDataSource`. If there are N gap sub-ranges, the `CacheNormalizationRequest` carries N fetched chunks.
+
+**Constant-span workloads (e.g., sequential sliding-window reads)** typically produce 0 or 1 gap at most — `Add()` is sufficient.
+
+**Variable-span workloads (e.g., random-access, wide range queries)** can produce 2–100+ gaps in a single request. Without `AddRange`, the Background Path would call `Add()` N times. For `SnapshotAppendBufferStorage` this means:
+
+- N `Add()` calls → potentially N normalization passes
+- Each normalization pass is O(n + m) where n = current snapshot size, m = buffer size
+- Total cost: **O(N × n)** — quadratic in the number of gaps for large caches
+
+`AddRange(Segment[])` eliminates this by merging all incoming segments in **a single structural update**:
+
+| FetchedChunks count | Path used    | Normalization passes | Cost           |
+|---------------------|--------------|----------------------|----------------|
+| 0 or 1              | `Add()`      | At most 1            | O(n + m)       |
+| > 1                 | `AddRange()` | Exactly 1            | O(n + N log N) |
+
+The branching logic lives in `CacheNormalizationExecutor.StoreBulkAsync` — it dispatches to `AddRange` when `FetchedChunks.Count > 1`, and to `Add` otherwise. `TryGetNonEnumeratedCount()` is used for the branch check since `FetchedChunks` is typed as `IEnumerable<RangeChunk<TRange, TData>>`.
+
+### Contract
+
+- Input must be a non-empty array of **non-overlapping, pre-validated** `CachedSegment` instances (caller responsibility)
+- Segments may arrive **in any order** — both strategies sort internally before merging
+- An empty array is a legal no-op
+- Like `Add()`, `AddRange()` is exclusive to the Background Path (single-writer guarantee, VPC.A.1)
 
 ---
 
@@ -129,6 +162,21 @@ SnapshotAppendBufferStorage
 **Why `_appendBuffer` is not cleared after normalization:** A `FindIntersecting` call that captured `appendCount > 0` before the lock update is still iterating `_appendBuffer` lock-free when `Normalize` completes. Calling `Array.Clear` on the shared buffer at that point nulls out slots the reader is actively dereferencing, causing a `NullReferenceException`. Stale references left in the buffer are harmless: readers entering after the lock update capture `appendCount = 0` and skip the buffer scan entirely; subsequent `Add()` calls overwrite each slot before making it visible to readers.
 
 **RCU safety**: User Path threads that captured `_snapshot` and `_appendCount` under `_normalizeLock` before normalization continue to operate on a consistent pre-normalization view until their read completes. No intermediate state is ever visible.
+
+### AddRange Write Path (Background Thread)
+
+`AddRange(segments[])` is used when `FetchedChunks.Count > 1` (multi-gap partial hit). It merges all incoming segments in a single structural update, bypassing the append buffer entirely:
+
+1. If `segments` is empty: return immediately (no-op)
+2. Sort `segments` in-place by range start (incoming order is not guaranteed)
+3. Count live entries in `_snapshot` (first pass, good-faith estimate — same TOCTOU caveat as `Normalize`)
+4. Merge sorted `_snapshot` (excluding `IsRemoved`) and sorted `segments` via `MergeSorted`; trim result if count shrank (same trim logic as `Normalize`, guarding against TTL TOCTOU race — see VPC.C.8)
+5. Publish via `Interlocked.Exchange(_snapshot, mergedArray)` — **NOT under `_normalizeLock`** (see note below)
+6. Call `IncrementCount(segments.Length)` to update the total segment count
+
+**Why `_normalizeLock` is NOT used in `AddRange`:** The lock guards the `(_snapshot, _appendCount)` pair atomically. `AddRange` does NOT modify `_appendCount`, so the pair invariant (readers must see a consistent count alongside the snapshot they're reading) is preserved. The append buffer contents are entirely ignored by `AddRange` — they remain valid for any concurrent `FindIntersecting` call that is currently scanning them, and will be drained naturally by the next `Normalize()` call. `Interlocked.Exchange` provides the required acquire/release fence for the snapshot swap.
+
+**Why the append buffer is bypassed (not drained):** Draining the buffer into the merge would require acquiring `_normalizeLock` to guarantee atomicity of the `(_snapshot, _appendCount)` update — introducing unnecessary contention. Buffer segments are always visible to `FindIntersecting` via its independent buffer scan regardless of whether a merge has occurred. Bypassing the buffer is correct, cheaper, and requires no coordination with any concurrent reader.
 
 ### Memory Behavior
 
@@ -232,6 +280,19 @@ Pass 2 — physical cleanup (safe only after new index is live):
 **ArrayPool rental for anchor accumulation:** `NormalizeStrideIndex` uses an `ArrayPool<T>` rental as the anchor accumulation buffer (returned immediately after the right-sized index array is constructed), eliminating the intermediate `List<T>` and its `ToArray()` copy. The only heap allocation is the published stride index array itself (unavoidable).
 
 **Normalization cost**: O(n) list traversal (two passes) + O(n/N) for new stride array allocation
+
+### AddRange Write Path (Background Thread)
+
+`AddRange(segments[])` is used when `FetchedChunks.Count > 1` (multi-gap partial hit). It inserts all segments and then normalizes the stride index exactly once:
+
+1. If `segments` is empty: return immediately (no-op)
+2. Sort `segments` in-place by range start (incoming order is not guaranteed)
+3. For each segment in the sorted array: call `InsertSorted` to insert it into `_list` at the correct sorted position; call `IncrementCount(1)` per insertion
+4. Call `NormalizeStrideIndex()` once — rebuilds the stride index over all newly-inserted segments in a single two-pass traversal
+
+**Why a single `NormalizeStrideIndex()` at the end:** Calling `Add()` N times would trigger `NormalizeStrideIndex` after every `AppendBufferSize` additions (up to ⌈N/AppendBufferSize⌉ normalization passes). Each normalization is O(n). `AddRange` inserts all N segments first and then normalizes once — one O(n) pass regardless of N.
+
+**`_addsSinceLastNormalization` reset:** `NormalizeStrideIndex` resets `_addsSinceLastNormalization = 0` in its `finally` block. `AddRange` does not need to reset it redundantly.
 
 ### Random Segment Sampling and Eviction Bias
 

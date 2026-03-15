@@ -23,13 +23,15 @@ internal sealed class CacheNormalizationRequest<TRange, TData> : ISchedulableWor
     /// <summary>
     /// Data freshly fetched from <c>IDataSource</c> to fill gaps in the cache.
     /// <see langword="null"/> when the request was a full cache hit (no data source call needed).
+    /// Always a materialized collection — data is captured on the User Path before crossing
+    /// the thread boundary to the Background Storage Loop.
     /// </summary>
-    public IEnumerable<RangeChunk<TRange, TData>>? FetchedChunks { get; }
+    public IReadOnlyList<RangeChunk<TRange, TData>>? FetchedChunks { get; }
 
     internal CacheNormalizationRequest(
         Range<TRange> requestedRange,
         IReadOnlyList<CachedSegment<TRange, TData>> usedSegments,
-        IEnumerable<RangeChunk<TRange, TData>>? fetchedChunks)
+        IReadOnlyList<RangeChunk<TRange, TData>>? fetchedChunks)
     {
         RequestedRange = requestedRange;
         UsedSegments = usedSegments;
