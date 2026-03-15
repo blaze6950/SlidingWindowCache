@@ -19,6 +19,12 @@ namespace Intervals.NET.Caching.Benchmarks.SlidingWindow;
 /// 
 /// BASELINE RATIO CALCULATIONS:
 /// BenchmarkDotNet automatically calculates performance ratios using NoCapacity as the baseline.
+/// 
+/// Data source freeze strategy:
+/// - DataSourceLatencyMs == 0: SynchronousDataSource learning pass + freeze. All rebalance
+///   fetches served from FrozenDataSource with zero allocation on the hot path.
+/// - DataSourceLatencyMs > 0: SlowDataSource used directly (no freeze support). The latency
+///   itself is the dominant cost being measured; data generation noise is negligible.
 /// </summary>
 [MemoryDiagnoser]
 [MarkdownExporter]
@@ -83,10 +89,55 @@ public class ExecutionStrategyBenchmarks
     {
         _domain = new IntegerFixedStepDomain();
 
-        // Create data source with configured latency
-        _dataSource = DataSourceLatencyMs == 0
-            ? new SynchronousDataSource(_domain)
-            : new SlowDataSource(_domain, TimeSpan.FromMilliseconds(DataSourceLatencyMs));
+        if (DataSourceLatencyMs == 0)
+        {
+            // Learning pass: exercise both queue strategy code paths on throwaway caches,
+            // then freeze so benchmark iterations are allocation-free on the data source side.
+            var learningSource = new SynchronousDataSource(_domain);
+            ExerciseCacheForLearning(learningSource, rebalanceQueueCapacity: null);
+            ExerciseCacheForLearning(learningSource, rebalanceQueueCapacity: ChannelCapacity);
+            _dataSource = learningSource.Freeze();
+        }
+        else
+        {
+            // SlowDataSource: latency is the dominant cost being measured; no freeze needed.
+            _dataSource = new SlowDataSource(_domain, TimeSpan.FromMilliseconds(DataSourceLatencyMs));
+        }
+    }
+
+    /// <summary>
+    /// Exercises a full setup+burst sequence on a throwaway cache so the learning source
+    /// caches all ranges the Decision Engine will request.
+    /// </summary>
+    private void ExerciseCacheForLearning(SynchronousDataSource learningSource, int? rebalanceQueueCapacity)
+    {
+        var rightCoefficient = CalculateRightCacheCoefficient(BurstSize, BaseSpanSize);
+
+        var options = new SlidingWindowCacheOptions(
+            leftCacheSize: 1,
+            rightCacheSize: rightCoefficient,
+            readMode: UserCacheReadMode.Snapshot,
+            leftThreshold: 1.0,
+            rightThreshold: 0.0,
+            debounceDelay: TimeSpan.Zero,
+            rebalanceQueueCapacity: rebalanceQueueCapacity
+        );
+
+        var throwaway = new SlidingWindowCache<int, int, IntegerFixedStepDomain>(
+            learningSource, _domain, options);
+
+        var coldStartEnd = InitialStart + BaseSpanSize - 1 + BurstSize;
+        var coldStartRange = Factories.Range.Closed<int>(InitialStart, coldStartEnd);
+        throwaway.GetDataAsync(coldStartRange, CancellationToken.None).GetAwaiter().GetResult();
+        throwaway.WaitForIdleAsync().GetAwaiter().GetResult();
+
+        var initialRange = Factories.Range.Closed<int>(InitialStart, InitialStart + BaseSpanSize - 1);
+        var requestSequence = BuildRequestSequence(initialRange);
+        foreach (var range in requestSequence)
+        {
+            throwaway.GetDataAsync(range, CancellationToken.None).GetAwaiter().GetResult();
+        }
+        throwaway.WaitForIdleAsync().GetAwaiter().GetResult();
     }
 
     /// <summary>

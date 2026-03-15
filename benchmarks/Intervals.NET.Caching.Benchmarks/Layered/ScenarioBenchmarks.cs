@@ -19,16 +19,18 @@ namespace Intervals.NET.Caching.Benchmarks.Layered;
 ///   Measures steady-state throughput with sequential access pattern exploiting prefetch.
 /// 
 /// Methodology:
+/// - Learning pass in GlobalSetup: one throwaway cache per topology × scenario exercises
+///   all benchmark code paths so the data source can be frozen before measurement begins.
 /// - Fresh cache per iteration via [IterationSetup]
 /// - WaitForIdleAsync INSIDE benchmark method (measuring complete workflow cost)
-/// - Zero-latency SynchronousDataSource isolates cache mechanics
+/// - Zero-latency FrozenDataSource isolates cache mechanics
 /// </summary>
 [MemoryDiagnoser]
 [MarkdownExporter]
 [GroupBenchmarksBy(BenchmarkDotNet.Configs.BenchmarkLogicalGroupRule.ByCategory)]
 public class ScenarioBenchmarks
 {
-    private SynchronousDataSource _dataSource = null!;
+    private FrozenDataSource _frozenDataSource = null!;
     private IntegerFixedStepDomain _domain;
     private IRangeCache<int, int, IntegerFixedStepDomain>? _cache;
 
@@ -49,7 +51,6 @@ public class ScenarioBenchmarks
     public void GlobalSetup()
     {
         _domain = new IntegerFixedStepDomain();
-        _dataSource = new SynchronousDataSource(_domain);
 
         _coldStartRange = Factories.Range.Closed<int>(InitialStart, InitialStart + RangeSpan - 1);
 
@@ -61,6 +62,28 @@ public class ScenarioBenchmarks
             var start = InitialStart + (i * shiftSize);
             _sequentialSequence[i] = Factories.Range.Closed<int>(start, start + RangeSpan - 1);
         }
+
+        // Learning pass: one throwaway cache per topology × scenario exercises all benchmark
+        // code paths so every range the data source will be asked for is pre-learned.
+        var learningSource = new SynchronousDataSource(_domain);
+
+        foreach (var topology in new[] { LayeredTopology.SwcSwc, LayeredTopology.VpcSwc, LayeredTopology.VpcSwcSwc })
+        {
+            // ColdStart learning: fresh empty cache, fire cold start range + wait
+            var throwawayCs = LayeredCacheHelpers.Build(topology, learningSource, _domain);
+            throwawayCs.GetDataAsync(_coldStartRange, CancellationToken.None).GetAwaiter().GetResult();
+            throwawayCs.WaitForIdleAsync().GetAwaiter().GetResult();
+
+            // SequentialLocality learning: fresh empty cache, fire all sequential ranges + wait each
+            var throwawaySl = LayeredCacheHelpers.Build(topology, learningSource, _domain);
+            foreach (var range in _sequentialSequence)
+            {
+                throwawaySl.GetDataAsync(range, CancellationToken.None).GetAwaiter().GetResult();
+                throwawaySl.WaitForIdleAsync().GetAwaiter().GetResult();
+            }
+        }
+
+        _frozenDataSource = learningSource.Freeze();
     }
 
     #region ColdStart — SwcSwc
@@ -68,7 +91,7 @@ public class ScenarioBenchmarks
     [IterationSetup(Target = nameof(ColdStart_SwcSwc))]
     public void IterationSetup_ColdStart_SwcSwc()
     {
-        _cache = LayeredCacheHelpers.BuildSwcSwc(_dataSource, _domain);
+        _cache = LayeredCacheHelpers.BuildSwcSwc(_frozenDataSource, _domain);
     }
 
     /// <summary>
@@ -90,7 +113,7 @@ public class ScenarioBenchmarks
     [IterationSetup(Target = nameof(ColdStart_VpcSwc))]
     public void IterationSetup_ColdStart_VpcSwc()
     {
-        _cache = LayeredCacheHelpers.BuildVpcSwc(_dataSource, _domain);
+        _cache = LayeredCacheHelpers.BuildVpcSwc(_frozenDataSource, _domain);
     }
 
     /// <summary>
@@ -111,7 +134,7 @@ public class ScenarioBenchmarks
     [IterationSetup(Target = nameof(ColdStart_VpcSwcSwc))]
     public void IterationSetup_ColdStart_VpcSwcSwc()
     {
-        _cache = LayeredCacheHelpers.BuildVpcSwcSwc(_dataSource, _domain);
+        _cache = LayeredCacheHelpers.BuildVpcSwcSwc(_frozenDataSource, _domain);
     }
 
     /// <summary>
@@ -132,7 +155,7 @@ public class ScenarioBenchmarks
     [IterationSetup(Target = nameof(SequentialLocality_SwcSwc))]
     public void IterationSetup_SequentialLocality_SwcSwc()
     {
-        _cache = LayeredCacheHelpers.BuildSwcSwc(_dataSource, _domain);
+        _cache = LayeredCacheHelpers.BuildSwcSwc(_frozenDataSource, _domain);
     }
 
     /// <summary>
@@ -157,7 +180,7 @@ public class ScenarioBenchmarks
     [IterationSetup(Target = nameof(SequentialLocality_VpcSwc))]
     public void IterationSetup_SequentialLocality_VpcSwc()
     {
-        _cache = LayeredCacheHelpers.BuildVpcSwc(_dataSource, _domain);
+        _cache = LayeredCacheHelpers.BuildVpcSwc(_frozenDataSource, _domain);
     }
 
     /// <summary>
@@ -182,7 +205,7 @@ public class ScenarioBenchmarks
     [IterationSetup(Target = nameof(SequentialLocality_VpcSwcSwc))]
     public void IterationSetup_SequentialLocality_VpcSwcSwc()
     {
-        _cache = LayeredCacheHelpers.BuildVpcSwcSwc(_dataSource, _domain);
+        _cache = LayeredCacheHelpers.BuildVpcSwcSwc(_frozenDataSource, _domain);
     }
 
     /// <summary>

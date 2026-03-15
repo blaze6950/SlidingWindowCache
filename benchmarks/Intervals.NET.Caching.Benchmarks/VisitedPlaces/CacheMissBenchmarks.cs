@@ -14,13 +14,15 @@ namespace Intervals.NET.Caching.Benchmarks.VisitedPlaces;
 /// - WithEviction: miss on a cache at capacity (eviction triggered on normalization)
 /// 
 /// Methodology:
-/// - Pre-populated cache with TotalSegments segments separated by gaps
-/// - Request in a gap beyond all segments (guaranteed full miss)
-/// - WaitForIdleAsync INSIDE benchmark (measuring complete miss + normalization cost)
-/// - Fresh cache per iteration
+/// - Learning pass in GlobalSetup: throwaway cache exercises PopulateWithGaps + miss range
+///   so the data source can be frozen before benchmark iterations begin.
+/// - Pre-populated cache with TotalSegments segments separated by gaps.
+/// - Request in a gap beyond all segments (guaranteed full miss).
+/// - WaitForIdleAsync INSIDE benchmark (measuring complete miss + normalization cost).
+/// - Fresh cache per iteration.
 /// 
 /// Parameters:
-/// - TotalSegments: {10, 1K, 100K, 1M} — straddles ~50K Snapshot/LinkedList crossover
+/// - TotalSegments: {10, 1K, 100K} — straddles ~50K Snapshot/LinkedList crossover
 /// - StorageStrategy: Snapshot vs LinkedList
 /// - AppendBufferSize: {1, 8} — normalization frequency (every 1 vs every 8 stores)
 /// </summary>
@@ -29,7 +31,7 @@ namespace Intervals.NET.Caching.Benchmarks.VisitedPlaces;
 public class CacheMissBenchmarks
 {
     private VisitedPlacesCache<int, int, IntegerFixedStepDomain>? _cache;
-    private SynchronousDataSource _dataSource = null!;
+    private FrozenDataSource _frozenDataSource = null!;
     private IntegerFixedStepDomain _domain;
     private Range<int> _missRange;
 
@@ -61,12 +63,23 @@ public class CacheMissBenchmarks
     public void GlobalSetup()
     {
         _domain = new IntegerFixedStepDomain();
-        _dataSource = new SynchronousDataSource(_domain);
 
-        // Miss range: far beyond all populated segments
+        // Miss range: far beyond all populated segments.
         const int stride = SegmentSpan + GapSize;
         var beyondAll = TotalSegments * stride + 1000;
         _missRange = Factories.Range.Closed<int>(beyondAll, beyondAll + SegmentSpan - 1);
+
+        // Learning pass: exercise PopulateWithGaps and the miss fetch on a throwaway cache.
+        var learningSource = new SynchronousDataSource(_domain);
+        var throwaway = VpcCacheHelpers.CreateCache(
+            learningSource, _domain, StorageStrategy,
+            maxSegmentCount: TotalSegments + 1000,
+            appendBufferSize: AppendBufferSize);
+        VpcCacheHelpers.PopulateWithGaps(throwaway, TotalSegments, SegmentSpan, GapSize);
+        throwaway.GetDataAsync(_missRange, CancellationToken.None).GetAwaiter().GetResult();
+        throwaway.WaitForIdleAsync().GetAwaiter().GetResult();
+
+        _frozenDataSource = learningSource.Freeze();
     }
 
     #region NoEviction
@@ -76,10 +89,11 @@ public class CacheMissBenchmarks
     {
         // Generous capacity — no eviction triggered on miss
         _cache = VpcCacheHelpers.CreateCache(
-            _dataSource, _domain, StorageStrategy,
-            maxSegmentCount: TotalSegments + 1000, // means no eviction during benchmark
+            _frozenDataSource, _domain, StorageStrategy,
+            maxSegmentCount: TotalSegments + 1000,
             appendBufferSize: AppendBufferSize);
 
+        // Populate segments to cover the FindIntersecting cost during miss
         VpcCacheHelpers.PopulateWithGaps(_cache, TotalSegments, SegmentSpan, GapSize);
     }
 
@@ -104,8 +118,8 @@ public class CacheMissBenchmarks
     {
         // At capacity — eviction triggered on miss (one segment evicted per new segment stored)
         _cache = VpcCacheHelpers.CreateCache(
-            _dataSource, _domain, StorageStrategy,
-            maxSegmentCount: TotalSegments, // means eviction during benchmark
+            _frozenDataSource, _domain, StorageStrategy,
+            maxSegmentCount: TotalSegments,
             appendBufferSize: AppendBufferSize);
 
         VpcCacheHelpers.PopulateWithGaps(_cache, TotalSegments, SegmentSpan, GapSize);

@@ -12,18 +12,20 @@ namespace Intervals.NET.Caching.Benchmarks.Layered;
 /// 9 methods: 3 topologies (SwcSwc, VpcSwc, VpcSwcSwc) × 3 scenarios (FullHit, PartialHit, FullMiss).
 /// 
 /// Methodology:
+/// - Learning pass in GlobalSetup: one throwaway cache per topology exercises all benchmark
+///   code paths so the data source can be frozen before measurement begins.
 /// - Fresh cache per iteration via [IterationSetup]
 /// - Cache primed with initial range + WaitForIdleAsync to establish deterministic state
 /// - Benchmark methods measure ONLY GetDataAsync cost
 /// - WaitForIdleAsync in [IterationCleanup] to drain background activity
-/// - Zero-latency SynchronousDataSource isolates cache mechanics
+/// - Zero-latency FrozenDataSource isolates cache mechanics
 /// </summary>
 [MemoryDiagnoser]
 [MarkdownExporter]
 [GroupBenchmarksBy(BenchmarkDotNet.Configs.BenchmarkLogicalGroupRule.ByCategory)]
 public class UserFlowBenchmarks
 {
-    private SynchronousDataSource _dataSource = null!;
+    private FrozenDataSource _frozenDataSource = null!;
     private IntegerFixedStepDomain _domain;
     private IRangeCache<int, int, IntegerFixedStepDomain>? _cache;
 
@@ -45,7 +47,6 @@ public class UserFlowBenchmarks
     public void GlobalSetup()
     {
         _domain = new IntegerFixedStepDomain();
-        _dataSource = new SynchronousDataSource(_domain);
 
         // Initial range used to prime the cache
         _initialRange = Factories.Range.Closed<int>(InitialStart, InitialStart + RangeSpan - 1);
@@ -67,6 +68,25 @@ public class UserFlowBenchmarks
         _fullMissRange = Factories.Range.Closed<int>(
             InitialStart + 100 * RangeSpan,
             InitialStart + 100 * RangeSpan + RangeSpan - 1);
+
+        // Learning pass: one throwaway cache per topology exercises all benchmark code paths
+        // so every range the data source will be asked for during measurement is pre-learned.
+        var learningSource = new SynchronousDataSource(_domain);
+
+        foreach (var topology in new[] { LayeredTopology.SwcSwc, LayeredTopology.VpcSwc, LayeredTopology.VpcSwcSwc })
+        {
+            var throwaway = LayeredCacheHelpers.Build(topology, learningSource, _domain);
+            throwaway.GetDataAsync(_initialRange, CancellationToken.None).GetAwaiter().GetResult();
+            throwaway.WaitForIdleAsync().GetAwaiter().GetResult();
+            throwaway.GetDataAsync(_fullHitRange, CancellationToken.None).GetAwaiter().GetResult();
+            throwaway.WaitForIdleAsync().GetAwaiter().GetResult();
+            throwaway.GetDataAsync(_partialHitRange, CancellationToken.None).GetAwaiter().GetResult();
+            throwaway.WaitForIdleAsync().GetAwaiter().GetResult();
+            throwaway.GetDataAsync(_fullMissRange, CancellationToken.None).GetAwaiter().GetResult();
+            throwaway.WaitForIdleAsync().GetAwaiter().GetResult();
+        }
+
+        _frozenDataSource = learningSource.Freeze();
     }
 
     #region SwcSwc
@@ -74,7 +94,7 @@ public class UserFlowBenchmarks
     [IterationSetup(Target = nameof(FullHit_SwcSwc) + "," + nameof(PartialHit_SwcSwc) + "," + nameof(FullMiss_SwcSwc))]
     public void IterationSetup_SwcSwc()
     {
-        _cache = LayeredCacheHelpers.BuildSwcSwc(_dataSource, _domain);
+        _cache = LayeredCacheHelpers.BuildSwcSwc(_frozenDataSource, _domain);
         _cache.GetDataAsync(_initialRange, CancellationToken.None).GetAwaiter().GetResult();
         _cache.WaitForIdleAsync().GetAwaiter().GetResult();
     }
@@ -116,7 +136,7 @@ public class UserFlowBenchmarks
     [IterationSetup(Target = nameof(FullHit_VpcSwc) + "," + nameof(PartialHit_VpcSwc) + "," + nameof(FullMiss_VpcSwc))]
     public void IterationSetup_VpcSwc()
     {
-        _cache = LayeredCacheHelpers.BuildVpcSwc(_dataSource, _domain);
+        _cache = LayeredCacheHelpers.BuildVpcSwc(_frozenDataSource, _domain);
         _cache.GetDataAsync(_initialRange, CancellationToken.None).GetAwaiter().GetResult();
         _cache.WaitForIdleAsync().GetAwaiter().GetResult();
     }
@@ -158,7 +178,7 @@ public class UserFlowBenchmarks
     [IterationSetup(Target = nameof(FullHit_VpcSwcSwc) + "," + nameof(PartialHit_VpcSwcSwc) + "," + nameof(FullMiss_VpcSwcSwc))]
     public void IterationSetup_VpcSwcSwc()
     {
-        _cache = LayeredCacheHelpers.BuildVpcSwcSwc(_dataSource, _domain);
+        _cache = LayeredCacheHelpers.BuildVpcSwcSwc(_frozenDataSource, _domain);
         _cache.GetDataAsync(_initialRange, CancellationToken.None).GetAwaiter().GetResult();
         _cache.WaitForIdleAsync().GetAwaiter().GetResult();
     }

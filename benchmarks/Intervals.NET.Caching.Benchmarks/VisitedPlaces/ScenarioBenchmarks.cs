@@ -16,10 +16,12 @@ namespace Intervals.NET.Caching.Benchmarks.VisitedPlaces;
 /// - Churn: All misses at capacity — each request triggers fetch + store + eviction
 /// 
 /// Methodology:
-/// - Deterministic burst of BurstSize sequential requests
-/// - Each request targets a distinct non-overlapping range
-/// - WaitForIdleAsync INSIDE benchmark (measuring complete workflow cost)
-/// - Fresh cache per iteration
+/// - Learning pass in GlobalSetup exercises all three scenario code paths on throwaway
+///   caches so the data source can be frozen before measurement iterations begin.
+/// - Deterministic burst of BurstSize sequential requests.
+/// - Each request targets a distinct non-overlapping range.
+/// - WaitForIdleAsync INSIDE benchmark (measuring complete workflow cost).
+/// - Fresh cache per iteration.
 /// 
 /// Parameters:
 /// - BurstSize: {10, 50, 100} — number of sequential requests in burst
@@ -40,7 +42,7 @@ public class ScenarioBenchmarks
         Bounded
     }
 
-    private SynchronousDataSource _dataSource = null!;
+    private FrozenDataSource _frozenDataSource = null!;
     private IntegerFixedStepDomain _domain;
     private VisitedPlacesCache<int, int, IntegerFixedStepDomain>? _cache;
 
@@ -78,7 +80,6 @@ public class ScenarioBenchmarks
     public void GlobalSetup()
     {
         _domain = new IntegerFixedStepDomain();
-        _dataSource = new SynchronousDataSource(_domain);
 
         // Build request sequence: BurstSize non-overlapping ranges
         _requestSequence = new Range<int>[BurstSize];
@@ -88,6 +89,49 @@ public class ScenarioBenchmarks
             var end = start + SegmentSpan - 1;
             _requestSequence[i] = Factories.Range.Closed<int>(start, end);
         }
+
+        var farStart = BurstSize * SegmentSpan + 10000;
+
+        // Learning pass: exercise all three scenario paths on throwaway caches.
+        var learningSource = new SynchronousDataSource(_domain);
+
+        // ColdStart path: fire request sequence on empty cache (all misses)
+        var throwaway1 = VpcCacheHelpers.CreateCache(
+            learningSource, _domain, StorageStrategy,
+            maxSegmentCount: BurstSize + 100,
+            eventChannelCapacity: EventChannelCapacity);
+        foreach (var range in _requestSequence)
+        {
+            throwaway1.GetDataAsync(range, CancellationToken.None).GetAwaiter().GetResult();
+        }
+        throwaway1.WaitForIdleAsync().GetAwaiter().GetResult();
+
+        // Churn path: populate far-away segments (at capacity), then fire request sequence
+        var throwaway2 = VpcCacheHelpers.CreateCache(
+            learningSource, _domain, StorageStrategy,
+            maxSegmentCount: BurstSize,
+            eventChannelCapacity: EventChannelCapacity);
+        VpcCacheHelpers.PopulateSegments(throwaway2, BurstSize, SegmentSpan, farStart);
+        foreach (var range in _requestSequence)
+        {
+            throwaway2.GetDataAsync(range, CancellationToken.None).GetAwaiter().GetResult();
+        }
+        throwaway2.WaitForIdleAsync().GetAwaiter().GetResult();
+
+        // AllHits path: populate with request sequence, then fire hits
+        // (request sequence ranges already learned by ColdStart pass above)
+        var throwaway3 = VpcCacheHelpers.CreateCache(
+            learningSource, _domain, StorageStrategy,
+            maxSegmentCount: BurstSize + 100,
+            eventChannelCapacity: EventChannelCapacity);
+        VpcCacheHelpers.PopulateSegments(throwaway3, BurstSize, SegmentSpan);
+        foreach (var range in _requestSequence)
+        {
+            throwaway3.GetDataAsync(range, CancellationToken.None).GetAwaiter().GetResult();
+        }
+        throwaway3.WaitForIdleAsync().GetAwaiter().GetResult();
+
+        _frozenDataSource = learningSource.Freeze();
     }
 
     #region ColdStart
@@ -97,7 +141,7 @@ public class ScenarioBenchmarks
     {
         // Empty cache — all requests will be misses
         _cache = VpcCacheHelpers.CreateCache(
-            _dataSource, _domain, StorageStrategy,
+            _frozenDataSource, _domain, StorageStrategy,
             maxSegmentCount: BurstSize + 100,
             eventChannelCapacity: EventChannelCapacity);
     }
@@ -128,7 +172,7 @@ public class ScenarioBenchmarks
     {
         // Pre-populated cache — all requests will be hits
         _cache = VpcCacheHelpers.CreateCache(
-            _dataSource, _domain, StorageStrategy,
+            _frozenDataSource, _domain, StorageStrategy,
             maxSegmentCount: BurstSize + 100,
             eventChannelCapacity: EventChannelCapacity);
 
@@ -163,7 +207,7 @@ public class ScenarioBenchmarks
         // Cache at capacity with segments that do NOT overlap the request sequence.
         // This ensures every request is a miss AND triggers eviction.
         _cache = VpcCacheHelpers.CreateCache(
-            _dataSource, _domain, StorageStrategy,
+            _frozenDataSource, _domain, StorageStrategy,
             maxSegmentCount: BurstSize,
             eventChannelCapacity: EventChannelCapacity);
 

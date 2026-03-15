@@ -15,11 +15,13 @@ namespace Intervals.NET.Caching.Benchmarks.SlidingWindow;
 /// EXECUTION FLOW: User Request > Measures direct API call cost
 /// 
 /// Methodology:
-/// - Fresh cache per iteration
-/// - Benchmark methods measure ONLY GetDataAsync cost
-/// - Rebalance triggered by mutations, but NOT included in measurement
-/// - WaitForIdleAsync moved to [IterationCleanup]
-/// - Deterministic overlap patterns (no randomness)
+/// - Learning pass in GlobalSetup: throwaway caches (Snapshot + CopyOnRead) exercise all
+///   benchmark code paths so the data source can be frozen before measurement begins.
+/// - Fresh cache per iteration.
+/// - Benchmark methods measure ONLY GetDataAsync cost.
+/// - Rebalance triggered by mutations, but NOT included in measurement.
+/// - WaitForIdleAsync moved to [IterationCleanup].
+/// - Deterministic overlap patterns (no randomness).
 /// </summary>
 [MemoryDiagnoser]
 [MarkdownExporter]
@@ -28,7 +30,7 @@ public class UserFlowBenchmarks
 {
     private SlidingWindowCache<int, int, IntegerFixedStepDomain>? _snapshotCache;
     private SlidingWindowCache<int, int, IntegerFixedStepDomain>? _copyOnReadCache;
-    private SynchronousDataSource _dataSource = null!;
+    private FrozenDataSource _frozenDataSource = null!;
     private IntegerFixedStepDomain _domain;
 
     /// <summary>
@@ -79,19 +81,11 @@ public class UserFlowBenchmarks
     public void GlobalSetup()
     {
         _domain = new IntegerFixedStepDomain();
-        _dataSource = new SynchronousDataSource(_domain);
 
         // Pre-calculate all deterministic ranges
-        // Full hit: request entirely within cached window
         _fullHitRange = FullHitRange;
-
-        // Partial hit forward
         _partialHitForwardRange = PartialHitForwardRange;
-
-        // Partial hit backward
         _partialHitBackwardRange = PartialHitBackwardRange;
-
-        // Full miss: no overlap with cached window
         _fullMissRange = FullMissRange;
 
         // Configure cache options
@@ -110,6 +104,42 @@ public class UserFlowBenchmarks
             leftThreshold: 0,
             rightThreshold: 0
         );
+
+        var initialRange = Factories.Range.Closed<int>(CachedStart, CachedEnd);
+
+        // Learning pass: exercise all benchmark code paths on throwaway caches so that the
+        // data source auto-caches every range the Decision Engine will compute, then freeze.
+        var learningSource = new SynchronousDataSource(_domain);
+
+        // Snapshot throwaway: prime + fire all 4 benchmark scenarios
+        var throwawaySnapshot = new SlidingWindowCache<int, int, IntegerFixedStepDomain>(
+            learningSource, _domain, _snapshotOptions);
+        throwawaySnapshot.GetDataAsync(initialRange, CancellationToken.None).GetAwaiter().GetResult();
+        throwawaySnapshot.WaitForIdleAsync().GetAwaiter().GetResult();
+        throwawaySnapshot.GetDataAsync(_fullHitRange, CancellationToken.None).GetAwaiter().GetResult();
+        throwawaySnapshot.WaitForIdleAsync().GetAwaiter().GetResult();
+        throwawaySnapshot.GetDataAsync(_partialHitForwardRange, CancellationToken.None).GetAwaiter().GetResult();
+        throwawaySnapshot.WaitForIdleAsync().GetAwaiter().GetResult();
+        throwawaySnapshot.GetDataAsync(_partialHitBackwardRange, CancellationToken.None).GetAwaiter().GetResult();
+        throwawaySnapshot.WaitForIdleAsync().GetAwaiter().GetResult();
+        throwawaySnapshot.GetDataAsync(_fullMissRange, CancellationToken.None).GetAwaiter().GetResult();
+        throwawaySnapshot.WaitForIdleAsync().GetAwaiter().GetResult();
+
+        // CopyOnRead throwaway: same exercise
+        var throwawayCopyOnRead = new SlidingWindowCache<int, int, IntegerFixedStepDomain>(
+            learningSource, _domain, _copyOnReadOptions!);
+        throwawayCopyOnRead.GetDataAsync(initialRange, CancellationToken.None).GetAwaiter().GetResult();
+        throwawayCopyOnRead.WaitForIdleAsync().GetAwaiter().GetResult();
+        throwawayCopyOnRead.GetDataAsync(_fullHitRange, CancellationToken.None).GetAwaiter().GetResult();
+        throwawayCopyOnRead.WaitForIdleAsync().GetAwaiter().GetResult();
+        throwawayCopyOnRead.GetDataAsync(_partialHitForwardRange, CancellationToken.None).GetAwaiter().GetResult();
+        throwawayCopyOnRead.WaitForIdleAsync().GetAwaiter().GetResult();
+        throwawayCopyOnRead.GetDataAsync(_partialHitBackwardRange, CancellationToken.None).GetAwaiter().GetResult();
+        throwawayCopyOnRead.WaitForIdleAsync().GetAwaiter().GetResult();
+        throwawayCopyOnRead.GetDataAsync(_fullMissRange, CancellationToken.None).GetAwaiter().GetResult();
+        throwawayCopyOnRead.WaitForIdleAsync().GetAwaiter().GetResult();
+
+        _frozenDataSource = learningSource.Freeze();
     }
 
     [IterationSetup]
@@ -117,13 +147,13 @@ public class UserFlowBenchmarks
     {
         // Create fresh caches for each iteration - no state drift
         _snapshotCache = new SlidingWindowCache<int, int, IntegerFixedStepDomain>(
-            _dataSource,
+            _frozenDataSource,
             _domain,
             _snapshotOptions!
         );
 
         _copyOnReadCache = new SlidingWindowCache<int, int, IntegerFixedStepDomain>(
-            _dataSource,
+            _frozenDataSource,
             _domain,
             _copyOnReadOptions!
         );

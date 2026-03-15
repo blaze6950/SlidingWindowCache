@@ -20,12 +20,14 @@ namespace Intervals.NET.Caching.Benchmarks.SlidingWindow;
 /// EXECUTION MODEL: Deterministic multi-request sequence > Measure cumulative rebalance cost
 /// 
 /// Methodology:
-/// - Fresh cache per iteration
-/// - Zero-latency SynchronousDataSource isolates cache mechanics
-/// - Deterministic request sequence precomputed in IterationSetup (RequestsPerInvocation = 10)
-/// - Each request guarantees rebalance via range shift and aggressive thresholds
-/// - WaitForIdleAsync after EACH request (measuring rebalance completion)
-/// - Benchmark method contains ZERO workload logic, ZERO branching, ZERO allocations
+/// - Learning pass in GlobalSetup: throwaway cache exercises the full request sequence for
+///   both strategies so the data source can be frozen before measurement begins.
+/// - Fresh cache per iteration.
+/// - Zero-latency FrozenDataSource isolates cache mechanics.
+/// - Deterministic request sequence precomputed in IterationSetup (RequestsPerInvocation = 10).
+/// - Each request guarantees rebalance via range shift and aggressive thresholds.
+/// - WaitForIdleAsync after EACH request (measuring rebalance completion).
+/// - Benchmark method contains ZERO workload logic, ZERO branching, ZERO allocations.
 /// </summary>
 [MemoryDiagnoser]
 [MarkdownExporter]
@@ -100,7 +102,7 @@ public class RebalanceFlowBenchmarks
     // Infrastructure
 
     private SlidingWindowCache<int, int, IntegerFixedStepDomain>? _cache;
-    private SynchronousDataSource _dataSource = null!;
+    private FrozenDataSource _frozenDataSource = null!;
     private IntegerFixedStepDomain _domain;
     private SlidingWindowCacheOptions _options = null!;
 
@@ -117,7 +119,6 @@ public class RebalanceFlowBenchmarks
     public void GlobalSetup()
     {
         _domain = new IntegerFixedStepDomain();
-        _dataSource = new SynchronousDataSource(_domain);
 
         // Configure cache with aggressive thresholds to guarantee rebalancing
         // leftThreshold=0, rightThreshold=0 means any request outside current window triggers rebalance
@@ -136,6 +137,25 @@ public class RebalanceFlowBenchmarks
             rightThreshold: 0,
             debounceDelay: TimeSpan.FromMilliseconds(10)
         );
+
+        // Learning pass: exercise the full request sequence on a throwaway cache so the data
+        // source can be frozen. The request sequence is deterministic given the same options.
+        var initialRange = Factories.Range.Closed<int>(InitialStart, InitialStart + BaseSpanSize - 1);
+        var requestSequence = BuildRequestSequence(initialRange);
+
+        var learningSource = new SynchronousDataSource(_domain);
+        var throwaway = new SlidingWindowCache<int, int, IntegerFixedStepDomain>(
+            learningSource, _domain, _options);
+        throwaway.GetDataAsync(initialRange, CancellationToken.None).GetAwaiter().GetResult();
+        throwaway.WaitForIdleAsync().GetAwaiter().GetResult();
+
+        foreach (var range in requestSequence)
+        {
+            throwaway.GetDataAsync(range, CancellationToken.None).GetAwaiter().GetResult();
+            throwaway.WaitForIdleAsync().GetAwaiter().GetResult();
+        }
+
+        _frozenDataSource = learningSource.Freeze();
     }
 
     [IterationSetup]
@@ -143,7 +163,7 @@ public class RebalanceFlowBenchmarks
     {
         // Create fresh cache for this iteration
         _cache = new SlidingWindowCache<int, int, IntegerFixedStepDomain>(
-            _dataSource,
+            _frozenDataSource,
             _domain,
             _options
         );

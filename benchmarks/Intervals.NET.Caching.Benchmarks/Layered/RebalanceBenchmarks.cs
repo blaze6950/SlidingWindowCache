@@ -14,24 +14,27 @@ namespace Intervals.NET.Caching.Benchmarks.Layered;
 /// each followed by WaitForIdleAsync.
 /// 
 /// Methodology:
+/// - Learning pass in GlobalSetup: one throwaway cache per topology exercises the full
+///   request sequence so the data source can be frozen before measurement begins.
 /// - Fresh cache per iteration via [IterationSetup]
 /// - Cache primed with initial range + WaitForIdleAsync
 /// - Deterministic request sequence: 10 requests, each shifted by +1
 /// - WaitForIdleAsync INSIDE benchmark method (measuring rebalance completion)
-/// - Zero-latency SynchronousDataSource isolates cache mechanics
+/// - Zero-latency FrozenDataSource isolates cache mechanics
 /// </summary>
 [MemoryDiagnoser]
 [MarkdownExporter]
 public class RebalanceBenchmarks
 {
-    private SynchronousDataSource _dataSource = null!;
+    private FrozenDataSource _frozenDataSource = null!;
     private IntegerFixedStepDomain _domain;
     private IRangeCache<int, int, IntegerFixedStepDomain>? _cache;
 
     private const int InitialStart = 10000;
     private const int RequestsPerInvocation = 10;
 
-    // Precomputed request sequence
+    // Precomputed request sequence (fixed at GlobalSetup time, same for all topologies)
+    private Range<int> _initialRange;
     private Range<int>[] _requestSequence = null!;
 
     /// <summary>
@@ -44,7 +47,28 @@ public class RebalanceBenchmarks
     public void GlobalSetup()
     {
         _domain = new IntegerFixedStepDomain();
-        _dataSource = new SynchronousDataSource(_domain);
+
+        _initialRange = Factories.Range.Closed<int>(InitialStart, InitialStart + BaseSpanSize - 1);
+        _requestSequence = BuildRequestSequence(_initialRange);
+
+        // Learning pass: one throwaway cache per topology exercises the full request sequence
+        // so every range the data source will be asked for during measurement is pre-learned.
+        var learningSource = new SynchronousDataSource(_domain);
+
+        foreach (var topology in new[] { LayeredTopology.SwcSwc, LayeredTopology.VpcSwc, LayeredTopology.VpcSwcSwc })
+        {
+            var throwaway = LayeredCacheHelpers.Build(topology, learningSource, _domain);
+            throwaway.GetDataAsync(_initialRange, CancellationToken.None).GetAwaiter().GetResult();
+            throwaway.WaitForIdleAsync().GetAwaiter().GetResult();
+
+            foreach (var range in _requestSequence)
+            {
+                throwaway.GetDataAsync(range, CancellationToken.None).GetAwaiter().GetResult();
+                throwaway.WaitForIdleAsync().GetAwaiter().GetResult();
+            }
+        }
+
+        _frozenDataSource = learningSource.Freeze();
     }
 
     /// <summary>
@@ -62,17 +86,13 @@ public class RebalanceBenchmarks
     }
 
     /// <summary>
-    /// Common setup: build topology, prime cache, precompute request sequence.
+    /// Common setup: build topology with frozen source and prime cache.
     /// </summary>
     private void SetupTopology(LayeredTopology topology)
     {
-        _cache = LayeredCacheHelpers.Build(topology, _dataSource, _domain);
-
-        var initialRange = Factories.Range.Closed<int>(InitialStart, InitialStart + BaseSpanSize - 1);
-        _cache.GetDataAsync(initialRange, CancellationToken.None).GetAwaiter().GetResult();
+        _cache = LayeredCacheHelpers.Build(topology, _frozenDataSource, _domain);
+        _cache.GetDataAsync(_initialRange, CancellationToken.None).GetAwaiter().GetResult();
         _cache.WaitForIdleAsync().GetAwaiter().GetResult();
-
-        _requestSequence = BuildRequestSequence(initialRange);
     }
 
     #region SwcSwc

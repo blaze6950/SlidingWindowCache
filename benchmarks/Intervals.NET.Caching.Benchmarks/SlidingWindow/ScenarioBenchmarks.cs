@@ -14,16 +14,17 @@ namespace Intervals.NET.Caching.Benchmarks.SlidingWindow;
 /// EXECUTION FLOW: Simulates realistic usage patterns
 /// 
 /// Methodology:
-/// - Fresh cache per iteration
-/// - Cold start: Measures initial cache population (includes WaitForIdleAsync)
-/// - Compares cached vs uncached approaches
+/// - Learning pass in GlobalSetup: throwaway caches exercise the cold start code path for
+///   both strategies so the data source can be frozen before measurement begins.
+/// - Fresh cache per iteration.
+/// - Cold start: Measures initial cache population (includes WaitForIdleAsync).
 /// </summary>
 [MemoryDiagnoser]
 [MarkdownExporter]
 [GroupBenchmarksBy(BenchmarkDotNet.Configs.BenchmarkLogicalGroupRule.ByCategory)]
 public class ScenarioBenchmarks
 {
-    private SynchronousDataSource _dataSource = null!;
+    private FrozenDataSource _frozenDataSource = null!;
     private IntegerFixedStepDomain _domain;
     private SlidingWindowCache<int, int, IntegerFixedStepDomain>? _snapshotCache;
     private SlidingWindowCache<int, int, IntegerFixedStepDomain>? _copyOnReadCache;
@@ -51,7 +52,6 @@ public class ScenarioBenchmarks
     public void GlobalSetup()
     {
         _domain = new IntegerFixedStepDomain();
-        _dataSource = new SynchronousDataSource(_domain);
 
         // Cold start configuration
         _coldStartRange = Factories.Range.Closed<int>(
@@ -74,6 +74,21 @@ public class ScenarioBenchmarks
             leftThreshold: 0.2,
             rightThreshold: 0.2
         );
+
+        // Learning pass: exercise cold start on throwaway caches for both strategies.
+        var learningSource = new SynchronousDataSource(_domain);
+
+        var throwawaySnapshot = new SlidingWindowCache<int, int, IntegerFixedStepDomain>(
+            learningSource, _domain, _snapshotOptions);
+        throwawaySnapshot.GetDataAsync(_coldStartRange, CancellationToken.None).GetAwaiter().GetResult();
+        throwawaySnapshot.WaitForIdleAsync().GetAwaiter().GetResult();
+
+        var throwawayCopyOnRead = new SlidingWindowCache<int, int, IntegerFixedStepDomain>(
+            learningSource, _domain, _copyOnReadOptions);
+        throwawayCopyOnRead.GetDataAsync(_coldStartRange, CancellationToken.None).GetAwaiter().GetResult();
+        throwawayCopyOnRead.WaitForIdleAsync().GetAwaiter().GetResult();
+
+        _frozenDataSource = learningSource.Freeze();
     }
 
     #region Cold Start Benchmarks
@@ -83,13 +98,13 @@ public class ScenarioBenchmarks
     {
         // Create fresh caches for cold start measurement
         _snapshotCache = new SlidingWindowCache<int, int, IntegerFixedStepDomain>(
-            _dataSource,
+            _frozenDataSource,
             _domain,
             _snapshotOptions
         );
 
         _copyOnReadCache = new SlidingWindowCache<int, int, IntegerFixedStepDomain>(
-            _dataSource,
+            _frozenDataSource,
             _domain,
             _copyOnReadOptions
         );

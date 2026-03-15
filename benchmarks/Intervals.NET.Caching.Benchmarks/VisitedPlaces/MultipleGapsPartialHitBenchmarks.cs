@@ -13,6 +13,8 @@ namespace Intervals.NET.Caching.Benchmarks.VisitedPlaces;
 /// Isolates: normalization cost as GapCount grows, and how AppendBufferSize amortizes it.
 /// 
 /// Methodology:
+/// - Learning pass in GlobalSetup: throwaway cache exercises PopulateWithGaps (pattern +
+///   fillers) and the multi-gap request so the data source can be frozen.
 /// - Cache pre-populated with alternating segment/gap layout in IterationSetup
 /// - Request spans the entire alternating pattern, hitting all K gaps
 /// - WaitForIdleAsync INSIDE benchmark (measuring complete partial hit + normalization cost)
@@ -29,7 +31,7 @@ namespace Intervals.NET.Caching.Benchmarks.VisitedPlaces;
 public class MultipleGapsPartialHitBenchmarks
 {
     private VisitedPlacesCache<int, int, IntegerFixedStepDomain>? _cache;
-    private SynchronousDataSource _dataSource = null!;
+    private FrozenDataSource _frozenDataSource = null!;
     private IntegerFixedStepDomain _domain;
     private Range<int> _multipleGapsRange;
 
@@ -67,38 +69,65 @@ public class MultipleGapsPartialHitBenchmarks
     public void GlobalSetup()
     {
         _domain = new IntegerFixedStepDomain();
-        _dataSource = new SynchronousDataSource(_domain);
 
         // Request spans all non-adjacent segments (hitting all gaps)
         // Layout: alternating segments and gaps, each span=10
         // stride = SegmentSpan + GapSize = 20
         // GapCount+1 segments exist: at positions 0, 20, 40, ...
-        var nonAdjacentCount = GapCount + 1;
-        var stride = SegmentSpan + GapSize;
-        var requestEnd = (nonAdjacentCount - 1) * stride + SegmentSpan - 1;
+        const int stride = SegmentSpan + GapSize;
+        var requestEnd = GapCount * stride + SegmentSpan - 1;
         _multipleGapsRange = Factories.Range.Closed<int>(0, requestEnd);
+
+        var nonAdjacentCount = GapCount + 1;
+
+        // Learning pass: exercise PopulateWithGaps (pattern + fillers) and the multi-gap request.
+        var learningSource = new SynchronousDataSource(_domain);
+        var throwaway = VpcCacheHelpers.CreateCache(
+            learningSource, _domain, StorageStrategy,
+            maxSegmentCount: MultiGapTotalSegments + 1000,
+            appendBufferSize: AppendBufferSize);
+
+        // Populate the gap-pattern region
+        VpcCacheHelpers.PopulateWithGaps(throwaway, nonAdjacentCount, SegmentSpan, GapSize);
+
+        // Populate filler segments beyond the pattern
+        var remainingCount = MultiGapTotalSegments - nonAdjacentCount;
+        if (remainingCount > 0)
+        {
+            var startAfterPattern = nonAdjacentCount * stride + GapSize;
+            VpcCacheHelpers.PopulateWithGaps(throwaway, remainingCount, SegmentSpan, GapSize, startAfterPattern);
+        }
+
+        // Fire the multi-gap request to learn all gap fetch ranges
+        throwaway.GetDataAsync(_multipleGapsRange, CancellationToken.None).GetAwaiter().GetResult();
+        throwaway.WaitForIdleAsync().GetAwaiter().GetResult();
+
+        _frozenDataSource = learningSource.Freeze();
     }
 
     [IterationSetup]
     public void IterationSetup()
     {
-        // Fresh cache per iteration: the benchmark stores GapCount new segments each time
+        // Fresh cache per iteration: the benchmark stores GapCount new segments each time.
         var nonAdjacentCount = GapCount + 1;
 
         _cache = VpcCacheHelpers.CreateCache(
-            _dataSource, _domain, StorageStrategy,
+            _frozenDataSource, _domain, StorageStrategy,
             maxSegmentCount: MultiGapTotalSegments + 1000,
             appendBufferSize: AppendBufferSize);
 
-        // First populate the non-adjacent segments that create the gap pattern
+        // Populate the gap-pattern region: GapCount+1 non-adjacent segments separated by GapSize gaps.
+        // Layout: [seg][gap][seg][gap]...[seg] — these are the segments the benchmark request spans.
         VpcCacheHelpers.PopulateWithGaps(_cache, nonAdjacentCount, SegmentSpan, GapSize);
 
-        // Then populate remaining segments beyond the gap pattern to reach MultiGapTotalSegments
+        // Populate filler segments beyond the pattern to reach MultiGapTotalSegments.
+        // Also non-adjacent (same stride) to keep storage layout consistent throughout.
+        // These only affect FindIntersecting overhead; the request range never touches them.
         var remainingCount = MultiGapTotalSegments - nonAdjacentCount;
         if (remainingCount > 0)
         {
             var startAfterPattern = nonAdjacentCount * (SegmentSpan + GapSize) + GapSize;
-            VpcCacheHelpers.PopulateSegments(_cache, remainingCount, SegmentSpan, startAfterPattern);
+            VpcCacheHelpers.PopulateWithGaps(_cache, remainingCount, SegmentSpan, GapSize, startAfterPattern);
         }
     }
 
