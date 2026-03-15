@@ -90,7 +90,7 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "visited-places", "visited-p
 		docs\visited-places\storage-strategies.md = docs\visited-places\storage-strategies.md
 	EndProjectSection
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Intervals.NET.Caching.SlidingWindow.Benchmarks", "benchmarks\Intervals.NET.Caching.SlidingWindow.Benchmarks\Intervals.NET.Caching.SlidingWindow.Benchmarks.csproj", "{8ED9F295-3AEF-4549-AEFD-477EDDB1E23D}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Intervals.NET.Caching.Benchmarks", "benchmarks\Intervals.NET.Caching.Benchmarks\Intervals.NET.Caching.Benchmarks.csproj", "{8ED9F295-3AEF-4549-AEFD-477EDDB1E23D}"
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "sliding-window", "sliding-window", "{8B8161A6-9694-49BD-827E-13AFC1F1C04D}"
 EndProject

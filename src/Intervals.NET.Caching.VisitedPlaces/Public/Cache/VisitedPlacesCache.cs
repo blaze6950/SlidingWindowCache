@@ -30,9 +30,11 @@ public sealed class VisitedPlacesCache<TRange, TData, TDomain>
 
     /// <summary>
     /// Initializes a new instance of <see cref="VisitedPlacesCache{TRange,TData,TDomain}"/>.
-    /// Use <see cref="VisitedPlacesCacheBuilder"/> to create instances via the fluent builder API.
+    /// Prefer <see cref="VisitedPlacesCacheBuilder"/> for the fluent builder API.
+    /// The constructor is available for advanced scenarios such as benchmarking or testing
+    /// where direct instantiation with pre-built configuration is required.
     /// </summary>
-    internal VisitedPlacesCache(
+    public VisitedPlacesCache(
         IDataSource<TRange, TData> dataSource,
         TDomain domain,
         VisitedPlacesCacheOptions<TRange, TData> options,
