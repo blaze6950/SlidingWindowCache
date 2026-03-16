@@ -94,7 +94,7 @@ IDataSource<int, string> bounded = new FuncDataSource<int, string>(
 `IDataSource` also has a batch overload:
 
 ```csharp
-IAsyncEnumerable<RangeChunk<TRange, TData>> FetchAsync(
+Task<IEnumerable<RangeChunk<TRange, TData>>> FetchAsync(
     IEnumerable<Range<TRange>> ranges,
     CancellationToken cancellationToken)
 ```
