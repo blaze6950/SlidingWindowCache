@@ -20,7 +20,7 @@ All cache implementations in this solution implement `IRangeCache`.
 The data source contract. Cache implementations call this to fetch data that is not yet cached.
 
 - `FetchAsync(Range<TRange>, CancellationToken) → Task<RangeChunk<TRange, TData>>` — single-range fetch (required)
-- `FetchAsync(IEnumerable<Range<TRange>>, CancellationToken) → IAsyncEnumerable<RangeChunk<TRange, TData>>` — batch fetch (default: parallelized single-range calls)
+- `FetchAsync(IEnumerable<Range<TRange>>, CancellationToken) → Task<IEnumerable<RangeChunk<TRange, TData>>>` — batch fetch (default: parallelized single-range calls)
 
 Lives in `Intervals.NET.Caching`. Implemented by users of the library.
 
